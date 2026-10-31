@@ -20,7 +20,7 @@ async function postBinary(url: string, bytes: Uint8Array): Promise<Response> {
       return await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
-        body: bytes,
+        body: bytes as BodyInit
       })
     } catch (error) {
       lastError = error
