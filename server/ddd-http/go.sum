@@ -1,0 +1,6 @@
+github.com/keybase/go-crypto v0.0.0-20200123153347-de78d2cb44f4 h1:cTxwSmnaqLoo+4tLukHoB9iqHOu3LmLhRmgUxZo6Vp4=
+github.com/keybase/go-crypto v0.0.0-20200123153347-de78d2cb44f4/go.mod h1:ghbZscTyKdM07+Fw3KSi0hcJm+AlEUWj8QLlPtijN/M=
+github.com/traconiq/tachoparser v0.2.0 h1:pPqMk8bj+abvBnqpVcAhQlBf8uXrEzvbFSLwrFd6gOc=
+github.com/traconiq/tachoparser v0.2.0/go.mod h1:Ep1EGSWLfczhKgqSnX7ootUdKjXQZwioSAGo8wNAbF0=
+golang.org/x/text v0.14.0 h1:ScX5w1eTa3QqT8oi6+ziP7dTV1S2+ALU0bI+0zXKWiQ=
+golang.org/x/text v0.14.0/go.mod h1:18ZOQIKpY8NJVqYksKHtTdi31H5itFRjB5/qKTNYzSU=
