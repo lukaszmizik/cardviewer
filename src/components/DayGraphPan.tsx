@@ -1,5 +1,7 @@
 import { useRef, type ReactNode } from 'react'
 import {
+  chartPixelWidthFromSvgRect,
+  DAY_DETAIL_CHART_WIDTH,
   DAY_WINDOW_MINUTES,
   formatMinuteClock,
   maxDayPanStart,
@@ -21,11 +23,11 @@ export function DayGraphPan({ panStartMinute, onPanStartChange, children }: DayG
 
   function chartPixelWidth(): number {
     const viewport = viewportRef.current
-    if (!viewport) return 540
+    if (!viewport) return DAY_DETAIL_CHART_WIDTH
     const svg = viewport.querySelector('svg')
     if (!svg) return viewport.clientWidth
     const rect = svg.getBoundingClientRect()
-    return Math.max(120, rect.width * (540 / 702))
+    return chartPixelWidthFromSvgRect(rect.width, DAY_DETAIL_CHART_WIDTH)
   }
 
   return (

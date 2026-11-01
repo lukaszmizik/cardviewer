@@ -560,14 +560,23 @@ body {
 }
 
 .day-view-card {
-  max-width: 42rem;
+  width: 100%;
+  max-width: 100%;
   margin-top: 0.5rem;
 }
 
-.day-view-card-hint {
-  margin: 0 0 0.75rem;
-  font-size: 0.875rem;
-  color: #64748b;
+@media (min-width: 721px) {
+  .day-view-card {
+    margin-top: 0.75rem;
+  }
+
+  .day-graph-pan-viewport .work-week-graph-svg {
+    min-height: 15rem;
+  }
+}
+
+.day-view-card .work-week-graph-legend {
+  margin-bottom: 0.75rem;
 }
 
 .day-graph-pan {
@@ -593,7 +602,7 @@ body {
 .day-graph-pan-viewport .work-week-graph-svg {
   display: block;
   width: 100%;
-  max-width: 42rem;
+  max-width: 100%;
   height: auto;
 }
 

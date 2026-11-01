@@ -22,7 +22,12 @@ import {
 import {
   CHART_WIDTH,
   DAYS_PER_WEEK,
+  DAY_DETAIL_CHART_WIDTH,
+  DAY_DETAIL_LABEL_SCALE,
+  DAY_DETAIL_MARGIN_BOTTOM,
+  DAY_DETAIL_MARGIN_TOP,
   DAY_DETAIL_ROW_HEIGHT,
+  DAY_DETAIL_STROKE_SCALE,
   DEFAULT_ZOOM,
   HOUR_TICK_LEN,
   LABEL_WIDTH,
@@ -280,6 +285,60 @@ function formatTimeRange(startMs: number, endMs: number, mode: ClockMode): strin
   return `${formatTimestamp(startMs, mode)}–${formatTimestamp(endMs, mode)}`
 }
 
+function WorkWeekGraphLegend({
+  t,
+}: {
+  t: { workWeek: { legendRest45h: string; legendRest24h: string; manualEntryLabel: string } }
+}) {
+  return (
+    <div className="work-week-graph-legend">
+      {(Object.entries(ACTIVITY_STYLE) as [ActivityType, { color: string; strokeWidth: number }][]).map(
+        ([type, { color, strokeWidth }]) => {
+          const legendStroke =
+            type === 'odpočinek>45h' ? '#2563eb' : type === 'odpočinek>24h' ? '#60a5fa' : color
+          const legendLabel =
+            type === 'odpočinek>45h'
+              ? t.workWeek.legendRest45h
+              : type === 'odpočinek>24h'
+                ? t.workWeek.legendRest24h
+                : null
+          return (
+            <span key={type} className="work-week-graph-legend-item">
+              <svg width={38} height={18} className="work-week-graph-legend-sample" viewBox="0 0 22 11" preserveAspectRatio="xMidYMid meet">
+                <line
+                  x1={0}
+                  y1={5.5}
+                  x2={22}
+                  y2={5.5}
+                  stroke={legendStroke}
+                  strokeWidth={Math.min(strokeWidth, 11)}
+                  strokeLinecap="butt"
+                />
+              </svg>
+              <span className="work-week-graph-legend-label">
+                <span className={`tacho-icon${type === 'neznámá' ? ' tacho-icon-smaller' : ''}`}>{ACTIVITY_SYMBOL[type]}</span>
+                {legendLabel && <span> {legendLabel}</span>}
+              </span>
+            </span>
+          )
+        },
+      )}
+      <span className="work-week-graph-legend-item">
+        <svg width={38} height={18} className="work-week-graph-legend-sample" viewBox="0 0 22 11" preserveAspectRatio="xMidYMid meet">
+          <line x1={0} y1={5.5} x2={22} y2={5.5} stroke="#8b5cf6" strokeWidth={8} strokeLinecap="butt" />
+        </svg>
+        <span className="work-week-graph-legend-label">{t.workWeek.manualEntryLabel}</span>
+      </span>
+      <span className="work-week-graph-legend-item">
+        <svg width={38} height={18} className="work-week-graph-legend-sample" viewBox="0 0 22 11" preserveAspectRatio="xMidYMid meet">
+          <line x1={0} y1={5.5} x2={22} y2={5.5} stroke="#25D366" strokeWidth={8} strokeLinecap="butt" />
+        </svg>
+        <span className="work-week-graph-legend-label">režim osádky</span>
+      </span>
+    </div>
+  )
+}
+
 type GraphBlockProps = {
   days: DayData[]
   countryMarkers: CountryMarker[]
@@ -350,6 +409,17 @@ function GraphBlock({
   showFooter = true,
 }: GraphBlockProps) {
   const svgRef = useRef<SVGSVGElement>(null)
+  const isDayDetail = singleDayUtc != null
+  const strokeScale = isDayDetail ? DAY_DETAIL_STROKE_SCALE : 1
+  const labelScale = isDayDetail ? DAY_DETAIL_LABEL_SCALE : 1
+  const sx = (n: number) => n * strokeScale
+  const lx = (n: number) => n * labelScale
+  const marginTop = isDayDetail ? DAY_DETAIL_MARGIN_TOP : MARGIN_TOP
+  const marginBottom = isDayDetail ? DAY_DETAIL_MARGIN_BOTTOM : MARGIN_BOTTOM
+  const tickLen = lx(TICK_LEN)
+  const hourTickLen = lx(HOUR_TICK_LEN)
+  const quarterTickLen = lx(QUARTER_TICK_LEN)
+  const axisFontSize = lx(11)
   const chartW = chartWidthProp ?? CHART_WIDTH
   const rowH = rowHeightProp ?? ROW_HEIGHT
   const zoomDomain = zoomDomainProp ?? DEFAULT_ZOOM
@@ -388,7 +458,7 @@ function GraphBlock({
 
   const workShiftRanges = getWorkShiftRanges(countryMarkers, clockMode)
 
-  const height = MARGIN_TOP + visibleDays.length * rowH + MARGIN_BOTTOM
+  const height = marginTop + visibleDays.length * rowH + marginBottom
   const width = LABEL_WIDTH + chartW + 36
   const axisMajors = majorTicks(zoomDomain)
   const axisMinors = minorTicks(zoomDomain)
@@ -406,25 +476,26 @@ function GraphBlock({
         clockMode={clockMode}
         chartWidth={chartW}
         rowHeight={rowH}
+        marginTop={marginTop}
         zoomDomain={zoomDomain}
       >
       <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="work-week-graph-svg" preserveAspectRatio="xMidYMid meet">
         <defs>
-          <pattern id={`crew-mode-hatch-${blockId}`} patternUnits="userSpaceOnUse" width="6" height="6">
-            <line x1="0" y1="0" x2="6" y2="6" stroke="rgba(100, 149, 237, 0.18)" strokeWidth="1" />
+          <pattern id={`crew-mode-hatch-${blockId}`} patternUnits="userSpaceOnUse" width={lx(6)} height={lx(6)}>
+            <line x1="0" y1="0" x2={lx(6)} y2={lx(6)} stroke="rgba(100, 149, 237, 0.18)" strokeWidth={lx(1)} />
           </pattern>
-          <pattern id={`out-driving-hatch-${blockId}`} patternUnits="userSpaceOnUse" width="4" height="4">
-            <line x1="0" y1="0" x2="4" y2="4" stroke="#c62828" strokeWidth="2.2" />
+          <pattern id={`out-driving-hatch-${blockId}`} patternUnits="userSpaceOnUse" width={lx(4)} height={lx(4)}>
+            <line x1="0" y1="0" x2={lx(4)} y2={lx(4)} stroke="#c62828" strokeWidth={lx(2.2)} />
           </pattern>
           <clipPath id={`chart-clip-${blockId}`}>
-            <rect x={LABEL_WIDTH} y={MARGIN_TOP} width={chartW} height={visibleDays.length * rowH} />
+            <rect x={LABEL_WIDTH} y={marginTop} width={chartW} height={visibleDays.length * rowH} />
           </clipPath>
         </defs>
         <g id={`day-separators-${blockId}`}>
           {visibleDays.slice(0, -1).map((_, i) => {
-            const y = MARGIN_TOP + (i + 1) * rowH
+            const y = marginTop + (i + 1) * rowH
             return (
-              <line key={i} x1={0} y1={y} x2={width} y2={y} stroke="#e0e0e0" strokeWidth={0.5} opacity={0.7} />
+              <line key={i} x1={0} y1={y} x2={width} y2={y} stroke="#e0e0e0" strokeWidth={lx(0.5)} opacity={0.7} />
             )
           })}
         </g>
@@ -432,7 +503,7 @@ function GraphBlock({
           {axisMinors.map((minute) => {
             const x = xMinute(minute)
             return (
-              <line key={`top-q-${minute}`} x1={x} y1={MARGIN_TOP - QUARTER_TICK_LEN} x2={x} y2={MARGIN_TOP} stroke="#bbb" strokeWidth={0.5} opacity={0.7} />
+              <line key={`top-q-${minute}`} x1={x} y1={marginTop - quarterTickLen} x2={x} y2={marginTop} stroke="#bbb" strokeWidth={lx(0.5)} opacity={0.7} />
             )
           })}
         </g>
@@ -441,33 +512,33 @@ function GraphBlock({
             const x = xMinute(minute)
             return (
               <g key={`top-${minute}`}>
-                <line x1={x} y1={MARGIN_TOP - HOUR_TICK_LEN} x2={x} y2={MARGIN_TOP} stroke="#333" strokeWidth={1} />
-                <text x={x} y={11} textAnchor="middle" fill={GRAPH_AXIS_COLOR} fontSize={11} fontFamily="sans-serif" fontWeight={600}>{formatMinuteTick(minute)}</text>
+                <line x1={x} y1={marginTop - hourTickLen} x2={x} y2={marginTop} stroke="#333" strokeWidth={lx(1)} />
+                <text x={x} y={axisFontSize} textAnchor="middle" fill={GRAPH_AXIS_COLOR} fontSize={axisFontSize} fontFamily="sans-serif" fontWeight={600}>{formatMinuteTick(minute)}</text>
               </g>
             )
           })}
         </g>
         {visibleDays.map((day, rowIndex) => {
-          const yBase = MARGIN_TOP + rowIndex * rowH
+          const yBase = marginTop + rowIndex * rowH
           const dayStart = day.dateUtc
           return (
             <g key={day.dateUtc} className="graph-day-row">
               {axisMajors.map((minute) => {
                 const x = xMinute(minute)
-                const rowTop = yBase + 3
+                const rowTop = yBase + lx(3)
                 return (
                   <g key={`tick-${minute}`}>
-                    <line x1={x} y1={rowTop} x2={x} y2={rowTop + TICK_LEN} stroke={TICK_COLOR} strokeWidth="0.5" opacity={0.4} />
-                    <line x1={x} y1={yBase + rowH - 3 - TICK_LEN} x2={x} y2={yBase + rowH - 3} stroke={TICK_COLOR} strokeWidth="0.5" opacity={0.4} />
+                    <line x1={x} y1={rowTop} x2={x} y2={rowTop + tickLen} stroke={TICK_COLOR} strokeWidth={lx(0.5)} opacity={0.4} />
+                    <line x1={x} y1={yBase + rowH - lx(3) - tickLen} x2={x} y2={yBase + rowH - lx(3)} stroke={TICK_COLOR} strokeWidth={lx(0.5)} opacity={0.4} />
                   </g>
                 )
               })}
               <text
                 x={6}
-                y={yBase + rowH / 2 - 1}
+                y={yBase + rowH / 2 - lx(1)}
                 className="work-week-graph-day-name"
                 fill={GRAPH_AXIS_COLOR}
-                fontSize={GRAPH_DAY_NAME_FONT_SIZE}
+                fontSize={lx(GRAPH_DAY_NAME_FONT_SIZE)}
                 fontFamily="sans-serif"
                 fontWeight={GRAPH_DAY_LABEL_FONT_WEIGHT}
               >
@@ -475,10 +546,10 @@ function GraphBlock({
               </text>
               <text
                 x={6}
-                y={yBase + rowH / 2 + 9}
+                y={yBase + rowH / 2 + lx(9)}
                 className="work-week-graph-day-date"
                 fill={LABEL_COLOR}
-                fontSize={GRAPH_DAY_DATE_FONT_SIZE}
+                fontSize={lx(GRAPH_DAY_DATE_FONT_SIZE)}
                 fontFamily="sans-serif"
                 fontWeight={GRAPH_DAY_LABEL_FONT_WEIGHT}
               >
@@ -503,23 +574,24 @@ function GraphBlock({
                 )
               })}
               {(() => {
-                const maxStrokeHalf = 8
+                const maxStrokeHalf = sx(8)
                 const rowCenter = yBase + rowH / 2
                 const sortedActivities = [...day.activities].sort((a, b) => {
                   const layer = (act: ParsedActivity) => (act.isManualEntry || act.type === 'neznámá' ? 0 : act.slot ?? 1)
                   return layer(a) - layer(b) || a.startMs - b.startMs
                 })
-                const MANUAL_UNDERLINE_WIDTH = 3
+                const MANUAL_UNDERLINE_WIDTH = sx(3)
                 const CREW_UNDERLINE = '#25D366'
-                const CREW_UNDERLINE_WIDTH = 3
+                const CREW_UNDERLINE_WIDTH = sx(3)
                 return sortedActivities.map((act, i) => {
                   const style = ACTIVITY_STYLE[act.type]
                   const baseColor = getActivityColor(act)
                   const dur = act.originalDurationMinutes ?? act.durationMinutes
-                  const strokeW =
+                  const strokeW = sx(
                     (act.type === 'odpočinek' && dur >= LONG_REST_MIN) || act.type === 'odpočinek>24h' || act.type === 'odpočinek>45h'
                       ? 16
-                      : (style?.strokeWidth ?? 5)
+                      : (style?.strokeWidth ?? 5),
+                  )
                   const span = clipChartX(xAt(dayStart, act.startMs), xAt(dayStart, act.endMs), chartW)
                   if (!span) return null
                   const { x1, x2 } = span
@@ -566,14 +638,14 @@ function GraphBlock({
                 const code = marker.countryCode ?? 'CZ'
                 const isStart = marker.activityId === 'START_COUNTRY'
                 const label = isStart ? `${code} ►` : `◄ ${code}`
-                const dx = isStart ? 7 : -7
+                const dx = isStart ? lx(7) : -lx(7)
                 const textAnchor = isStart ? 'start' : 'end'
-                const anchorBottom = yBase + rowH / 2 + 7
+                const anchorBottom = yBase + rowH / 2 + lx(7)
                 return (
                   <g key={`anchor-${dayStart}-${i}`}>
-                    <text x={x} y={yBase + 8} dx={dx} textAnchor={textAnchor} fill={ANCHOR_STROKE} fontSize={8} fontFamily="sans-serif" fontWeight={600}>{label}</text>
-                    <line x1={x} y1={yBase + 3} x2={x} y2={anchorBottom} stroke={ANCHOR_STROKE} strokeWidth={1.5} strokeLinecap="round" />
-                    <circle cx={x} cy={yBase + 3} r={2.5} fill={ANCHOR_COLOR} />
+                    <text x={x} y={yBase + lx(8)} dx={dx} textAnchor={textAnchor} fill={ANCHOR_STROKE} fontSize={lx(8)} fontFamily="sans-serif" fontWeight={600}>{label}</text>
+                    <line x1={x} y1={yBase + lx(3)} x2={x} y2={anchorBottom} stroke={ANCHOR_STROKE} strokeWidth={lx(1.5)} strokeLinecap="round" />
+                    <circle cx={x} cy={yBase + lx(3)} r={lx(2.5)} fill={ANCHOR_COLOR} />
                   </g>
                 )
               })}
@@ -582,11 +654,11 @@ function GraphBlock({
                 if (x < LABEL_WIDTH || x > chartRight) return null
                 const symbolId = LOAD_UNLOAD_SYMBOL_ID[ev.type]
                 const symbolChar = symbolMap?.[symbolId] ?? ''
-                const anchorBottom = yBase + rowH / 2 + 7
+                const anchorBottom = yBase + rowH / 2 + lx(7)
                 return (
                   <g key={`loadunload-${dayStart}-${ev.minuteStartUtc}-${i}`}>
-                    <text x={x} y={yBase + 10} textAnchor="middle" fill={ANCHOR_STROKE} fontSize={12} fontFamily="SymbolTacho1">{symbolChar}</text>
-                    <line x1={x} y1={yBase + 14} x2={x} y2={anchorBottom} stroke={ANCHOR_STROKE} strokeWidth={1.5} strokeLinecap="round" />
+                    <text x={x} y={yBase + lx(10)} textAnchor="middle" fill={ANCHOR_STROKE} fontSize={lx(12)} fontFamily="SymbolTacho1">{symbolChar}</text>
+                    <line x1={x} y1={yBase + lx(14)} x2={x} y2={anchorBottom} stroke={ANCHOR_STROKE} strokeWidth={lx(1.5)} strokeLinecap="round" />
                   </g>
                 )
               })}
@@ -594,11 +666,11 @@ function GraphBlock({
                 const x = xAt(dayStart, ev.minuteStartUtc)
                 if (x < LABEL_WIDTH || x > chartRight) return null
                 const symbolChar = symbolMap?.[FERRY_TRAIN_SYMBOL_ID] ?? ''
-                const anchorBottom = yBase + rowH / 2 + 7
+                const anchorBottom = yBase + rowH / 2 + lx(7)
                 return (
                   <g key={`ferrytrain-${dayStart}-${ev.minuteStartUtc}-${i}`}>
-                    <text x={x} y={yBase + 10} textAnchor="middle" fill={ANCHOR_STROKE} fontSize={12} fontFamily="SymbolTacho1">{symbolChar}</text>
-                    <line x1={x} y1={yBase + 14} x2={x} y2={anchorBottom} stroke={ANCHOR_STROKE} strokeWidth={1.5} strokeLinecap="round" />
+                    <text x={x} y={yBase + lx(10)} textAnchor="middle" fill={ANCHOR_STROKE} fontSize={lx(12)} fontFamily="SymbolTacho1">{symbolChar}</text>
+                    <line x1={x} y1={yBase + lx(14)} x2={x} y2={anchorBottom} stroke={ANCHOR_STROKE} strokeWidth={lx(1.5)} strokeLinecap="round" />
                   </g>
                 )
               })}
@@ -606,17 +678,17 @@ function GraphBlock({
                 const x = xAt(dayStart, ev.minuteStartUtc)
                 if (x < LABEL_WIDTH || x > chartRight) return null
                 const label = ev.type === 'activation' ? 'OUT►' : '◄OUT'
-                const dx = ev.type === 'activation' ? 3 : -3
+                const dx = ev.type === 'activation' ? lx(3) : -lx(3)
                 const textAnchor = ev.type === 'activation' ? 'start' : 'end'
                 const rowCenter = yBase + rowH / 2
-                const anchorTop = rowCenter + 4
-                const anchorBottom = yBase + rowH - 4
-                const textY = ev.type === 'activation' ? anchorBottom + 4 : anchorBottom - 2
+                const anchorTop = rowCenter + lx(4)
+                const anchorBottom = yBase + rowH - lx(4)
+                const textY = ev.type === 'activation' ? anchorBottom + lx(4) : anchorBottom - lx(2)
                 return (
                   <g key={`outmode-${dayStart}-${ev.minuteStartUtc}-${ev.type}-${i}`}>
-                    <line x1={x} y1={anchorTop} x2={x} y2={anchorBottom} stroke={ANCHOR_STROKE} strokeWidth={1} strokeLinecap="round" />
-                    <circle cx={x} cy={anchorBottom} r={1.5} fill={ANCHOR_COLOR} />
-                    <text x={x} y={textY} dx={dx} textAnchor={textAnchor} fill={ANCHOR_STROKE} fontSize={7} fontFamily="sans-serif" fontWeight={600}>{label}</text>
+                    <line x1={x} y1={anchorTop} x2={x} y2={anchorBottom} stroke={ANCHOR_STROKE} strokeWidth={lx(1)} strokeLinecap="round" />
+                    <circle cx={x} cy={anchorBottom} r={lx(1.5)} fill={ANCHOR_COLOR} />
+                    <text x={x} y={textY} dx={dx} textAnchor={textAnchor} fill={ANCHOR_STROKE} fontSize={lx(7)} fontFamily="sans-serif" fontWeight={600}>{label}</text>
                   </g>
                 )
               })}
@@ -644,19 +716,19 @@ function GraphBlock({
             </g>
           )
         })}
-        <g id={`quarter-ticks-bottom-${blockId}`} transform={`translate(0, ${height - MARGIN_BOTTOM})`}>
+        <g id={`quarter-ticks-bottom-${blockId}`} transform={`translate(0, ${height - marginBottom})`}>
           {axisMinors.map((minute) => {
             const x = xMinute(minute)
-            return <line key={`bot-q-${minute}`} x1={x} y1={0} x2={x} y2={QUARTER_TICK_LEN} stroke="#bbb" strokeWidth={0.5} opacity={0.7} />
+            return <line key={`bot-q-${minute}`} x1={x} y1={0} x2={x} y2={quarterTickLen} stroke="#bbb" strokeWidth={lx(0.5)} opacity={0.7} />
           })}
         </g>
-        <g id={`hour-ticks-bottom-${blockId}`} transform={`translate(0, ${height - MARGIN_BOTTOM})`}>
+        <g id={`hour-ticks-bottom-${blockId}`} transform={`translate(0, ${height - marginBottom})`}>
           {axisMajors.map((minute) => {
             const x = xMinute(minute)
             return (
               <g key={`bot-${minute}`}>
-                <line x1={x} y1={0} x2={x} y2={TICK_LEN} stroke="#333" strokeWidth={1} />
-                <text x={x} y={12} textAnchor="middle" fill={GRAPH_AXIS_COLOR} fontSize={11} fontFamily="sans-serif" fontWeight={600}>{formatMinuteTick(minute)}</text>
+                <line x1={x} y1={0} x2={x} y2={tickLen} stroke="#333" strokeWidth={lx(1)} />
+                <text x={x} y={lx(12)} textAnchor="middle" fill={GRAPH_AXIS_COLOR} fontSize={axisFontSize} fontFamily="sans-serif" fontWeight={600}>{formatMinuteTick(minute)}</text>
               </g>
             )
           })}
@@ -1009,58 +1081,12 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
               </button>
             </div>
           </div>
-          {focusedDayUtc == null && (
-          <div className="work-week-graph-legend">
-            {(Object.entries(ACTIVITY_STYLE) as [ActivityType, { color: string; strokeWidth: number }][]).map(
-              ([type, { color, strokeWidth }]) => {
-                const legendStroke =
-                  type === 'odpočinek>45h' ? '#2563eb' : type === 'odpočinek>24h' ? '#60a5fa' : color
-                const legendLabel =
-                  type === 'odpočinek>45h'
-                    ? t.workWeek.legendRest45h
-                    : type === 'odpočinek>24h'
-                      ? t.workWeek.legendRest24h
-                      : null
-                return (
-                  <span key={type} className="work-week-graph-legend-item">
-                    <svg width={38} height={18} className="work-week-graph-legend-sample" viewBox="0 0 22 11" preserveAspectRatio="xMidYMid meet">
-                      <line
-                        x1={0}
-                        y1={5.5}
-                        x2={22}
-                        y2={5.5}
-                        stroke={legendStroke}
-                        strokeWidth={Math.min(strokeWidth, 11)}
-                        strokeLinecap="butt"
-                      />
-                    </svg>
-                    <span className="work-week-graph-legend-label">
-                      <span className={`tacho-icon${type === 'neznámá' ? ' tacho-icon-smaller' : ''}`}>{ACTIVITY_SYMBOL[type]}</span>
-                      {legendLabel && <span> {legendLabel}</span>}
-                    </span>
-                  </span>
-                )
-              }
-            )}
-            <span className="work-week-graph-legend-item">
-              <svg width={38} height={18} className="work-week-graph-legend-sample" viewBox="0 0 22 11" preserveAspectRatio="xMidYMid meet">
-                <line x1={0} y1={5.5} x2={22} y2={5.5} stroke="#8b5cf6" strokeWidth={8} strokeLinecap="butt" />
-              </svg>
-              <span className="work-week-graph-legend-label">{t.workWeek.manualEntryLabel}</span>
-            </span>
-            <span className="work-week-graph-legend-item">
-              <svg width={38} height={18} className="work-week-graph-legend-sample" viewBox="0 0 22 11" preserveAspectRatio="xMidYMid meet">
-                <line x1={0} y1={5.5} x2={22} y2={5.5} stroke="#25D366" strokeWidth={8} strokeLinecap="butt" />
-              </svg>
-              <span className="work-week-graph-legend-label">režim osádky</span>
-            </span>
-          </div>
-          )}
+          {focusedDayUtc == null && <WorkWeekGraphLegend t={t} />}
         </div>
 
         {focusedDayUtc != null ? (
           <section className="day-view-card">
-            <p className="day-view-card-hint">Viditelný úsek 4 h — posuňte posuvníkem nebo tažením myši v grafu.</p>
+            <WorkWeekGraphLegend t={t} />
             <DayGraphPan panStartMinute={dayPanStart} onPanStartChange={setDayPanStart}>
               <GraphBlock
                 days={days}
@@ -1079,6 +1105,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 detailActive={detailActive}
                 singleDayUtc={focusedDayUtc}
                 zoomDomain={dayZoom}
+                chartWidth={DAY_DETAIL_CHART_WIDTH}
                 rowHeight={DAY_DETAIL_ROW_HEIGHT}
                 showFooter={false}
               />

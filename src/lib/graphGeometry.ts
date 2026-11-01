@@ -3,11 +3,32 @@ import { timeToX } from './clock'
 
 export const DAYS_PER_WEEK = 7
 export const ROW_HEIGHT = 40
-export const DAY_DETAIL_ROW_HEIGHT = 64
+/** Tloušťka odpočinku v týdenním grafu (SVG jednotky). */
+export const WEEK_REST_STROKE = 16
+/** Tloušťka zelené čáry odpočinku v denním detailu. */
+export const DAY_DETAIL_REST_STROKE = 100
+export const DAY_DETAIL_STROKE_SCALE = DAY_DETAIL_REST_STROKE / WEEK_REST_STROKE
+export const DAY_DETAIL_LABEL_SCALE = 2
+/** Jeden den — řádek musí pojmout 100px odpočinek + podtržení. */
+export const DAY_DETAIL_ROW_HEIGHT = 200
 export const LABEL_WIDTH = 126
 export const CHART_WIDTH = 540
+/** Šířka časové osy v denním detailu (4 h okno). */
+export const DAY_DETAIL_CHART_WIDTH = 980
+export const SVG_RIGHT_GUTTER = 36
+
+export function svgLayoutWidth(chartWidth = CHART_WIDTH): number {
+  return LABEL_WIDTH + chartWidth + SVG_RIGHT_GUTTER
+}
+
+export function chartPixelWidthFromSvgRect(svgRectWidth: number, chartWidth = CHART_WIDTH): number {
+  const layoutW = svgLayoutWidth(chartWidth)
+  return Math.max(120, svgRectWidth * (chartWidth / layoutW))
+}
 export const MARGIN_TOP = 25
 export const MARGIN_BOTTOM = 18
+export const DAY_DETAIL_MARGIN_TOP = 40
+export const DAY_DETAIL_MARGIN_BOTTOM = 34
 export const TICK_LEN = 2
 export const HOUR_TICK_LEN = 4
 export const QUARTER_TICK_LEN = 3
@@ -74,9 +95,14 @@ export function isChartX(svgX: number, chartWidth = CHART_WIDTH): boolean {
   return svgX >= LABEL_WIDTH && svgX <= LABEL_WIDTH + chartWidth
 }
 
-export function rowFromSvgY(svgY: number, dayCount = DAYS_PER_WEEK, rowHeight = ROW_HEIGHT): number | null {
-  if (svgY < MARGIN_TOP) return null
-  const row = Math.floor((svgY - MARGIN_TOP) / rowHeight)
+export function rowFromSvgY(
+  svgY: number,
+  dayCount = DAYS_PER_WEEK,
+  rowHeight = ROW_HEIGHT,
+  marginTop = MARGIN_TOP,
+): number | null {
+  if (svgY < marginTop) return null
+  const row = Math.floor((svgY - marginTop) / rowHeight)
   if (row < 0 || row >= dayCount) return null
   return row
 }

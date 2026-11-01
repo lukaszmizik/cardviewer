@@ -4,6 +4,7 @@ import { parseClockDateTime } from '../lib/clock'
 import {
   CHART_WIDTH,
   DEFAULT_ZOOM,
+  MARGIN_TOP,
   clientToSvgPoint,
   isChartX,
   rowFromSvgY,
@@ -27,6 +28,7 @@ type GraphStageProps = {
   clockMode: ClockMode
   chartWidth?: number
   rowHeight?: number
+  marginTop?: number
   zoomDomain?: ZoomDomain
 }
 
@@ -76,6 +78,7 @@ export function GraphStage({
   clockMode,
   chartWidth = CHART_WIDTH,
   rowHeight,
+  marginTop = MARGIN_TOP,
   zoomDomain = DEFAULT_ZOOM,
 }: GraphStageProps) {
   const stageRef = useRef<HTMLDivElement>(null)
@@ -91,6 +94,7 @@ export function GraphStage({
   const clockRef = useRef(clockMode)
   const chartWidthRef = useRef(chartWidth)
   const rowHeightRef = useRef(rowHeight)
+  const marginTopRef = useRef(marginTop)
   const zoomRef = useRef(zoomDomain)
   const rafRef = useRef(0)
   const pointerRef = useRef<{ clientX: number; clientY: number } | null>(null)
@@ -100,6 +104,7 @@ export function GraphStage({
   clockRef.current = clockMode
   chartWidthRef.current = chartWidth
   rowHeightRef.current = rowHeight
+  marginTopRef.current = marginTop
   zoomRef.current = zoomDomain
 
   const hideInspect = useCallback(() => {
@@ -121,11 +126,12 @@ export function GraphStage({
     const svgPt = clientToSvgPoint(svg, pointer.clientX, pointer.clientY)
     const chartW = chartWidthRef.current
     const rowH = rowHeightRef.current
+    const marginT = marginTopRef.current
     const dayCount = daysRef.current.length
     const onGraph =
       svgPt != null &&
       isChartX(svgPt.x, chartW) &&
-      rowFromSvgY(svgPt.y, dayCount, rowH) != null
+      rowFromSvgY(svgPt.y, dayCount, rowH, marginT) != null
 
     if (!onGraph) {
       hideInspect()
@@ -133,7 +139,7 @@ export function GraphStage({
     }
 
     const minute = svgXToMinute(svgPt!.x, zoomRef.current, chartW)
-    const row = rowFromSvgY(svgPt!.y, dayCount, rowH)!
+    const row = rowFromSvgY(svgPt!.y, dayCount, rowH, marginT)!
     const day = daysRef.current[row]
     const ms = minuteToMs(day, minute, clockRef.current)
     const act = findTopActivityAt(day, ms)
