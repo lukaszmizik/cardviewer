@@ -520,6 +520,39 @@ body {
   text-align: center;
 }
 
+.graph-period-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  touch-action: pan-y;
+}
+
+.graph-period-strip--day {
+  display: none;
+}
+
+.graph-period-edge {
+  display: none;
+  flex-shrink: 0;
+  color: #94a3b8;
+  font-size: 1.35rem;
+  line-height: 1;
+  font-weight: 500;
+}
+
+.graph-period-caption {
+  display: none;
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.graph-week-swipe {
+  touch-action: pan-y;
+}
+
 .work-week-graph-nav-today {
   font-weight: 600;
 }
@@ -552,6 +585,10 @@ body {
 
 .graph-day-row-hit {
   cursor: pointer;
+}
+
+.graph-day-row-hit:hover {
+  fill: rgba(99, 102, 241, 0.07);
 }
 
 .graph-day-row-hit:focus {
@@ -686,6 +723,14 @@ body {
   line-height: 1.2;
 }
 
+.graph-inspect-registration {
+  font-size: 11px;
+  font-weight: 600;
+  color: #e2e8f0;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
 .graph-inspect-flags {
   display: flex;
   flex-direction: column;
@@ -693,6 +738,12 @@ body {
   margin-top: 4px;
   padding-top: 4px;
   border-top: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.graph-inspect-flags[hidden],
+.graph-inspect-flag[hidden],
+.graph-inspect-registration[hidden] {
+  display: none;
 }
 
 .graph-inspect-flag {
@@ -1195,22 +1246,76 @@ body {
   .work-week-graph-header,
   .work-week-graph-nav,
   .graph-toolbar,
-  .time-scale-select {
+  .time-scale-select,
+  .graph-period-strip,
+  .graph-clock-mode-info {
     width: 100%;
   }
 
+  .work-week-graph-header {
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .work-week-graph-header.is-day-focus .work-week-graph-title {
+    display: none;
+  }
+
   .work-week-graph-nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
     gap: 8px;
+  }
+
+  .graph-nav-step {
+    display: none;
+  }
+
+  .graph-nav-back {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .graph-period-strip,
+  .graph-period-strip--day {
+    display: flex;
+    order: -1;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 4px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #f8fafc;
+  }
+
+  .graph-period-edge {
+    display: block;
+    width: 1.25rem;
+    text-align: center;
   }
 
   .work-week-graph-nav-calendar {
     min-width: 0;
-    flex: 1 1 8rem;
+    flex: 1 1 auto;
     text-align: center;
+    font-size: 15px;
+  }
+
+  .graph-period-caption {
+    display: block;
+    width: 100%;
+    text-align: center;
+  }
+
+  .work-week-graph-nav-today {
+    flex: 0 0 auto;
+    margin-left: auto;
   }
 
   .graph-toolbar .work-week-graph-nav-btn {
     flex: 1 1 auto;
+    width: 100%;
   }
 
   .work-week-graph-legend {

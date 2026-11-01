@@ -49,6 +49,7 @@ import { TimeScaleSelect } from './components/TimeScaleSelect'
 import { CardInfoTable } from './components/CardInfoTable'
 import { GraphStage } from './components/GraphStage'
 import { DayGraphPan } from './components/DayGraphPan'
+import { GraphSwipeNav } from './components/GraphSwipeNav'
 import { googleMapsUrl } from './lib/mapsLink'
 import type { DriverCardData } from './types/tacho'
 
@@ -409,6 +410,7 @@ function GraphBlock({
   showFooter = true,
 }: GraphBlockProps) {
   const svgRef = useRef<SVGSVGElement>(null)
+  const rowPressRef = useRef<{ x: number; y: number } | null>(null)
   const isDayDetail = singleDayUtc != null
   const strokeScale = isDayDetail ? DAY_DETAIL_STROKE_SCALE : 1
   const labelScale = isDayDetail ? DAY_DETAIL_LABEL_SCALE : 1
@@ -697,14 +699,28 @@ function GraphBlock({
                 <rect
                   x={0}
                   y={yBase}
-                  width={LABEL_WIDTH}
+                  width={width}
                   height={rowH}
                   fill="transparent"
                   className="graph-day-row-hit"
                   role="button"
                   tabIndex={0}
                   aria-label={`Otevřít den ${day.dateStr}`}
-                  onClick={() => onDayOpen(day.dateUtc)}
+                  onPointerDown={(event) => {
+                    if (event.button !== 0) return
+                    rowPressRef.current = { x: event.clientX, y: event.clientY }
+                  }}
+                  onClick={(event) => {
+                    const press = rowPressRef.current
+                    rowPressRef.current = null
+                    if (
+                      press != null &&
+                      Math.hypot(event.clientX - press.x, event.clientY - press.y) > 12
+                    ) {
+                      return
+                    }
+                    onDayOpen(day.dateUtc)
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()
@@ -995,7 +1011,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
             {t.workWeek.resetLoadUnload}
           </button>
         )}
-        <div className="work-week-graph-header">
+        <div className={focusedDayUtc != null ? 'work-week-graph-header is-day-focus' : 'work-week-graph-header'}>
           <h2 className="work-week-graph-title">
             {focusedDayUtc != null ? formatClockDate(focusedDayUtc, clockMode) : t.workWeek.weekGraphTitle}
           </h2>
@@ -1004,46 +1020,70 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
               <>
                 <button
                   type="button"
-                  className="work-week-graph-nav-btn"
+                  className="work-week-graph-nav-btn graph-nav-back"
                   onClick={() => setFocusedDayUtc(null)}
                 >
                   ← Zpět na týden
                 </button>
                 <button
                   type="button"
-                  className="work-week-graph-nav-btn"
+                  className="work-week-graph-nav-btn graph-nav-step"
                   disabled={dayBounds != null && focusedDayUtc <= dayBounds.first}
                   onClick={() => focusDay(addDays(focusedDayUtc, -1, clockMode))}
                   title="Předchozí den"
                 >
                   ‹ Předchozí den
                 </button>
+                <GraphSwipeNav
+                  className="graph-period-strip graph-period-strip--day"
+                  onPrev={() => focusDay(addDays(focusedDayUtc, -1, clockMode))}
+                  onNext={() => focusDay(addDays(focusedDayUtc, 1, clockMode))}
+                  canPrev={dayBounds == null || focusedDayUtc > dayBounds.first}
+                  canNext={dayBounds == null || focusedDayUtc < dayBounds.last}
+                  label="Přejeďte do stran na jiný den"
+                >
+                  <span className="graph-period-edge" aria-hidden="true">‹</span>
+                  <span className="work-week-graph-nav-calendar">
+                    {formatClockDate(focusedDayUtc, clockMode)}
+                  </span>
+                  <span className="graph-period-edge" aria-hidden="true">›</span>
+                </GraphSwipeNav>
                 <button
                   type="button"
-                  className="work-week-graph-nav-btn"
+                  className="work-week-graph-nav-btn graph-nav-step"
                   disabled={dayBounds != null && focusedDayUtc >= dayBounds.last}
                   onClick={() => focusDay(addDays(focusedDayUtc, 1, clockMode))}
                   title="Následující den"
                 >
                   Následující den ›
                 </button>
+                <p className="graph-period-caption">Přejeďte do stran na jiný den</p>
               </>
             ) : (
               <>
                 <button
                   type="button"
-                  className="work-week-graph-nav-btn"
+                  className="work-week-graph-nav-btn graph-nav-step"
                   onClick={goPrevWeek}
                   title={t.workWeek.prevWeek}
                 >
                   ‹
                 </button>
-                <span className="work-week-graph-nav-calendar">
-                  {formatWeekRange(displayWeekStartMs, clockMode)}
-                </span>
+                <GraphSwipeNav
+                  className="graph-period-strip"
+                  onPrev={goPrevWeek}
+                  onNext={goNextWeek}
+                  label="Přejeďte do stran na jiný týden"
+                >
+                  <span className="graph-period-edge" aria-hidden="true">‹</span>
+                  <span className="work-week-graph-nav-calendar">
+                    {formatWeekRange(displayWeekStartMs, clockMode)}
+                  </span>
+                  <span className="graph-period-edge" aria-hidden="true">›</span>
+                </GraphSwipeNav>
                 <button
                   type="button"
-                  className="work-week-graph-nav-btn"
+                  className="work-week-graph-nav-btn graph-nav-step"
                   onClick={goNextWeek}
                   title={t.workWeek.nextWeek}
                 >
@@ -1057,6 +1097,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 >
                   Dnes
                 </button>
+                <p className="graph-period-caption">Přejeďte do stran na jiný týden</p>
               </>
             )}
             {focusedDayUtc != null ? (
@@ -1112,7 +1153,12 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
             </DayGraphPan>
           </section>
         ) : (
-          <>
+          <GraphSwipeNav
+            className="graph-week-swipe"
+            onPrev={goPrevWeek}
+            onNext={goNextWeek}
+            label="Přejeďte do stran na jiný týden"
+          >
         <GraphBlock
           days={days}
           countryMarkers={countryMarkers}
@@ -1208,7 +1254,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
             onDayOpen={focusDay}
           />
         )}
-          </>
+          </GraphSwipeNav>
         )}
 
         {faultsAndEvents.length > 0 && (

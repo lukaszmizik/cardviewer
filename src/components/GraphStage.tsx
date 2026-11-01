@@ -47,6 +47,7 @@ function fillInspectPanel(
   swatch: HTMLSpanElement,
   typeEl: HTMLSpanElement,
   durationEl: HTMLSpanElement,
+  registrationEl: HTMLSpanElement,
   flagsEl: HTMLDivElement,
   crewFlag: HTMLSpanElement,
   manualFlag: HTMLSpanElement,
@@ -59,15 +60,20 @@ function fillInspectPanel(
   swatch.className =
     act.type === 'neznámá' ? 'graph-inspect-swatch tacho-icon tacho-icon-smaller' : 'graph-inspect-swatch tacho-icon'
 
-  const showCrew = act.isCrew === true && !act.isManualEntry
-  const showManual = act.isManualEntry === true
-  if (!showCrew && !showManual) {
-    flagsEl.hidden = true
+  const plate = act.registration?.replace(/\0/g, '').trim()
+  if (plate) {
+    registrationEl.hidden = false
+    registrationEl.textContent = `RZ ${plate}`
   } else {
-    flagsEl.hidden = false
-    crewFlag.hidden = !showCrew
-    manualFlag.hidden = !showManual
+    registrationEl.hidden = true
+    registrationEl.textContent = ''
   }
+
+  const showCrew = act.isCrew === true && act.isManualEntry !== true
+  const showManual = act.isManualEntry === true
+  crewFlag.hidden = !showCrew
+  manualFlag.hidden = !showManual
+  flagsEl.hidden = !showCrew && !showManual
 }
 
 export function GraphStage({
@@ -86,6 +92,7 @@ export function GraphStage({
   const inspectSwatchRef = useRef<HTMLSpanElement>(null)
   const inspectTypeRef = useRef<HTMLSpanElement>(null)
   const inspectDurationRef = useRef<HTMLSpanElement>(null)
+  const inspectRegistrationRef = useRef<HTMLSpanElement>(null)
   const inspectFlagsRef = useRef<HTMLDivElement>(null)
   const inspectCrewFlagRef = useRef<HTMLSpanElement>(null)
   const inspectManualFlagRef = useRef<HTMLSpanElement>(null)
@@ -156,12 +163,13 @@ export function GraphStage({
     const swatch = inspectSwatchRef.current
     const typeEl = inspectTypeRef.current
     const durationEl = inspectDurationRef.current
+    const registrationEl = inspectRegistrationRef.current
     const flagsEl = inspectFlagsRef.current
     const crewFlag = inspectCrewFlagRef.current
     const manualFlag = inspectManualFlagRef.current
-    if (inspect && swatch && typeEl && durationEl && flagsEl && crewFlag && manualFlag) {
+    if (inspect && swatch && typeEl && durationEl && registrationEl && flagsEl && crewFlag && manualFlag) {
       inspect.classList.add('is-visible')
-      fillInspectPanel(swatch, typeEl, durationEl, flagsEl, crewFlag, manualFlag, act)
+      fillInspectPanel(swatch, typeEl, durationEl, registrationEl, flagsEl, crewFlag, manualFlag, act)
       const tipW = inspect.offsetWidth
       const tipH = inspect.offsetHeight
       let tx = localX + 12
@@ -214,11 +222,12 @@ export function GraphStage({
         <div className="graph-inspect-body">
           <span ref={inspectTypeRef} className="graph-inspect-type" />
           <span ref={inspectDurationRef} className="graph-inspect-duration" />
+          <span ref={inspectRegistrationRef} className="graph-inspect-registration" hidden />
           <div ref={inspectFlagsRef} className="graph-inspect-flags" hidden>
-            <span ref={inspectCrewFlagRef} className="graph-inspect-flag graph-inspect-flag--crew">
+            <span ref={inspectCrewFlagRef} className="graph-inspect-flag graph-inspect-flag--crew" hidden>
               režim osádky
             </span>
-            <span ref={inspectManualFlagRef} className="graph-inspect-flag graph-inspect-flag--manual">
+            <span ref={inspectManualFlagRef} className="graph-inspect-flag graph-inspect-flag--manual" hidden>
               manuální záznam
             </span>
           </div>
