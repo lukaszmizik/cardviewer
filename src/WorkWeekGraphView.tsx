@@ -198,9 +198,10 @@ function getWorkShiftRanges(markers: CountryMarker[], clockMode: ClockMode): Arr
 /** Průnik pracovních směn s daným dnem – vrací segmenty pro vykreslení v řádku dne. */
 function getWorkShiftRangesForDay(
   workShiftRanges: Array<{ startMs: number; endMs: number }>,
-  dayUtc: number
+  dayUtc: number,
+  clockMode: ClockMode,
 ): Array<{ startMs: number; endMs: number }> {
-  const dayEnd = dayUtc + 24 * 3600 * 1000
+  const dayEnd = addDays(dayUtc, 1, clockMode)
   const result: Array<{ startMs: number; endMs: number }> = []
   for (const r of workShiftRanges) {
     if (r.endMs <= dayUtc || r.startMs >= dayEnd) continue
@@ -213,27 +214,27 @@ function getWorkShiftRangesForDay(
 }
 
 function getMarkersOnDay(markers: CountryMarker[], dayUtcMs: number, clockMode: ClockMode): CountryMarker[] {
-  const dayEndMs = dayUtcMs + 24 * 3600 * 1000
+  const dayEndMs = addDays(dayUtcMs, 1, clockMode)
   return markers.filter((m) => {
     const ms = markerTimeMs(m, clockMode)
     return ms >= dayUtcMs && ms < dayEndMs
   })
 }
 
-function getLoadUnloadOnDay(events: VehicleLoadUnloadEvent[], dayUtcMs: number): VehicleLoadUnloadEvent[] {
-  const dayEndMs = dayUtcMs + 24 * 3600 * 1000
+function getLoadUnloadOnDay(events: VehicleLoadUnloadEvent[], dayUtcMs: number, clockMode: ClockMode): VehicleLoadUnloadEvent[] {
+  const dayEndMs = addDays(dayUtcMs, 1, clockMode)
   return events.filter((e) => e.minuteStartUtc >= dayUtcMs && e.minuteStartUtc < dayEndMs)
 }
 
 const FERRY_TRAIN_SYMBOL_ID = 49
 
-function getFerryTrainOnDay(events: FerryTrainEvent[], dayUtcMs: number): FerryTrainEvent[] {
-  const dayEndMs = dayUtcMs + 24 * 3600 * 1000
+function getFerryTrainOnDay(events: FerryTrainEvent[], dayUtcMs: number, clockMode: ClockMode): FerryTrainEvent[] {
+  const dayEndMs = addDays(dayUtcMs, 1, clockMode)
   return events.filter((e) => e.minuteStartUtc >= dayUtcMs && e.minuteStartUtc < dayEndMs)
 }
 
-function getOutModeOnDay(events: OutModeEvent[], dayUtcMs: number): OutModeEvent[] {
-  const dayEndMs = dayUtcMs + 24 * 3600 * 1000
+function getOutModeOnDay(events: OutModeEvent[], dayUtcMs: number, clockMode: ClockMode): OutModeEvent[] {
+  const dayEndMs = addDays(dayUtcMs, 1, clockMode)
   return events.filter((e) => e.minuteStartUtc >= dayUtcMs && e.minuteStartUtc < dayEndMs)
 }
 
@@ -590,7 +591,7 @@ function GraphBlock({
                 </>
               )}
               <g clipPath={`url(#chart-clip-${blockId})`}>
-              {getWorkShiftRangesForDay(workShiftRanges, day.dateUtc).map((range, ri) => {
+              {getWorkShiftRangesForDay(workShiftRanges, day.dateUtc, clockMode).map((range, ri) => {
                 const span = clipChartX(xAt(dayStart, range.startMs), xAt(dayStart, range.endMs), chartW, labelW)
                 if (!span) return null
                 const rowTop = yBase + 2
@@ -683,7 +684,7 @@ function GraphBlock({
                   </g>
                 )
               })}
-              {getLoadUnloadOnDay(visibleLoadUnload, day.dateUtc).map((ev, i) => {
+              {getLoadUnloadOnDay(visibleLoadUnload, day.dateUtc, clockMode).map((ev, i) => {
                 const x = xAt(dayStart, ev.minuteStartUtc)
                 if (x < labelW || x > chartRight) return null
                 const symbolId = LOAD_UNLOAD_SYMBOL_ID[ev.type]
@@ -696,7 +697,7 @@ function GraphBlock({
                   </g>
                 )
               })}
-              {getFerryTrainOnDay(visibleFerryTrain, day.dateUtc).map((ev, i) => {
+              {getFerryTrainOnDay(visibleFerryTrain, day.dateUtc, clockMode).map((ev, i) => {
                 const x = xAt(dayStart, ev.minuteStartUtc)
                 if (x < labelW || x > chartRight) return null
                 const symbolChar = symbolMap?.[FERRY_TRAIN_SYMBOL_ID] ?? ''
@@ -708,7 +709,7 @@ function GraphBlock({
                   </g>
                 )
               })}
-              {getOutModeOnDay(visibleOutMode, day.dateUtc).map((ev, i) => {
+              {getOutModeOnDay(visibleOutMode, day.dateUtc, clockMode).map((ev, i) => {
                 const x = xAt(dayStart, ev.minuteStartUtc)
                 if (x < labelW || x > chartRight) return null
                 const label = ev.type === 'activation' ? 'OUT►' : '◄OUT'
@@ -862,13 +863,10 @@ function GraphBlock({
                       <strong>{t.workWeek.loadUnloadSection}</strong>
                       <div className="work-week-graph-manual-list">
                         {visibleLoadUnload.map((ev, i) => {
-                          const d = new Date(ev.minuteStartUtc)
-                          const timeStr = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
-                          const dateStr = `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}.${d.getUTCFullYear()}`
                           const label = ev.type === 'load' ? t.manualEntry.load : ev.type === 'unload' ? t.manualEntry.unload : t.manualEntry.loadUnload
                           return (
                             <div key={i} className="work-week-graph-manual-item">
-                              {dateStr} {timeStr} | <em>{label}</em>{ev.gpsLocation ? ` (${ev.gpsLocation})` : ''}
+                              {formatTimestamp(ev.minuteStartUtc, clockMode)} | <em>{label}</em>{ev.gpsLocation ? ` (${ev.gpsLocation})` : ''}
                             </div>
                           )
                         })}
@@ -880,13 +878,10 @@ function GraphBlock({
                       <strong>{t.workWeek.ferryTrainSection}</strong>
                       <div className="work-week-graph-manual-list">
                         {ferryTrainEvents.filter((ev) => ev.minuteStartUtc >= visibleFirstDate && ev.minuteStartUtc < visibleLastEnd).map((ev, i) => {
-                          const d = new Date(ev.minuteStartUtc)
-                          const timeStr = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
-                          const dateStr = `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}.${d.getUTCFullYear()}`
                           const label = ev.type === 'activation' ? t.workWeek.activation : t.workWeek.deactivation
                           return (
                             <div key={i} className="work-week-graph-manual-item">
-                              {dateStr} {timeStr} | <em>{label}</em>{ev.gpsLocation ? ` (${ev.gpsLocation})` : ''}
+                              {formatTimestamp(ev.minuteStartUtc, clockMode)} | <em>{label}</em>{ev.gpsLocation ? ` (${ev.gpsLocation})` : ''}
                             </div>
                           )
                         })}
@@ -898,13 +893,10 @@ function GraphBlock({
                       <strong>{t.workWeek.outModeSection}</strong>
                       <div className="work-week-graph-manual-list">
                         {visibleOutMode.map((ev, i) => {
-                          const d = new Date(ev.minuteStartUtc)
-                          const timeStr = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
-                          const dateStr = `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}.${d.getUTCFullYear()}`
                           const label = ev.type === 'activation' ? t.workWeek.activation : t.workWeek.deactivation
                           return (
                             <div key={i} className="work-week-graph-manual-item">
-                              {dateStr} {timeStr} | <em>{label}</em>{ev.gpsLocation ? ` (${ev.gpsLocation})` : ''}
+                              {formatTimestamp(ev.minuteStartUtc, clockMode)} | <em>{label}</em>{ev.gpsLocation ? ` (${ev.gpsLocation})` : ''}
                             </div>
                           )
                         })}

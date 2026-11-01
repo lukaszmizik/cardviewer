@@ -392,8 +392,12 @@ function markManualActivities(activities: DraftActivity[], windows: Array<{ star
 function mapActivities(card: DddParserCardJson, locations: Location[]): Activity[] {
   const block = pickActivityBlock(card)
   const days = block?.decoded_activity_daily_records ?? []
-  const activities: DraftActivity[] = []
-  let index = 0
+  const collected: Array<{
+    slotDriver: boolean
+    dayStart: number
+    minutes: number
+    change: DddActivityChange
+  }> = []
 
   for (const day of days) {
     const dayStart = parseUnixMs(day.activity_record_date)
@@ -401,28 +405,47 @@ function mapActivities(card: DddParserCardJson, locations: Location[]): Activity
     const changes = (day.activity_change_info ?? [])
       .map((raw) => normalizeActivityChange(raw))
       .filter((change): change is DddActivityChange => change != null)
-      .sort((a, b) => (a.minutes ?? 0) - (b.minutes ?? 0))
-    for (const slotDriver of [true, false]) {
-      const slotChanges = changes.filter((change) => (change.driver !== false) === slotDriver)
-      for (let i = 0; i < slotChanges.length; i += 1) {
-        const current = slotChanges[i]!
-        const startMinutes = current.minutes ?? 0
-        const nextMinutes = slotChanges[i + 1]?.minutes ?? 24 * 60
-        const durationMinutes = Math.max(0, nextMinutes - startMinutes)
-        if (durationMinutes <= 0) continue
-        const startUtc = dayStart + startMinutes * 60_000
-        activities.push({
-          id: `act-${index}`,
-          kind: activityKindFromChange(current),
-          startUtc,
-          endUtc: startUtc + durationMinutes * 60_000,
-          durationMinutes,
-          cardAbsent: current.card_present === false,
-          isCrew: current.team === true,
-          slot: slotDriver ? 1 : 2,
-        })
-        index += 1
+    for (const change of changes) {
+      collected.push({
+        slotDriver: change.driver !== false,
+        dayStart,
+        minutes: Math.max(0, change.minutes ?? 0),
+        change,
+      })
+    }
+  }
+
+  const activities: DraftActivity[] = []
+  let index = 0
+  for (const slotDriver of [true, false]) {
+    const slotChanges = collected
+      .filter((item) => item.slotDriver === slotDriver)
+      .sort((a, b) => a.dayStart + a.minutes * 60_000 - (b.dayStart + b.minutes * 60_000))
+    for (let i = 0; i < slotChanges.length; i += 1) {
+      const current = slotChanges[i]!
+      const startUtc = current.dayStart + current.minutes * 60_000
+      const next = slotChanges[i + 1]
+      let endUtc: number
+      if (next) {
+        endUtc = next.dayStart + next.minutes * 60_000
+      } else if (current.change.card_present === false) {
+        continue
+      } else {
+        endUtc = current.dayStart + 24 * 60 * 60_000
       }
+      const durationMinutes = Math.round((endUtc - startUtc) / 60_000)
+      if (durationMinutes <= 0) continue
+      activities.push({
+        id: `act-${index}`,
+        kind: activityKindFromChange(current.change),
+        startUtc,
+        endUtc,
+        durationMinutes,
+        cardAbsent: current.change.card_present === false,
+        isCrew: current.change.team === true,
+        slot: slotDriver ? 1 : 2,
+      })
+      index += 1
     }
   }
 

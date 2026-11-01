@@ -80,6 +80,7 @@ export function timeToX(dayStartMsValue: number, ms: number, mode: ClockMode): n
   const dayEndMs = addDays(dayStartMsValue, 1, mode)
   if (ms >= dayEndMs) return 1
   if (ms <= dayStartMsValue) return 0
-  const p = clockParts(ms, mode)
-  return Math.min(1, (p.hour + p.minute / 60) / 24)
+  const span = dayEndMs - dayStartMsValue
+  if (span <= 0) return 0
+  return Math.min(1, (ms - dayStartMsValue) / span)
 }
