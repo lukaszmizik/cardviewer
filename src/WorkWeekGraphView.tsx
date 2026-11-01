@@ -383,6 +383,25 @@ type GraphBlockProps = {
   zoomDomain?: ZoomDomain
   onDayOpen?: (dateUtc: number) => void
   showFooter?: boolean
+  /** Týdenní graf na úzkém displeji — 2× výška řádku, čar i popisků. */
+  narrowViewport?: boolean
+}
+
+const NARROW_VIEWPORT_QUERY = '(max-width: 720px)'
+const MOBILE_WEEK_SCALE = 2
+
+function useNarrowViewport(): boolean {
+  const [narrow, setNarrow] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(NARROW_VIEWPORT_QUERY).matches : false,
+  )
+  useEffect(() => {
+    const media = window.matchMedia(NARROW_VIEWPORT_QUERY)
+    const onChange = () => setNarrow(media.matches)
+    onChange()
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+  return narrow
 }
 
 function GraphBlock({
@@ -408,22 +427,24 @@ function GraphBlock({
   zoomDomain: zoomDomainProp,
   onDayOpen,
   showFooter = true,
+  narrowViewport = false,
 }: GraphBlockProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const rowPressRef = useRef<{ x: number; y: number } | null>(null)
   const isDayDetail = singleDayUtc != null
-  const strokeScale = isDayDetail ? DAY_DETAIL_STROKE_SCALE : 1
-  const labelScale = isDayDetail ? DAY_DETAIL_LABEL_SCALE : 1
+  const mobileWeek = narrowViewport && !isDayDetail
+  const strokeScale = isDayDetail ? DAY_DETAIL_STROKE_SCALE : mobileWeek ? MOBILE_WEEK_SCALE : 1
+  const labelScale = isDayDetail ? DAY_DETAIL_LABEL_SCALE : mobileWeek ? MOBILE_WEEK_SCALE : 1
   const sx = (n: number) => n * strokeScale
   const lx = (n: number) => n * labelScale
-  const marginTop = isDayDetail ? DAY_DETAIL_MARGIN_TOP : MARGIN_TOP
-  const marginBottom = isDayDetail ? DAY_DETAIL_MARGIN_BOTTOM : MARGIN_BOTTOM
+  const marginTop = isDayDetail ? DAY_DETAIL_MARGIN_TOP : mobileWeek ? 40 : MARGIN_TOP
+  const marginBottom = isDayDetail ? DAY_DETAIL_MARGIN_BOTTOM : mobileWeek ? 34 : MARGIN_BOTTOM
   const tickLen = lx(TICK_LEN)
   const hourTickLen = lx(HOUR_TICK_LEN)
   const quarterTickLen = lx(QUARTER_TICK_LEN)
   const axisFontSize = lx(11)
   const chartW = chartWidthProp ?? CHART_WIDTH
-  const rowH = rowHeightProp ?? ROW_HEIGHT
+  const rowH = rowHeightProp ?? (mobileWeek ? ROW_HEIGHT * MOBILE_WEEK_SCALE : ROW_HEIGHT)
   const zoomDomain = zoomDomainProp ?? DEFAULT_ZOOM
   const dayMap = new Map<number, DayData>()
   for (const day of days) {
@@ -928,6 +949,8 @@ function formatFaultTime(ms: number, mode: ClockMode): string {
 
 export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc, card2Data, loadUnloadEvents = [], ferryTrainEvents = [], outModeEvents = [], recordedGpsLocations = [], faultsAndEvents = [], symbolMap, onResetLoadUnload, embedded = false, onClose, clockMode = 'local', onClockModeChange, card }: WorkWeekGraphViewProps) {
   const { t } = useLanguage()
+  const narrowViewport = useNarrowViewport()
+  const inspectActive = detailActive && !narrowViewport
   const dayNames = t.workWeek.dayNames
   const getInitialWeekStart = () => {
     if (days.length > 0) return weekStartMs(days[days.length - 1]!.dateUtc, clockMode)
@@ -1110,6 +1133,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 onChange={onClockModeChange ?? (() => undefined)}
               />
             )}
+            {!narrowViewport && (
             <div className="graph-toolbar" role="toolbar" aria-label="Nástroje grafu">
               <button
                 type="button"
@@ -1121,6 +1145,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 Zobrazit detail
               </button>
             </div>
+            )}
           </div>
           {focusedDayUtc == null && <WorkWeekGraphLegend t={t} />}
         </div>
@@ -1143,7 +1168,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 dayNames={dayNames}
                 t={t}
                 clockMode={clockMode}
-                detailActive={detailActive}
+                detailActive={inspectActive}
                 singleDayUtc={focusedDayUtc}
                 zoomDomain={dayZoom}
                 chartWidth={DAY_DETAIL_CHART_WIDTH}
@@ -1175,7 +1200,8 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
           t={t}
           clockMode={clockMode}
           card={card}
-          detailActive={detailActive}
+          detailActive={inspectActive}
+          narrowViewport={narrowViewport}
           onDayOpen={focusDay}
         />
 
@@ -1250,7 +1276,8 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
             dayNames={dayNames}
             t={t}
             clockMode={clockMode}
-            detailActive={detailActive}
+            detailActive={inspectActive}
+            narrowViewport={narrowViewport}
             onDayOpen={focusDay}
           />
         )}
