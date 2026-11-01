@@ -533,6 +533,16 @@ body {
   border-bottom: 1px solid #e0e0e0;
 }
 
+.crew-mode-dot {
+  display: inline-block;
+  width: 0.55em;
+  height: 0.55em;
+  margin-left: 0.45em;
+  border-radius: 50%;
+  background: #25d366;
+  vertical-align: middle;
+}
+
 .work-week-graph-table td {
   padding: 10px 12px;
   vertical-align: top;

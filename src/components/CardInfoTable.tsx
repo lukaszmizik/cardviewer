@@ -37,7 +37,7 @@ export function CardInfoTable({ card, clockMode }: CardInfoTableProps) {
   ]
 
   return (
-    <details className="work-week-graph-table-wrapper card-info-table-wrapper" open>
+    <details className="work-week-graph-table-wrapper card-info-table-wrapper">
       <summary className="card-info-summary">Karta řidiče</summary>
       <table className="work-week-graph-table card-info-table">
         <tbody>

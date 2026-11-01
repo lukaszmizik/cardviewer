@@ -1,0 +1,10 @@
+{
+  "headers": [
+    {
+      "source": "/dddparser.wasm",
+      "headers": [
+        { "key": "Content-Type", "value": "application/wasm" }
+      ]
+    }
+  ]
+}

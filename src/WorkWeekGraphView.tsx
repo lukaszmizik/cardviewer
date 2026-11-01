@@ -698,6 +698,9 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
                           return (
                             <div key={`${act.startMs}-${act.endMs}-${index}`} className="work-week-graph-manual-item">
                               {formatTimeRange(act.startMs, act.endMs, clockMode)} | {label} ({formatDuration(act.durationMinutes)}){formatRegistration(act)}{formatSlot(act)}
+                              {act.isCrew && !act.isManualEntry && (
+                                <span className="crew-mode-dot" title="režim osádky" aria-label="režim osádky" />
+                              )}
                             </div>
                           )
                         })}

@@ -72,7 +72,7 @@ export function FileUploader({ onDataLoaded }: FileUploaderProps) {
         />
       </label>
 
-      {isReading && <p className="file-uploader-status">Ověřuji a předávám soubor parseru…</p>}
+      {isReading && <p className="file-uploader-status">Ověřuji soubor a dekóduji ho v prohlížeči…</p>}
 
       {error && (
         <div className="work-week-warnings-panel file-uploader-error" role="alert">

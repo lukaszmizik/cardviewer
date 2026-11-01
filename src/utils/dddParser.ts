@@ -1,4 +1,5 @@
 import { CardFileError } from '../lib/cardFile'
+import { loadDddParser, parseCardInBrowser } from './dddWasm'
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder('utf-8', { fatal: false }).decode(bytes)
@@ -13,27 +14,8 @@ export function looksLikeJson(bytes: Uint8Array): boolean {
   return bytes[i] === 0x7b || bytes[i] === 0x5b
 }
 
-async function postBinary(url: string, bytes: Uint8Array): Promise<Response> {
-  let lastError: unknown
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    try {
-      return await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: bytes as BodyInit
-      })
-    } catch (error) {
-      lastError = error
-      await new Promise((resolve) => setTimeout(resolve, 400))
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error('parser unreachable')
-}
-
 /**
- * Předá binární výpis karty do Go dddparser (tachoparser).
- * JSON výstup knihovny se parsuje přímo.
- * Binární .DDD/.ESM/.561 jde na /api/parse-card (Vite proxy na lokální Go službu).
+ * Binární výpis karty dekóduje Go tachoparser zkompilovaný do WebAssembly v prohlížeči.
  */
 export async function parseDddBinary(data: ArrayBuffer | Uint8Array): Promise<unknown> {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
@@ -49,35 +31,14 @@ export async function parseDddBinary(data: ArrayBuffer | Uint8Array): Promise<un
     }
   }
 
-  const parserUrl = import.meta.env.VITE_DDD_PARSER_URL ?? '/api/parse-card'
-
-  let response: Response
   try {
-    response = await postBinary(parserUrl, bytes)
-  } catch {
+    await loadDddParser()
+    return parseCardInBrowser(bytes)
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : ''
     throw new CardFileError(
       'invalid',
-      'Nepodařilo se spojit s parserem. Nechte běžet npm run dev (spouští Go službu tachoparser) nebo samostatně npm run parser.',
+      detail || 'Parser v prohlížeči soubor neodkódoval. Soubor není platný výpis karty řidiče, nebo jde o data z vozidlové jednotky (VU).',
     )
-  }
-
-  if (!response.ok) {
-    const detail = (await response.text()).trim()
-    if (response.status >= 500 || /ECONNREFUSED|proxy error/i.test(detail)) {
-      throw new CardFileError(
-        'invalid',
-        'Parser neběží. Zastavte Vite, v novém terminálu (bez GOOS=js) spusťte npm run dev a zkuste nahrání znovu.',
-      )
-    }
-    throw new CardFileError(
-      'invalid',
-      detail || 'Parser dddparser soubor neodkódoval. Soubor není platný výpis karty řidiče, nebo jde o data z vozidlové jednotky (VU).',
-    )
-  }
-
-  try {
-    return await response.json()
-  } catch {
-    throw new CardFileError('invalid', 'Parser nevrátil platný JSON výstup.')
   }
 }

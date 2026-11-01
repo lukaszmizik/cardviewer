@@ -2,12 +2,11 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 
-	"github.com/traconiq/tachoparser/pkg/decoder"
+	"tacho-viewer/ddd-http/parse"
 )
 
 func main() {
@@ -36,7 +35,7 @@ func handleParseCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	card, err := parseCardBytes(data)
+	card, err := parse.Card(data)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
@@ -46,22 +45,4 @@ func handleParseCard(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(card); err != nil {
 		http.Error(w, "nelze zapsat JSON", http.StatusInternalServerError)
 	}
-}
-
-func parseCardBytes(data []byte) (*decoder.Card, error) {
-	candidates := [][]byte{data}
-	if len(data) > 2 && data[0] == 0x76 && data[1] == 0x06 {
-		candidates = append(candidates, data[2:])
-	}
-
-	var lastErr error
-	for _, payload := range candidates {
-		var card decoder.Card
-		if _, err := decoder.UnmarshalTLV(payload, &card); err != nil {
-			lastErr = err
-			continue
-		}
-		return &card, nil
-	}
-	return nil, fmt.Errorf("soubor se nepodařilo zpracovat jako kartu řidiče: %v", lastErr)
 }
