@@ -44,13 +44,9 @@ export function getActivityDisplayColor(act: ParsedActivity): string {
   return '#888'
 }
 
-function activityLayer(act: ParsedActivity): number {
-  return act.isManualEntry || act.type === 'neznámá' ? 0 : act.slot ?? 1
-}
-
-/** Aktivita nahoře v grafu (stejná vrstva jako vykreslení). */
+/** Jediná aktivita v dané minutě; při zbytku překryvu vyhraje pozdější začátek. */
 export function findTopActivityAt(day: DayData, ms: number): ParsedActivity | undefined {
   const matches = day.activities.filter((act) => ms >= act.startMs && ms < act.endMs)
   if (matches.length === 0) return undefined
-  return matches.sort((a, b) => activityLayer(a) - activityLayer(b) || a.startMs - b.startMs)[matches.length - 1]
+  return matches.sort((a, b) => a.startMs - b.startMs)[matches.length - 1]
 }

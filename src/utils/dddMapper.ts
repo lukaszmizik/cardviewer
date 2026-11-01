@@ -342,62 +342,123 @@ function pickActivityBlock(card: DddParserCardJson): DddActivityBlock | undefine
   return gen2 ?? gen1
 }
 
-function manualWindows(card: DddParserCardJson, locations: Location[]): Array<{ start: number; end: number }> {
-  const windows: Array<{ start: number; end: number }> = []
-  const placeManual = locations
-    .filter((loc) => loc.isManualEntry && (loc.recordType === 'start_country' || loc.recordType === 'end_country'))
-    .sort((a, b) => a.recordedAtUtc - b.recordedAtUtc)
-  for (let i = 0; i < placeManual.length; i += 1) {
-    const start = placeManual[i]!
-    if (start.recordType !== 'start_country') continue
-    const end = placeManual.slice(i + 1).find((item) => item.recordType === 'end_country')
-    windows.push({ start: start.recordedAtUtc, end: end?.recordedAtUtc ?? start.recordedAtUtc + 24 * 60 * 60 * 1000 })
-  }
-
-  const vehicles = firstDefined(card.card_vehicles_used_2, card.card_vehicles_used_1)?.card_vehicle_records ?? []
-  const uses = vehicles
-    .map((record) => ({
-      first: parseUnixMs(record.vehicle_first_use),
-      last: parseUnixMs(record.vehicle_last_use),
-    }))
-    .filter((record) => record.first != null && record.last != null)
-    .sort((a, b) => a.first! - b.first!)
-  for (let i = 0; i < uses.length - 1; i += 1) {
-    const gapStart = uses[i]!.last!
-    const gapEnd = uses[i + 1]!.first!
-    if (gapEnd > gapStart) windows.push({ start: gapStart, end: gapEnd })
-  }
-  return windows
+type SlotChange = {
+  dayStart: number
+  minutes: number
+  change: DddActivityChange
 }
 
-type DraftActivity = Activity & { cardAbsent?: boolean }
+function changeTime(item: SlotChange): number {
+  return item.dayStart + item.minutes * 60_000
+}
 
-function markManualActivities(activities: DraftActivity[], windows: Array<{ start: number; end: number }>): Activity[] {
-  return activities.map((act) => {
-    const manual =
-      windows.length > 0 && windows.some((window) => act.startUtc < window.end && act.endUtc > window.start)
-    const { cardAbsent, ...rest } = act
-    if (manual) {
-      return {
-        ...rest,
-        isManualEntry: true,
-        isCrew: false,
+function cardIsPresent(change: DddActivityChange): boolean {
+  return change.card_present !== false
+}
+
+/** VU záznam (karta ve vozidle) — má přednost před výplní i ručním zadáním. */
+function isVehicleUnitActivity(act: Activity): boolean {
+  return act.isManualEntry !== true && act.kind !== 'unknown'
+}
+
+function clipActivity<T extends { startUtc: number; endUtc: number; durationMinutes: number }>(
+  act: T,
+  startUtc: number,
+  endUtc: number,
+): T {
+  return {
+    ...act,
+    startUtc,
+    endUtc,
+    durationMinutes: Math.round((endUtc - startUtc) / 60_000),
+  }
+}
+
+/**
+ * Explicitní ruční vklad: změna bez karty, která končí další změnou téhož dne
+ * (nebo přes půlnoc, pokud řidič zadal činnost během dne a další den v 00:00 pokračuje).
+ * Mezera mezi vytažením a dalším vložením karty sem nepatří.
+ */
+function isExplicitManualEntry(current: SlotChange, next: SlotChange | undefined, dayMs: number): boolean {
+  if (cardIsPresent(current.change)) return false
+  if (!next) return false
+  if (next.dayStart === current.dayStart) return true
+  return (
+    current.minutes > 0 &&
+    next.dayStart === current.dayStart + dayMs &&
+    next.minutes === 0 &&
+    !cardIsPresent(next.change) &&
+    next.change.work_type === current.change.work_type
+  )
+}
+
+function subtractIntervals(base: Activity, cuts: Activity[]): Activity[] {
+  let pieces = [base]
+  for (const cut of cuts) {
+    const next: Activity[] = []
+    for (const piece of pieces) {
+      if (cut.endUtc <= piece.startUtc || cut.startUtc >= piece.endUtc) {
+        next.push(piece)
+        continue
+      }
+      if (cut.startUtc > piece.startUtc) next.push(clipActivity(piece, piece.startUtc, cut.startUtc))
+      if (cut.endUtc < piece.endUtc) next.push(clipActivity(piece, cut.endUtc, piece.endUtc))
+    }
+    pieces = next.filter((item) => item.durationMinutes > 0)
+  }
+  return pieces
+}
+
+/** 1 minuta = 1 činnost; záznam z vozidla rozdělí jakýkoliv roztažený blok. */
+function exclusiveByPriority(activities: Activity[]): Activity[] {
+  const vehicle = activities
+    .filter((act) => isVehicleUnitActivity(act))
+    .sort((a, b) => a.startUtc - b.startUtc || a.endUtc - b.endUtc)
+  const vehicleExclusive: Activity[] = []
+  for (const act of vehicle) {
+    const copy = { ...act }
+    if (vehicleExclusive.length > 0) {
+      const prev = vehicleExclusive[vehicleExclusive.length - 1]!
+      if (copy.startUtc < prev.endUtc) {
+        prev.endUtc = copy.startUtc
+        prev.durationMinutes = Math.round((prev.endUtc - prev.startUtc) / 60_000)
+        if (prev.durationMinutes <= 0) vehicleExclusive.pop()
       }
     }
-    if (cardAbsent) return { ...rest, kind: 'unknown' }
-    return rest
-  })
+    if (copy.endUtc > copy.startUtc) vehicleExclusive.push(copy)
+  }
+
+  const others = activities
+    .filter((act) => !isVehicleUnitActivity(act))
+    .sort((a, b) => a.startUtc - b.startUtc || a.endUtc - b.endUtc)
+  const splitOthers: Activity[] = []
+  for (const act of others) {
+    splitOthers.push(...subtractIntervals(act, vehicleExclusive))
+  }
+  const othersExclusive: Activity[] = []
+  for (const act of splitOthers.sort((a, b) => a.startUtc - b.startUtc || a.endUtc - b.endUtc)) {
+    const copy = { ...act }
+    if (othersExclusive.length > 0) {
+      const prev = othersExclusive[othersExclusive.length - 1]!
+      if (copy.startUtc < prev.endUtc) {
+        prev.endUtc = copy.startUtc
+        prev.durationMinutes = Math.round((prev.endUtc - prev.startUtc) / 60_000)
+        if (prev.durationMinutes <= 0) othersExclusive.pop()
+      }
+    }
+    if (copy.endUtc > copy.startUtc) othersExclusive.push(copy)
+  }
+
+  return [...vehicleExclusive, ...othersExclusive]
+    .filter((act) => act.durationMinutes > 0 && act.endUtc > act.startUtc)
+    .sort((a, b) => a.startUtc - b.startUtc)
+    .map((act, index) => ({ ...act, id: `act-${index}` }))
 }
 
-function mapActivities(card: DddParserCardJson, locations: Location[]): Activity[] {
+function mapActivities(card: DddParserCardJson): Activity[] {
   const block = pickActivityBlock(card)
   const days = block?.decoded_activity_daily_records ?? []
-  const collected: Array<{
-    slotDriver: boolean
-    dayStart: number
-    minutes: number
-    change: DddActivityChange
-  }> = []
+  const collected: SlotChange[] = []
 
   for (const day of days) {
     const dayStart = parseUnixMs(day.activity_record_date)
@@ -406,8 +467,8 @@ function mapActivities(card: DddParserCardJson, locations: Location[]): Activity
       .map((raw) => normalizeActivityChange(raw))
       .filter((change): change is DddActivityChange => change != null)
     for (const change of changes) {
+      if (change.driver === false) continue
       collected.push({
-        slotDriver: change.driver !== false,
         dayStart,
         minutes: Math.max(0, change.minutes ?? 0),
         change,
@@ -415,47 +476,34 @@ function mapActivities(card: DddParserCardJson, locations: Location[]): Activity
     }
   }
 
-  const activities: DraftActivity[] = []
-  let index = 0
-  for (const slotDriver of [true, false]) {
-    const slotChanges = collected
-      .filter((item) => item.slotDriver === slotDriver)
-      .sort((a, b) => a.dayStart + a.minutes * 60_000 - (b.dayStart + b.minutes * 60_000))
-    for (let i = 0; i < slotChanges.length; i += 1) {
-      const current = slotChanges[i]!
-      const startUtc = current.dayStart + current.minutes * 60_000
-      const next = slotChanges[i + 1]
-      let endUtc: number
-      if (next) {
-        endUtc = next.dayStart + next.minutes * 60_000
-      } else if (current.change.card_present === false) {
-        continue
-      } else {
-        endUtc = current.dayStart + 24 * 60 * 60_000
-      }
-      const durationMinutes = Math.round((endUtc - startUtc) / 60_000)
-      if (durationMinutes <= 0) continue
-      activities.push({
-        id: `act-${index}`,
-        kind: activityKindFromChange(current.change),
-        startUtc,
-        endUtc,
-        durationMinutes,
-        cardAbsent: current.change.card_present === false,
-        isCrew: current.change.team === true,
-        slot: slotDriver ? 1 : 2,
-      })
-      index += 1
-    }
+  collected.sort((a, b) => changeTime(a) - changeTime(b))
+
+  const dayMs = 24 * 60 * 60_000
+  const activities: Activity[] = []
+  for (let i = 0; i < collected.length; i += 1) {
+    const current = collected[i]!
+    const next = collected[i + 1]
+    const startUtc = changeTime(current)
+    const endUtc = next ? changeTime(next) : current.dayStart + dayMs
+    const durationMinutes = Math.round((endUtc - startUtc) / 60_000)
+    if (durationMinutes <= 0) continue
+
+    const inVehicle = cardIsPresent(current.change)
+    const explicitManual = isExplicitManualEntry(current, next, dayMs)
+
+    activities.push({
+      id: `act-${i}`,
+      kind: inVehicle || explicitManual ? activityKindFromChange(current.change) : 'unknown',
+      startUtc,
+      endUtc,
+      durationMinutes,
+      isManualEntry: explicitManual,
+      isCrew: inVehicle && current.change.team === true,
+      slot: 1,
+    })
   }
 
-  return assignVehicleRegistrations(
-    markManualActivities(
-      activities.sort((a, b) => a.startUtc - b.startUtc),
-      manualWindows(card, locations),
-    ),
-    card,
-  )
+  return assignVehicleRegistrations(exclusiveByPriority(activities), card)
 }
 
 function registrationPlate(value: string | null | undefined): string | null {
@@ -627,7 +675,7 @@ export function mapDddParserJson(parserJson: unknown): DriverCardData {
     lastCardDownloadUtc: parseUnixMs(lastDownload?.last_card_download),
     lastWithdrawalUtc: lastWithdrawalUtc(card),
     locations: mappedLocations,
-    activities: mapActivities(card, mappedLocations),
+    activities: mapActivities(card),
     violations: mapViolations(card),
   }
 

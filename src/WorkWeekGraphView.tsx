@@ -619,10 +619,7 @@ function GraphBlock({
               {(() => {
                 const maxStrokeHalf = sx(8)
                 const rowCenter = yBase + rowH / 2
-                const sortedActivities = [...day.activities].sort((a, b) => {
-                  const layer = (act: ParsedActivity) => (act.isManualEntry || act.type === 'neznámá' ? 0 : act.slot ?? 1)
-                  return layer(a) - layer(b) || a.startMs - b.startMs
-                })
+                const sortedActivities = [...day.activities].sort((a, b) => a.startMs - b.startMs)
                 const MANUAL_UNDERLINE_WIDTH = sx(3)
                 const CREW_UNDERLINE = '#25D366'
                 const CREW_UNDERLINE_WIDTH = sx(3)

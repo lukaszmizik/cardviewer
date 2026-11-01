@@ -56,6 +56,61 @@ function toParsedActivity(act: Activity): ParsedActivity {
   }
 }
 
+function isVehicleUnitParsed(act: ParsedActivity): boolean {
+  return act.isManualEntry !== true && act.type !== 'neznámá'
+}
+
+function clipParsed(act: ParsedActivity, startMs: number, endMs: number): ParsedActivity {
+  return {
+    ...act,
+    startMs,
+    endMs,
+    durationMinutes: Math.round((endMs - startMs) / 60_000),
+  }
+}
+
+function subtractParsed(base: ParsedActivity, cuts: ParsedActivity[]): ParsedActivity[] {
+  let pieces = [base]
+  for (const cut of cuts) {
+    const next: ParsedActivity[] = []
+    for (const piece of pieces) {
+      if (cut.endMs <= piece.startMs || cut.startMs >= piece.endMs) {
+        next.push(piece)
+        continue
+      }
+      if (cut.startMs > piece.startMs) next.push(clipParsed(piece, piece.startMs, cut.startMs))
+      if (cut.endMs < piece.endMs) next.push(clipParsed(piece, cut.endMs, piece.endMs))
+    }
+    pieces = next.filter((item) => item.durationMinutes > 0)
+  }
+  return pieces
+}
+
+function chainExclusive(list: ParsedActivity[]): ParsedActivity[] {
+  const out: ParsedActivity[] = []
+  for (const act of [...list].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)) {
+    const copy = { ...act }
+    if (out.length > 0) {
+      const prev = out[out.length - 1]!
+      if (copy.startMs < prev.endMs) {
+        prev.endMs = copy.startMs
+        prev.durationMinutes = Math.round((prev.endMs - prev.startMs) / 60_000)
+        if (prev.durationMinutes <= 0) out.pop()
+      }
+    }
+    if (copy.endMs > copy.startMs) out.push(copy)
+  }
+  return out
+}
+
+/** 1 minuta = 1 činnost; jízda/práce/odpočinek z vozidla rozdělí roztaženou výplň. */
+function exclusiveParsedTimeline(activities: ParsedActivity[]): ParsedActivity[] {
+  const vehicleExclusive = chainExclusive(activities.filter((act) => isVehicleUnitParsed(act)))
+  const others = activities.filter((act) => !isVehicleUnitParsed(act))
+  const splitOthers = others.flatMap((act) => subtractParsed(act, vehicleExclusive))
+  return [...vehicleExclusive, ...chainExclusive(splitOthers)].sort((a, b) => a.startMs - b.startMs)
+}
+
 function pad(n: number): string {
   return String(n).padStart(2, '0')
 }
@@ -195,7 +250,9 @@ function annotateRestSpans(days: DayData[]) {
 
 export function cardToGraph(card: DriverCardData, clockMode: ClockMode = 'local'): CardGraphModel {
   const useLocalTime = clockMode === 'local'
-  const parsed = card.activities.map(toParsedActivity)
+  const parsed = exclusiveParsedTimeline(
+    card.activities.filter((act) => act.slot !== 2).map(toParsedActivity),
+  )
   const byDay = activitiesByDay(parsed, { useLocalTime })
   const referenceMs = parsed[0]?.startMs ?? Date.now()
   const fallbackCountry = card.issuingCountry ?? card.nationality ?? 'CZ'
