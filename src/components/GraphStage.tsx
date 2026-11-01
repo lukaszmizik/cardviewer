@@ -63,7 +63,7 @@ function fillInspectPanel(
   const plate = act.registration?.replace(/\0/g, '').trim()
   if (plate) {
     registrationEl.hidden = false
-    registrationEl.textContent = `RZ ${plate}`
+    registrationEl.textContent = `vozidlo ${plate}`
   } else {
     registrationEl.hidden = true
     registrationEl.textContent = ''
