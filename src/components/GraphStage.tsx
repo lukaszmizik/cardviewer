@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
 import type { ClockMode } from '../lib/clock'
-import { parseClockDateTime } from '../lib/clock'
+import { formatClockTime, parseClockDateTime } from '../lib/clock'
 import {
   CHART_WIDTH,
   DEFAULT_ZOOM,
@@ -45,18 +45,26 @@ function minuteToMs(day: DayData, minute: number, clockMode: ClockMode): number 
   return parseClockDateTime(`${pad(h)}:${pad(m)}`, day.dateStr, clockMode)
 }
 
+function formatActivityClockRange(act: ParsedActivity, mode: ClockMode): string {
+  const range = `${formatClockTime(act.startMs, mode)} - ${formatClockTime(act.endMs, mode)}`
+  return mode === 'utc' ? `${range} UTC` : range
+}
+
 function fillInspectPanel(
   swatch: HTMLSpanElement,
   typeEl: HTMLSpanElement,
   durationEl: HTMLSpanElement,
+  rangeEl: HTMLSpanElement,
   registrationEl: HTMLSpanElement,
   flagsEl: HTMLDivElement,
   crewFlag: HTMLSpanElement,
   manualFlag: HTMLSpanElement,
   act: ParsedActivity,
+  clockMode: ClockMode,
 ) {
   typeEl.textContent = ACTIVITY_TYPE_LABELS[act.type] ?? act.type
   durationEl.textContent = formatActivityDuration(act.originalDurationMinutes ?? act.durationMinutes)
+  rangeEl.textContent = formatActivityClockRange(act, clockMode)
   swatch.style.background = getActivityDisplayColor(act)
   swatch.textContent = ACTIVITY_SYMBOL[act.type] ?? ''
   swatch.className =
@@ -95,6 +103,7 @@ export function GraphStage({
   const inspectSwatchRef = useRef<HTMLSpanElement>(null)
   const inspectTypeRef = useRef<HTMLSpanElement>(null)
   const inspectDurationRef = useRef<HTMLSpanElement>(null)
+  const inspectRangeRef = useRef<HTMLSpanElement>(null)
   const inspectRegistrationRef = useRef<HTMLSpanElement>(null)
   const inspectFlagsRef = useRef<HTMLDivElement>(null)
   const inspectCrewFlagRef = useRef<HTMLSpanElement>(null)
@@ -169,13 +178,25 @@ export function GraphStage({
     const swatch = inspectSwatchRef.current
     const typeEl = inspectTypeRef.current
     const durationEl = inspectDurationRef.current
+    const rangeEl = inspectRangeRef.current
     const registrationEl = inspectRegistrationRef.current
     const flagsEl = inspectFlagsRef.current
     const crewFlag = inspectCrewFlagRef.current
     const manualFlag = inspectManualFlagRef.current
-    if (inspect && swatch && typeEl && durationEl && registrationEl && flagsEl && crewFlag && manualFlag) {
+    if (inspect && swatch && typeEl && durationEl && rangeEl && registrationEl && flagsEl && crewFlag && manualFlag) {
       inspect.classList.add('is-visible')
-      fillInspectPanel(swatch, typeEl, durationEl, registrationEl, flagsEl, crewFlag, manualFlag, act)
+      fillInspectPanel(
+        swatch,
+        typeEl,
+        durationEl,
+        rangeEl,
+        registrationEl,
+        flagsEl,
+        crewFlag,
+        manualFlag,
+        act,
+        clockRef.current,
+      )
       const tipW = inspect.offsetWidth
       const tipH = inspect.offsetHeight
       let tx = localX + 12
@@ -228,6 +249,7 @@ export function GraphStage({
         <div className="graph-inspect-body">
           <span ref={inspectTypeRef} className="graph-inspect-type" />
           <span ref={inspectDurationRef} className="graph-inspect-duration" />
+          <span ref={inspectRangeRef} className="graph-inspect-range" />
           <span ref={inspectRegistrationRef} className="graph-inspect-registration" hidden />
           <div ref={inspectFlagsRef} className="graph-inspect-flags" hidden>
             <span ref={inspectCrewFlagRef} className="graph-inspect-flag graph-inspect-flag--crew" hidden>

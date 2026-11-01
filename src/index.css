@@ -805,7 +805,8 @@ body {
   line-height: 1.2;
 }
 
-.graph-inspect-duration {
+.graph-inspect-duration,
+.graph-inspect-range {
   font-size: 11px;
   font-weight: 500;
   color: #cbd5e1;
