@@ -146,6 +146,9 @@ function toGpsLocations(locations: Location[]): RecordedGpsLocation[] {
       minuteStartUtc: loc.recordedAtUtc,
       gpsLocation: loc.label,
       recordType: loc.recordType === 'border_crossing' ? 'border_crossing' : 'gps_3h',
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      countryCode: loc.countryCode,
     }))
 }
 

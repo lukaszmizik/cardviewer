@@ -524,6 +524,73 @@ body {
   font-weight: 600;
 }
 
+.graph-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.work-week-graph-nav-btn.is-tool-active {
+  color: #312e81;
+  background: #e0e7ff;
+  border-color: #6366f1;
+}
+
+.graph-zoom-range {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4338ca;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-stage {
+  position: relative;
+  width: 100%;
+  user-select: none;
+  touch-action: none;
+}
+
+.graph-lens {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 220px;
+  height: 120px;
+  pointer-events: none;
+  opacity: 0;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.28);
+  background: #fff;
+  z-index: 3;
+}
+
+.graph-select-box {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  background: rgba(99, 102, 241, 0.18);
+  border: 1px solid rgba(79, 70, 229, 0.85);
+  z-index: 2;
+}
+
+.graph-inspect {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 4;
+  pointer-events: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.28);
+}
+
 .time-scale-select {
   display: flex;
   align-items: center;
@@ -770,6 +837,33 @@ body {
 .work-week-graph-manual-item {
   padding: 2px 0;
   border-bottom: 1px solid #eee;
+}
+
+.recorded-location-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.recorded-location-map-link {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  text-decoration: none;
+  font-size: 1.05rem;
+  line-height: 1;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.recorded-location-map-link:hover {
+  background: #eef2ff;
+  border-color: #c7d2fe;
 }
 
 .work-week-graph-manual-item:last-child {

@@ -49,6 +49,9 @@ export type RecordedGpsLocation = {
   minuteStartUtc: number
   gpsLocation: string
   recordType?: RecordedGpsRecordType
+  latitude?: number
+  longitude?: number
+  countryCode?: string
 }
 
 export type FaultOrEvent = {
