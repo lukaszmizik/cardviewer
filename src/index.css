@@ -816,9 +816,17 @@ body {
 .work-week-graph-svg {
   display: block;
   width: 100%;
-  height: 100%;
-  min-height: calc(96vh - 90px);
-  object-fit: contain;
+  height: auto;
+  max-width: 100%;
+}
+
+.work-week-graph-day-name,
+.work-week-graph-day-date {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.work-week-graph-day-date {
+  fill: #64748b;
 }
 
 .work-week-graph-empty {

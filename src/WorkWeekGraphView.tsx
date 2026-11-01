@@ -73,6 +73,10 @@ const ACTIVITY_STYLE: Record<ActivityType, { color: string; strokeWidth: number 
 const TICK_COLOR = '#999'
 const LABEL_COLOR = '#334155'
 const GRAPH_AXIS_COLOR = '#334155'
+/** Popisky kalendářního dne v levém sloupci grafu (SVG user units, nemění se s výškou řádku). */
+const GRAPH_DAY_NAME_FONT_SIZE = 10
+const GRAPH_DAY_DATE_FONT_SIZE = 9
+const GRAPH_DAY_LABEL_FONT_WEIGHT = 500
 const ANCHOR_COLOR = '#000'
 const ANCHOR_STROKE = '#000'
 function getActivityColor(act: ParsedActivity): string {
@@ -394,8 +398,28 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
                   </g>
                 )
               })}
-              <text x={6} y={yBase + ROW_HEIGHT / 2 + 4} fill={GRAPH_AXIS_COLOR} fontSize={14} fontFamily="sans-serif" fontWeight={600}>{dayNames[new Date(day.dateUtc).getDay()]}</text>
-              <text x={6} y={yBase + ROW_HEIGHT / 2 + 16} fill={GRAPH_AXIS_COLOR} fontSize={12} fontFamily="sans-serif" fontWeight={600}>{day.dateStr}</text>
+              <text
+                x={6}
+                y={yBase + ROW_HEIGHT / 2 - 1}
+                className="work-week-graph-day-name"
+                fill={GRAPH_AXIS_COLOR}
+                fontSize={GRAPH_DAY_NAME_FONT_SIZE}
+                fontFamily="sans-serif"
+                fontWeight={GRAPH_DAY_LABEL_FONT_WEIGHT}
+              >
+                {dayNames[new Date(day.dateUtc).getDay()]}
+              </text>
+              <text
+                x={6}
+                y={yBase + ROW_HEIGHT / 2 + 9}
+                className="work-week-graph-day-date"
+                fill={LABEL_COLOR}
+                fontSize={GRAPH_DAY_DATE_FONT_SIZE}
+                fontFamily="sans-serif"
+                fontWeight={GRAPH_DAY_LABEL_FONT_WEIGHT}
+              >
+                {day.dateStr}
+              </text>
               {getWorkShiftRangesForDay(workShiftRanges, day.dateUtc).map((range, ri) => {
                 const x1 = LABEL_WIDTH + timeToX(dayStart, range.startMs, clockMode) * CHART_WIDTH
                 const x2 = LABEL_WIDTH + timeToX(dayStart, range.endMs, clockMode) * CHART_WIDTH
