@@ -103,7 +103,7 @@ function chainExclusive(list: ParsedActivity[]): ParsedActivity[] {
   return out
 }
 
-/** 1 minuta = 1 činnost; jízda/práce/odpočinek z vozidla rozdělí roztaženou výplň. */
+/** Jedna osa řidiče: 1 minuta = 1 činnost; záznam z vozidla rozdělí roztaženou výplň. */
 function exclusiveParsedTimeline(activities: ParsedActivity[]): ParsedActivity[] {
   const vehicleExclusive = chainExclusive(activities.filter((act) => isVehicleUnitParsed(act)))
   const others = activities.filter((act) => !isVehicleUnitParsed(act))
@@ -237,11 +237,17 @@ function annotateRestSpans(days: DayData[]) {
       if (isRest(act.type)) rests.push(act)
     }
   }
-  rests.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
+  rests.sort((a, b) => (a.slot ?? 1) - (b.slot ?? 1) || a.startMs - b.startMs || a.endMs - b.endMs)
   let index = 0
   while (index < rests.length) {
     let endIndex = index
-    while (endIndex + 1 < rests.length && rests[endIndex]!.endMs === rests[endIndex + 1]!.startMs) endIndex += 1
+    while (
+      endIndex + 1 < rests.length &&
+      (rests[endIndex]!.slot ?? 1) === (rests[endIndex + 1]!.slot ?? 1) &&
+      rests[endIndex]!.endMs === rests[endIndex + 1]!.startMs
+    ) {
+      endIndex += 1
+    }
     const minutes = Math.round((rests[endIndex]!.endMs - rests[index]!.startMs) / 60000)
     for (let cursor = index; cursor <= endIndex; cursor += 1) rests[cursor]!.originalDurationMinutes = minutes
     index = endIndex + 1
@@ -251,7 +257,9 @@ function annotateRestSpans(days: DayData[]) {
 export function cardToGraph(card: DriverCardData, clockMode: ClockMode = 'local'): CardGraphModel {
   const useLocalTime = clockMode === 'local'
   const parsed = exclusiveParsedTimeline(
-    card.activities.filter((act) => act.slot !== 2).map(toParsedActivity),
+    card.activities
+      .filter((act) => act.slot !== 2 || act.isManualEntry === true || act.kind !== 'unknown')
+      .map(toParsedActivity),
   )
   const byDay = activitiesByDay(parsed, { useLocalTime })
   const referenceMs = parsed[0]?.startMs ?? Date.now()

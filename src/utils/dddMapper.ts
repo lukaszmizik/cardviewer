@@ -455,34 +455,13 @@ function exclusiveByPriority(activities: Activity[]): Activity[] {
     .map((act, index) => ({ ...act, id: `act-${index}` }))
 }
 
-function mapActivities(card: DddParserCardJson): Activity[] {
-  const block = pickActivityBlock(card)
-  const days = block?.decoded_activity_daily_records ?? []
-  const collected: SlotChange[] = []
-
-  for (const day of days) {
-    const dayStart = parseUnixMs(day.activity_record_date)
-    if (dayStart == null) continue
-    const changes = (day.activity_change_info ?? [])
-      .map((raw) => normalizeActivityChange(raw))
-      .filter((change): change is DddActivityChange => change != null)
-    for (const change of changes) {
-      if (change.driver === false) continue
-      collected.push({
-        dayStart,
-        minutes: Math.max(0, change.minutes ?? 0),
-        change,
-      })
-    }
-  }
-
-  collected.sort((a, b) => changeTime(a) - changeTime(b))
-
+function timelineFromChanges(collected: SlotChange[], slot: 1 | 2): Activity[] {
+  const sorted = [...collected].sort((a, b) => changeTime(a) - changeTime(b))
   const dayMs = 24 * 60 * 60_000
   const activities: Activity[] = []
-  for (let i = 0; i < collected.length; i += 1) {
-    const current = collected[i]!
-    const next = collected[i + 1]
+  for (let i = 0; i < sorted.length; i += 1) {
+    const current = sorted[i]!
+    const next = sorted[i + 1]
     const startUtc = changeTime(current)
     const endUtc = next ? changeTime(next) : current.dayStart + dayMs
     const durationMinutes = Math.round((endUtc - startUtc) / 60_000)
@@ -492,18 +471,49 @@ function mapActivities(card: DddParserCardJson): Activity[] {
     const explicitManual = isExplicitManualEntry(current, next, dayMs)
 
     activities.push({
-      id: `act-${i}`,
+      id: `act-${slot}-${i}`,
       kind: inVehicle || explicitManual ? activityKindFromChange(current.change) : 'unknown',
       startUtc,
       endUtc,
       durationMinutes,
       isManualEntry: explicitManual,
       isCrew: inVehicle && current.change.team === true,
-      slot: 1,
+      slot,
     })
   }
+  return activities
+}
 
-  return assignVehicleRegistrations(exclusiveByPriority(activities), card)
+function mapActivities(card: DddParserCardJson): Activity[] {
+  const block = pickActivityBlock(card)
+  const days = block?.decoded_activity_daily_records ?? []
+  const slot1: SlotChange[] = []
+  const slot2: SlotChange[] = []
+
+  for (const day of days) {
+    const dayStart = parseUnixMs(day.activity_record_date)
+    if (dayStart == null) continue
+    const changes = (day.activity_change_info ?? [])
+      .map((raw) => normalizeActivityChange(raw))
+      .filter((change): change is DddActivityChange => change != null)
+    for (const change of changes) {
+      const item: SlotChange = {
+        dayStart,
+        minutes: Math.max(0, change.minutes ?? 0),
+        change,
+      }
+      if (change.driver === false) slot2.push(item)
+      else slot1.push(item)
+    }
+  }
+
+  const driverTimeline = timelineFromChanges(slot1, 1)
+  const slot2Timeline = timelineFromChanges(slot2, 2)
+  const slot2OnDriverAxis = slot2Timeline.filter(
+    (act) => act.isManualEntry === true || isVehicleUnitActivity(act),
+  )
+
+  return assignVehicleRegistrations(exclusiveByPriority([...driverTimeline, ...slot2OnDriverAxis]), card)
 }
 
 function registrationPlate(value: string | null | undefined): string | null {

@@ -44,7 +44,7 @@ export function getActivityDisplayColor(act: ParsedActivity): string {
   return '#888'
 }
 
-/** Jediná aktivita v dané minutě; při zbytku překryvu vyhraje pozdější začátek. */
+/** Jediná činnost v minutě; při zbytku překryvu vyhraje pozdější začátek. */
 export function findTopActivityAt(day: DayData, ms: number): ParsedActivity | undefined {
   const matches = day.activities.filter((act) => ms >= act.startMs && ms < act.endMs)
   if (matches.length === 0) return undefined
