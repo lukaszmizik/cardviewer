@@ -52,6 +52,7 @@ import { CardInfoTable } from './components/CardInfoTable'
 import { GraphStage } from './components/GraphStage'
 import { DayGraphPan } from './components/DayGraphPan'
 import { GraphSwipeNav } from './components/GraphSwipeNav'
+import { CardCalendar } from './components/CardCalendar'
 import { googleMapsUrl } from './lib/mapsLink'
 import type { DriverCardData } from './types/tacho'
 
@@ -971,6 +972,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
   const [detailActive, setDetailActive] = useState(false)
   const [focusedDayUtc, setFocusedDayUtc] = useState<number | null>(null)
   const [dayPanStart, setDayPanStart] = useState(0)
+  const [cardOverviewOpen, setCardOverviewOpen] = useState(false)
   const inspectActive = detailActive && !narrowViewport
 
   useEffect(() => {
@@ -984,6 +986,11 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key !== 'Escape') return
+      if (cardOverviewOpen) {
+        setCardOverviewOpen(false)
+        event.preventDefault()
+        return
+      }
       if (focusedDayUtc != null) {
         setFocusedDayUtc(null)
         event.preventDefault()
@@ -993,7 +1000,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [focusedDayUtc])
+  }, [cardOverviewOpen, focusedDayUtc])
 
   const goPrevWeek = () => setDisplayWeekStartMs((ms) => addDays(ms, -7, clockMode))
   const goNextWeek = () => setDisplayWeekStartMs((ms) => addDays(ms, 7, clockMode))
@@ -1048,12 +1055,22 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
         )}
         <div className={focusedDayUtc != null ? 'work-week-graph-header is-day-focus' : 'work-week-graph-header'}>
           <h2 className="work-week-graph-title">
-            {focusedDayUtc != null
-              ? `${dayNames[clockParts(focusedDayUtc, clockMode).weekday] ?? ''} ${formatClockDate(focusedDayUtc, clockMode)}`
-              : t.workWeek.weekGraphTitle}
+            {cardOverviewOpen
+              ? 'Celý obsah karty'
+              : focusedDayUtc != null
+                ? `${dayNames[clockParts(focusedDayUtc, clockMode).weekday] ?? ''} ${formatClockDate(focusedDayUtc, clockMode)}`
+                : t.workWeek.weekGraphTitle}
           </h2>
           <div className="work-week-graph-nav">
-            {focusedDayUtc != null ? (
+            {cardOverviewOpen ? (
+              <button
+                type="button"
+                className="work-week-graph-nav-btn graph-nav-back"
+                onClick={() => setCardOverviewOpen(false)}
+              >
+                ← Zpět na týden
+              </button>
+            ) : focusedDayUtc != null ? (
               <>
                 <button
                   type="button"
@@ -1134,6 +1151,16 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 >
                   Dnes
                 </button>
+                <button
+                  type="button"
+                  className="work-week-graph-nav-btn"
+                  onClick={() => {
+                    setFocusedDayUtc(null)
+                    setCardOverviewOpen(true)
+                  }}
+                >
+                  Celý obsah karty
+                </button>
                 <p className="graph-period-caption">Přejeďte do stran na jiný týden</p>
               </>
             )}
@@ -1147,7 +1174,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 onChange={onClockModeChange ?? (() => undefined)}
               />
             )}
-            {!narrowViewport && (
+            {!narrowViewport && !cardOverviewOpen && (
             <div className="graph-toolbar" role="toolbar" aria-label="Nástroje grafu">
               <button
                 type="button"
@@ -1161,10 +1188,22 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
             </div>
             )}
           </div>
-          {focusedDayUtc == null && <WorkWeekGraphLegend t={t} />}
+          {focusedDayUtc == null && !cardOverviewOpen && <WorkWeekGraphLegend t={t} />}
         </div>
 
-        {focusedDayUtc != null ? (
+        {cardOverviewOpen ? (
+          <CardCalendar
+            days={days}
+            clockMode={clockMode}
+            dayNames={dayNames}
+            currentWeekStartMs={displayWeekStartMs}
+            onSelectWeek={(weekStart) => {
+              setDisplayWeekStartMs(weekStart)
+              setFocusedDayUtc(null)
+              setCardOverviewOpen(false)
+            }}
+          />
+        ) : focusedDayUtc != null ? (
           <section className="day-view-card">
             <WorkWeekGraphLegend t={t} />
             <DayGraphPan panStartMinute={dayPanStart} onPanStartChange={setDayPanStart}>

@@ -553,6 +553,96 @@ body {
   touch-action: pan-y;
 }
 
+.card-calendar {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin-top: 0.75rem;
+}
+
+.card-calendar-hint {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #64748b;
+}
+
+.card-calendar-month-title {
+  margin: 0 0 0.65rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #0f172a;
+  text-transform: capitalize;
+}
+
+.card-calendar-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 36rem;
+}
+
+.card-calendar-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: center;
+}
+
+.card-calendar-week:not(.card-calendar-week--head):hover {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+.card-calendar-week.is-current {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.card-calendar-week--head {
+  cursor: default;
+  padding: 0 4px 2px;
+}
+
+.card-calendar-dow {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.02em;
+}
+
+.card-calendar-day {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.15rem;
+  height: 2.15rem;
+  margin: 0 auto;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #334155;
+  border-radius: 999px;
+}
+
+.card-calendar-day.is-outside {
+  color: #cbd5e1;
+  font-weight: 500;
+}
+
+.card-calendar-day.has-record {
+  color: #14532d;
+  background: #86efac;
+  box-shadow: inset 0 0 0 2px #16a34a;
+}
+
 .work-week-graph-nav-today {
   font-weight: 600;
 }
@@ -1359,5 +1449,13 @@ body {
   .recent-file-name,
   .recorded-location-text {
     overflow-wrap: anywhere;
+  }
+
+  .card-calendar-grid {
+    max-width: 100%;
+  }
+
+  .card-calendar-week:not(.card-calendar-week--head) {
+    min-height: 44px;
   }
 }
