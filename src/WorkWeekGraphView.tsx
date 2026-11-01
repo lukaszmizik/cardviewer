@@ -950,7 +950,6 @@ function formatFaultTime(ms: number, mode: ClockMode): string {
 export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc, card2Data, loadUnloadEvents = [], ferryTrainEvents = [], outModeEvents = [], recordedGpsLocations = [], faultsAndEvents = [], symbolMap, onResetLoadUnload, embedded = false, onClose, clockMode = 'local', onClockModeChange, card }: WorkWeekGraphViewProps) {
   const { t } = useLanguage()
   const narrowViewport = useNarrowViewport()
-  const inspectActive = detailActive && !narrowViewport
   const dayNames = t.workWeek.dayNames
   const getInitialWeekStart = () => {
     if (days.length > 0) return weekStartMs(days[days.length - 1]!.dateUtc, clockMode)
@@ -960,6 +959,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
   const [detailActive, setDetailActive] = useState(false)
   const [focusedDayUtc, setFocusedDayUtc] = useState<number | null>(null)
   const [dayPanStart, setDayPanStart] = useState(0)
+  const inspectActive = detailActive && !narrowViewport
 
   useEffect(() => {
     setDisplayWeekStartMs(getInitialWeekStart())
