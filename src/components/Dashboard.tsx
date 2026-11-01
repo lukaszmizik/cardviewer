@@ -26,7 +26,7 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
 
   return (
     <section className="page-placeholder dashboard">
-      <h1>Úvod</h1>
+      <h1>Import dat</h1>
       <p>Nahrajte data z karty řidiče a pokračujte na graf aktivit nebo kontrolu přestupků.</p>
 
       <FileUploader onDataLoaded={onDataLoaded} />
