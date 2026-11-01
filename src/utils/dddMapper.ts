@@ -375,21 +375,53 @@ function clipActivity<T extends { startUtc: number; endUtc: number; durationMinu
 }
 
 /**
- * Explicitní ruční vklad: změna bez karty, která končí další změnou téhož dne
- * (nebo přes půlnoc, pokud řidič zadal činnost během dne a další den v 00:00 pokračuje).
- * Mezera mezi vytažením a dalším vložením karty sem nepatří.
+ * Explicitní ruční vklad: bez karty a další změna je téhož dne, nebo
+ * pokračování stejné činnosti o půlnoci (00:00 další den, stále bez karty).
  */
 function isExplicitManualEntry(current: SlotChange, next: SlotChange | undefined, dayMs: number): boolean {
   if (cardIsPresent(current.change)) return false
   if (!next) return false
   if (next.dayStart === current.dayStart) return true
   return (
-    current.minutes > 0 &&
     next.dayStart === current.dayStart + dayMs &&
     next.minutes === 0 &&
     !cardIsPresent(next.change) &&
     next.change.work_type === current.change.work_type
   )
+}
+
+function cardPresentIntervals(collected: SlotChange[]): Array<{ start: number; end: number }> {
+  const dayMs = 24 * 60 * 60_000
+  const intervals: Array<{ start: number; end: number }> = []
+  for (let i = 0; i < collected.length; i += 1) {
+    const current = collected[i]!
+    if (!cardIsPresent(current.change)) continue
+    const start = changeTime(current)
+    const next = collected[i + 1]
+    const end = next ? changeTime(next) : current.dayStart + dayMs
+    if (end > start) intervals.push({ start, end })
+  }
+  return intervals
+}
+
+function overlapsCardPresent(
+  startUtc: number,
+  endUtc: number,
+  intervals: Array<{ start: number; end: number }>,
+): boolean {
+  return intervals.some((interval) => startUtc < interval.end && endUtc > interval.start)
+}
+
+/** Slot 2 bez karty přes aktivní jízdu/práci ve vozidle = prázdný spolujezdec, ne [M]. */
+function isInactiveCoDriverStatus(
+  item: SlotChange,
+  startUtc: number,
+  endUtc: number,
+  presentIntervals: Array<{ start: number; end: number }>,
+): boolean {
+  if (item.change.driver !== false) return false
+  if (cardIsPresent(item.change)) return false
+  return overlapsCardPresent(startUtc, endUtc, presentIntervals)
 }
 
 function subtractIntervals(base: Activity, cuts: Activity[]): Activity[] {
@@ -455,23 +487,47 @@ function exclusiveByPriority(activities: Activity[]): Activity[] {
     .map((act, index) => ({ ...act, id: `act-${index}` }))
 }
 
-function timelineFromChanges(collected: SlotChange[], slot: 1 | 2): Activity[] {
-  const sorted = [...collected].sort((a, b) => changeTime(a) - changeTime(b))
+function mapActivities(card: DddParserCardJson): Activity[] {
+  const block = pickActivityBlock(card)
+  const days = block?.decoded_activity_daily_records ?? []
+  const collected: SlotChange[] = []
+
+  for (const day of days) {
+    const dayStart = parseUnixMs(day.activity_record_date)
+    if (dayStart == null) continue
+    const changes = (day.activity_change_info ?? [])
+      .map((raw) => normalizeActivityChange(raw))
+      .filter((change): change is DddActivityChange => change != null)
+    for (const change of changes) {
+      collected.push({
+        dayStart,
+        minutes: Math.max(0, change.minutes ?? 0),
+        change,
+      })
+    }
+  }
+
+  collected.sort((a, b) => changeTime(a) - changeTime(b))
+
   const dayMs = 24 * 60 * 60_000
+  const presentIntervals = cardPresentIntervals(collected)
   const activities: Activity[] = []
-  for (let i = 0; i < sorted.length; i += 1) {
-    const current = sorted[i]!
-    const next = sorted[i + 1]
+  for (let i = 0; i < collected.length; i += 1) {
+    const current = collected[i]!
+    const next = collected[i + 1]
     const startUtc = changeTime(current)
     const endUtc = next ? changeTime(next) : current.dayStart + dayMs
     const durationMinutes = Math.round((endUtc - startUtc) / 60_000)
     if (durationMinutes <= 0) continue
 
+    if (isInactiveCoDriverStatus(current, startUtc, endUtc, presentIntervals)) continue
+
     const inVehicle = cardIsPresent(current.change)
     const explicitManual = isExplicitManualEntry(current, next, dayMs)
+    const slot: 1 | 2 = current.change.driver === false ? 2 : 1
 
     activities.push({
-      id: `act-${slot}-${i}`,
+      id: `act-${i}`,
       kind: inVehicle || explicitManual ? activityKindFromChange(current.change) : 'unknown',
       startUtc,
       endUtc,
@@ -481,39 +537,8 @@ function timelineFromChanges(collected: SlotChange[], slot: 1 | 2): Activity[] {
       slot,
     })
   }
-  return activities
-}
 
-function mapActivities(card: DddParserCardJson): Activity[] {
-  const block = pickActivityBlock(card)
-  const days = block?.decoded_activity_daily_records ?? []
-  const slot1: SlotChange[] = []
-  const slot2: SlotChange[] = []
-
-  for (const day of days) {
-    const dayStart = parseUnixMs(day.activity_record_date)
-    if (dayStart == null) continue
-    const changes = (day.activity_change_info ?? [])
-      .map((raw) => normalizeActivityChange(raw))
-      .filter((change): change is DddActivityChange => change != null)
-    for (const change of changes) {
-      const item: SlotChange = {
-        dayStart,
-        minutes: Math.max(0, change.minutes ?? 0),
-        change,
-      }
-      if (change.driver === false) slot2.push(item)
-      else slot1.push(item)
-    }
-  }
-
-  const driverTimeline = timelineFromChanges(slot1, 1)
-  const slot2Timeline = timelineFromChanges(slot2, 2)
-  const slot2OnDriverAxis = slot2Timeline.filter(
-    (act) => act.isManualEntry === true || isVehicleUnitActivity(act),
-  )
-
-  return assignVehicleRegistrations(exclusiveByPriority([...driverTimeline, ...slot2OnDriverAxis]), card)
+  return assignVehicleRegistrations(exclusiveByPriority(activities), card)
 }
 
 function registrationPlate(value: string | null | undefined): string | null {
