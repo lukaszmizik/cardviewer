@@ -62,6 +62,8 @@ export type CountryMarker = {
   countryCode: string
   timeStr: string
   dateStr: string
+  /** Původní okamžik (UTC ms). Když chybí, čas se skládá z dateStr+timeStr. */
+  recordedAtUtc?: number
 }
 
 export type ParseWorkWeekResult = {

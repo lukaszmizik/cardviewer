@@ -56,11 +56,19 @@ import { CardCalendar } from './components/CardCalendar'
 import { googleMapsUrl } from './lib/mapsLink'
 import type { DriverCardData } from './types/tacho'
 
-function markerTimeMs(marker: { timeStr: string; dateStr: string }, mode: ClockMode): number {
+function markerTimeMs(
+  marker: { timeStr: string; dateStr: string; recordedAtUtc?: number },
+  mode: ClockMode,
+): number {
+  if (marker.recordedAtUtc != null) return marker.recordedAtUtc
   return parseClockDateTime(marker.timeStr, marker.dateStr, mode)
 }
 
-function manualSegmentMs(segment: { day: number; month: number; year: number; hour: number; minute: number }, mode: ClockMode): number {
+function manualSegmentMs(
+  segment: { day: number; month: number; year: number; hour: number; minute: number; recordedAtUtc?: number },
+  mode: ClockMode,
+): number {
+  if (segment.recordedAtUtc != null) return segment.recordedAtUtc
   const pad = (n: number) => String(n).padStart(2, '0')
   return parseClockDateTime(`${pad(segment.hour)}:${pad(segment.minute)}`, `${pad(segment.day)}.${pad(segment.month)}.${segment.year}`, mode)
 }

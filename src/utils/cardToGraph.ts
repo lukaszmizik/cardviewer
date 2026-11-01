@@ -86,6 +86,7 @@ function toCountryMarkers(locations: Location[], fallbackCountry: string, mode: 
         countryCode: countryFromLocation(loc, fallbackCountry),
         timeStr: parts.timeStr,
         dateStr: parts.dateStr,
+        recordedAtUtc: loc.recordedAtUtc,
       } satisfies CountryMarker
     })
 }
@@ -105,6 +106,7 @@ function toManualBuffer(card: DriverCardData, mode: ClockMode): ManualEntrySegme
       minute: parts.minute,
       countryCode: countryFromLocation(loc, card.issuingCountry ?? card.nationality ?? 'CZ'),
       isManualEntry: loc.isManualEntry,
+      recordedAtUtc: loc.recordedAtUtc,
     })
   }
 
@@ -119,12 +121,13 @@ function toManualBuffer(card: DriverCardData, mode: ClockMode): ManualEntrySegme
       minute: parts.minute,
       countryCode: act.countryCode,
       isManualEntry: true,
+      recordedAtUtc: act.startUtc,
     })
   }
 
   return segments.sort((a, b) => {
-    const am = Date.UTC(a.year, a.month - 1, a.day, a.hour, a.minute)
-    const bm = Date.UTC(b.year, b.month - 1, b.day, b.hour, b.minute)
+    const am = a.recordedAtUtc ?? Date.UTC(a.year, a.month - 1, a.day, a.hour, a.minute)
+    const bm = b.recordedAtUtc ?? Date.UTC(b.year, b.month - 1, b.day, b.hour, b.minute)
     return am - bm
   })
 }

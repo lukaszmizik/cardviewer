@@ -9,6 +9,7 @@ export type ManualEntrySegment = {
   minute: number
   countryCode?: string
   isManualEntry?: boolean
+  recordedAtUtc?: number
 }
 
 export type LoadUnloadEventType = 'load' | 'unload' | 'both'
