@@ -18,7 +18,7 @@ type LayoutProps = {
 
 export function Layout({ currentTab, onTabChange, card, children }: LayoutProps) {
   const statusText = card
-    ? `Karta nahrána: ${driverDisplayName(card)}`
+    ? `Karta načtena · ${driverDisplayName(card)}`
     : 'Žádná karta načtena'
 
   return (
@@ -46,6 +46,7 @@ export function Layout({ currentTab, onTabChange, card, children }: LayoutProps)
           className={card ? 'app-status app-status--ok' : 'app-status'}
           role="status"
         >
+          {card && <span className="app-status-dot" aria-hidden="true" />}
           {statusText}
         </p>
       </header>

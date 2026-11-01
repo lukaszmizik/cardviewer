@@ -14,7 +14,7 @@ export function GraphView({ data, onUploadCard }: GraphViewProps) {
 
   if (!data) {
     return (
-      <section className="page-placeholder graph-empty">
+      <section className="app-content-card page-placeholder graph-empty">
         <h1>Graf aktivit</h1>
         <p>Nejdřív nahrajte výpis z karty řidiče. Pak se zde zobrazí směny, řízení, jiná práce, pohotovost, přestávky a manuální záznamy.</p>
         <button type="button" className="app-nav-btn is-active" onClick={onUploadCard}>

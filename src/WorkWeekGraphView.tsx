@@ -71,7 +71,8 @@ const ACTIVITY_STYLE: Record<ActivityType, { color: string; strokeWidth: number 
 }
 
 const TICK_COLOR = '#999'
-const LABEL_COLOR = '#666'
+const LABEL_COLOR = '#334155'
+const GRAPH_AXIS_COLOR = '#334155'
 const ANCHOR_COLOR = '#000'
 const ANCHOR_STROKE = '#000'
 function getActivityColor(act: ParsedActivity): string {
@@ -373,7 +374,7 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
             return (
               <g key={`top-${i}`}>
                 <line x1={x} y1={MARGIN_TOP - HOUR_TICK_LEN} x2={x} y2={MARGIN_TOP} stroke="#333" strokeWidth={1} />
-                <text x={x} y={11} textAnchor="middle" fill="#222" fontSize={8} fontFamily="sans-serif" fontWeight={600}>{i}</text>
+                <text x={x} y={11} textAnchor="middle" fill={GRAPH_AXIS_COLOR} fontSize={11} fontFamily="sans-serif" fontWeight={600}>{i}</text>
               </g>
             )
           })}
@@ -393,8 +394,8 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
                   </g>
                 )
               })}
-              <text x={6} y={yBase + ROW_HEIGHT / 2 + 4} fill="#333" fontSize={11} fontFamily="sans-serif" fontWeight={500}>{dayNames[new Date(day.dateUtc).getDay()]}</text>
-              <text x={6} y={yBase + ROW_HEIGHT / 2 + 14} fill={LABEL_COLOR} fontSize={9} fontFamily="sans-serif">{day.dateStr}</text>
+              <text x={6} y={yBase + ROW_HEIGHT / 2 + 4} fill={GRAPH_AXIS_COLOR} fontSize={14} fontFamily="sans-serif" fontWeight={600}>{dayNames[new Date(day.dateUtc).getDay()]}</text>
+              <text x={6} y={yBase + ROW_HEIGHT / 2 + 16} fill={GRAPH_AXIS_COLOR} fontSize={12} fontFamily="sans-serif" fontWeight={600}>{day.dateStr}</text>
               {getWorkShiftRangesForDay(workShiftRanges, day.dateUtc).map((range, ri) => {
                 const x1 = LABEL_WIDTH + timeToX(dayStart, range.startMs, clockMode) * CHART_WIDTH
                 const x2 = LABEL_WIDTH + timeToX(dayStart, range.endMs, clockMode) * CHART_WIDTH
@@ -541,7 +542,7 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
             return (
               <g key={`bot-${i}`}>
                 <line x1={x} y1={0} x2={x} y2={TICK_LEN} stroke="#333" strokeWidth={1} />
-                <text x={x} y={12} textAnchor="middle" fill="#222" fontSize={8} fontFamily="sans-serif" fontWeight={600}>{i}</text>
+                <text x={x} y={12} textAnchor="middle" fill={GRAPH_AXIS_COLOR} fontSize={11} fontFamily="sans-serif" fontWeight={600}>{i}</text>
               </g>
             )
           })}

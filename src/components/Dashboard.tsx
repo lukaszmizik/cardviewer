@@ -25,26 +25,50 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
   const [usbDialogOpen, setUsbDialogOpen] = useState(false)
 
   return (
-    <section className="page-placeholder dashboard">
-      <h1>Import dat</h1>
-      <p>Nahrajte data z karty řidiče a pokračujte na graf aktivit nebo kontrolu přestupků.</p>
+    <section className="app-content-card dashboard">
+      <header className="dashboard-header">
+        <h1>Import dat</h1>
+        <p>Nahrajte soubor z karty řidiče (.ddd, .esm, .561) a pokračujte na graf aktivit nebo kontrolu přestupků.</p>
+      </header>
 
-      <FileUploader onDataLoaded={onDataLoaded} />
+      <div className="import-grid">
+        <div className="import-panel import-panel--upload">
+          <FileUploader onDataLoaded={onDataLoaded} />
+          <button type="button" className="btn-accent" onClick={() => setUsbDialogOpen(true)}>
+            Načíst ze čtečky USB
+          </button>
+        </div>
 
-      <button
-        type="button"
-        className="app-nav-btn"
-        onClick={() => setUsbDialogOpen(true)}
-      >
-        Načíst ze čtečky USB
-      </button>
+        <aside className="import-panel import-panel--recent" aria-label="Poslední načtené soubory">
+          <h2 className="recent-files-title">Poslední načtené soubory</h2>
+          {recentFiles.length === 0 ? (
+            <p className="recent-files-empty">Zatím není načtený žádný soubor.</p>
+          ) : (
+            <ul className="recent-files-list">
+              {recentFiles.map((file) => (
+                <li key={file.id}>
+                  <button type="button" className="recent-file-button" onClick={() => onOpenRecent(file)}>
+                    <span className="recent-file-name">{file.fileName}</span>
+                    <span className="recent-file-meta">
+                      {[file.driverName, file.cardNumber].filter(Boolean).join(' · ') || 'Karta řidiče'}
+                    </span>
+                    <time className="recent-file-time" dateTime={new Date(file.loadedAt).toISOString()}>
+                      {formatLoadedAt(file.loadedAt)}
+                    </time>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </aside>
+      </div>
 
       {card && (
         <div className="work-week-graph-table-wrapper dashboard-card-info">
           <table className="work-week-graph-table">
             <thead>
               <tr>
-                <th colSpan={2}>Řidič</th>
+                <th colSpan={2}>Aktuálně načtená karta</th>
               </tr>
             </thead>
             <tbody>
@@ -64,28 +88,6 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
           </table>
         </div>
       )}
-
-      <section className="recent-files" aria-label="Poslední načtené soubory">
-        <h2 className="recent-files-title">Poslední načtené soubory</h2>
-        {recentFiles.length === 0 ? (
-          <p className="recent-files-empty">Zatím není načtený žádný soubor.</p>
-        ) : (
-          <ul className="recent-files-list">
-            {recentFiles.map((file) => (
-              <li key={file.id}>
-                <button type="button" className="recent-file-button" onClick={() => onOpenRecent(file)}>
-                  <span className="recent-file-name">{file.fileName}</span>
-                  <span className="recent-file-meta">
-                    {[file.driverName, file.cardNumber].filter(Boolean).join(' · ') || 'Karta řidiče'}
-                    {' · '}
-                    {formatLoadedAt(file.loadedAt)}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
 
       {usbDialogOpen && (
         <div
@@ -111,11 +113,7 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
               Připojte čtečku karet, vložte kartu řidiče a potvrďte čtení. Přímé čtení ze zařízení doplníme později.
             </p>
             <div className="dashboard-actions">
-              <button
-                type="button"
-                className="work-week-graph-nav-btn"
-                onClick={() => setUsbDialogOpen(false)}
-              >
+              <button type="button" className="work-week-graph-nav-btn" onClick={() => setUsbDialogOpen(false)}>
                 Zrušit
               </button>
             </div>

@@ -38,7 +38,16 @@ export function CardInfoTable({ card, clockMode }: CardInfoTableProps) {
 
   return (
     <details className="work-week-graph-table-wrapper card-info-table-wrapper">
-      <summary className="card-info-summary">Karta řidiče</summary>
+      <summary className="card-info-summary">
+        <span className="card-info-summary-chevron" aria-hidden="true" />
+        <span className="card-info-summary-text">
+          <span className="card-info-summary-title">Karta řidiče</span>
+          <span className="card-info-summary-meta">
+            {driverDisplayName(card)}
+            {card.cardNumber ? ` · ${card.cardNumber}` : ''}
+          </span>
+        </span>
+      </summary>
       <table className="work-week-graph-table card-info-table">
         <tbody>
           {rows.map(([label, value]) => (
