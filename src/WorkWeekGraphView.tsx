@@ -437,8 +437,8 @@ function GraphBlock({
   const labelScale = isDayDetail ? DAY_DETAIL_LABEL_SCALE : mobileWeek ? MOBILE_WEEK_SCALE : 1
   const sx = (n: number) => n * strokeScale
   const lx = (n: number) => n * labelScale
-  const marginTop = isDayDetail ? DAY_DETAIL_MARGIN_TOP : mobileWeek ? 40 : MARGIN_TOP
-  const marginBottom = isDayDetail ? DAY_DETAIL_MARGIN_BOTTOM : mobileWeek ? 34 : MARGIN_BOTTOM
+  const marginTop = isDayDetail ? DAY_DETAIL_MARGIN_TOP : MARGIN_TOP
+  const marginBottom = isDayDetail ? DAY_DETAIL_MARGIN_BOTTOM : MARGIN_BOTTOM
   const tickLen = lx(TICK_LEN)
   const hourTickLen = lx(HOUR_TICK_LEN)
   const quarterTickLen = lx(QUARTER_TICK_LEN)
@@ -536,7 +536,9 @@ function GraphBlock({
             return (
               <g key={`top-${minute}`}>
                 <line x1={x} y1={marginTop - hourTickLen} x2={x} y2={marginTop} stroke="#333" strokeWidth={lx(1)} />
-                <text x={x} y={axisFontSize} textAnchor="middle" fill={GRAPH_AXIS_COLOR} fontSize={axisFontSize} fontFamily="sans-serif" fontWeight={600}>{formatMinuteTick(minute)}</text>
+                {!mobileWeek && (
+                  <text x={x} y={axisFontSize} textAnchor="middle" fill={GRAPH_AXIS_COLOR} fontSize={axisFontSize} fontFamily="sans-serif" fontWeight={600}>{formatMinuteTick(minute)}</text>
+                )}
               </g>
             )
           })}
@@ -765,7 +767,9 @@ function GraphBlock({
             return (
               <g key={`bot-${minute}`}>
                 <line x1={x} y1={0} x2={x} y2={tickLen} stroke="#333" strokeWidth={lx(1)} />
-                <text x={x} y={lx(12)} textAnchor="middle" fill={GRAPH_AXIS_COLOR} fontSize={axisFontSize} fontFamily="sans-serif" fontWeight={600}>{formatMinuteTick(minute)}</text>
+                {!mobileWeek && (
+                  <text x={x} y={lx(12)} textAnchor="middle" fill={GRAPH_AXIS_COLOR} fontSize={axisFontSize} fontFamily="sans-serif" fontWeight={600}>{formatMinuteTick(minute)}</text>
+                )}
               </g>
             )
           })}
