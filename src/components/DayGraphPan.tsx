@@ -2,6 +2,7 @@ import { useEffect, useRef, type PointerEvent, type ReactNode } from 'react'
 import {
   chartPixelWidthFromSvgRect,
   DAY_DETAIL_CHART_WIDTH,
+  DAY_DETAIL_LABEL_WIDTH,
   DAY_WINDOW_MINUTES,
   formatMinuteClock,
   maxDayPanStart,
@@ -67,7 +68,7 @@ export function DayGraphPan({ panStartMinute, onPanStartChange, children }: DayG
     const svg = viewport.querySelector('svg')
     if (!svg) return viewport.clientWidth
     const rect = svg.getBoundingClientRect()
-    return chartPixelWidthFromSvgRect(rect.width, DAY_DETAIL_CHART_WIDTH)
+    return chartPixelWidthFromSvgRect(rect.width, DAY_DETAIL_CHART_WIDTH, DAY_DETAIL_LABEL_WIDTH)
   }
 
   function stopInertia() {

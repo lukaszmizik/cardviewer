@@ -30,7 +30,9 @@ import {
   DAY_DETAIL_STROKE_SCALE,
   DEFAULT_ZOOM,
   HOUR_TICK_LEN,
+  DAY_DETAIL_LABEL_WIDTH,
   LABEL_WIDTH,
+  SVG_RIGHT_GUTTER,
   MARGIN_BOTTOM,
   MARGIN_TOP,
   QUARTER_TICK_LEN,
@@ -444,6 +446,7 @@ function GraphBlock({
   const quarterTickLen = lx(QUARTER_TICK_LEN)
   const axisFontSize = lx(11)
   const chartW = chartWidthProp ?? CHART_WIDTH
+  const labelW = isDayDetail ? DAY_DETAIL_LABEL_WIDTH : LABEL_WIDTH
   const rowH = rowHeightProp ?? (mobileWeek ? ROW_HEIGHT * MOBILE_WEEK_SCALE : ROW_HEIGHT)
   const zoomDomain = zoomDomainProp ?? DEFAULT_ZOOM
   const dayMap = new Map<number, DayData>()
@@ -482,12 +485,12 @@ function GraphBlock({
   const workShiftRanges = getWorkShiftRanges(countryMarkers, clockMode)
 
   const height = marginTop + visibleDays.length * rowH + marginBottom
-  const width = LABEL_WIDTH + chartW + 36
+  const width = labelW + chartW + SVG_RIGHT_GUTTER
   const axisMajors = majorTicks(zoomDomain)
   const axisMinors = minorTicks(zoomDomain)
-  const xAt = (dayStart: number, ms: number) => chartX(dayStart, ms, clockMode, zoomDomain, chartW)
-  const xMinute = (minute: number) => minuteToSvgX(minute, zoomDomain, chartW)
-  const chartRight = LABEL_WIDTH + chartW
+  const xAt = (dayStart: number, ms: number) => chartX(dayStart, ms, clockMode, zoomDomain, chartW, labelW)
+  const xMinute = (minute: number) => minuteToSvgX(minute, zoomDomain, chartW, labelW)
+  const chartRight = labelW + chartW
 
   return (
     <div className="work-week-graph-block">
@@ -498,6 +501,7 @@ function GraphBlock({
         visibleDays={visibleDays}
         clockMode={clockMode}
         chartWidth={chartW}
+        labelWidth={labelW}
         rowHeight={rowH}
         marginTop={marginTop}
         zoomDomain={zoomDomain}
@@ -511,7 +515,7 @@ function GraphBlock({
             <line x1="0" y1="0" x2={lx(4)} y2={lx(4)} stroke="#c62828" strokeWidth={lx(2.2)} />
           </pattern>
           <clipPath id={`chart-clip-${blockId}`}>
-            <rect x={LABEL_WIDTH} y={marginTop} width={chartW} height={visibleDays.length * rowH} />
+            <rect x={labelW} y={marginTop} width={chartW} height={visibleDays.length * rowH} />
           </clipPath>
         </defs>
         <g id={`day-separators-${blockId}`}>
@@ -558,6 +562,8 @@ function GraphBlock({
                   </g>
                 )
               })}
+              {!isDayDetail && (
+                <>
               <text
                 x={6}
                 y={yBase + rowH / 2 - lx(1)}
@@ -580,9 +586,11 @@ function GraphBlock({
               >
                 {day.dateStr}
               </text>
+                </>
+              )}
               <g clipPath={`url(#chart-clip-${blockId})`}>
               {getWorkShiftRangesForDay(workShiftRanges, day.dateUtc).map((range, ri) => {
-                const span = clipChartX(xAt(dayStart, range.startMs), xAt(dayStart, range.endMs), chartW)
+                const span = clipChartX(xAt(dayStart, range.startMs), xAt(dayStart, range.endMs), chartW, labelW)
                 if (!span) return null
                 const rowTop = yBase + 2
                 const rowBarH = rowH - 4
@@ -617,7 +625,7 @@ function GraphBlock({
                       ? 16
                       : (style?.strokeWidth ?? 5),
                   )
-                  const span = clipChartX(xAt(dayStart, act.startMs), xAt(dayStart, act.endMs), chartW)
+                  const span = clipChartX(xAt(dayStart, act.startMs), xAt(dayStart, act.endMs), chartW, labelW)
                   if (!span) return null
                   const { x1, x2 } = span
                   const y = rowCenter + maxStrokeHalf - strokeW / 2
@@ -659,7 +667,7 @@ function GraphBlock({
               {getMarkersOnDay(visibleMarkers, day.dateUtc, clockMode).map((marker, i) => {
                 const ms = markerTimeMs(marker, clockMode)
                 const x = xAt(dayStart, ms)
-                if (x < LABEL_WIDTH || x > chartRight) return null
+                if (x < labelW || x > chartRight) return null
                 const code = marker.countryCode ?? 'CZ'
                 const isStart = marker.activityId === 'START_COUNTRY'
                 const label = isStart ? `${code} ►` : `◄ ${code}`
@@ -676,7 +684,7 @@ function GraphBlock({
               })}
               {getLoadUnloadOnDay(visibleLoadUnload, day.dateUtc).map((ev, i) => {
                 const x = xAt(dayStart, ev.minuteStartUtc)
-                if (x < LABEL_WIDTH || x > chartRight) return null
+                if (x < labelW || x > chartRight) return null
                 const symbolId = LOAD_UNLOAD_SYMBOL_ID[ev.type]
                 const symbolChar = symbolMap?.[symbolId] ?? ''
                 const anchorBottom = yBase + rowH / 2 + lx(7)
@@ -689,7 +697,7 @@ function GraphBlock({
               })}
               {getFerryTrainOnDay(visibleFerryTrain, day.dateUtc).map((ev, i) => {
                 const x = xAt(dayStart, ev.minuteStartUtc)
-                if (x < LABEL_WIDTH || x > chartRight) return null
+                if (x < labelW || x > chartRight) return null
                 const symbolChar = symbolMap?.[FERRY_TRAIN_SYMBOL_ID] ?? ''
                 const anchorBottom = yBase + rowH / 2 + lx(7)
                 return (
@@ -701,7 +709,7 @@ function GraphBlock({
               })}
               {getOutModeOnDay(visibleOutMode, day.dateUtc).map((ev, i) => {
                 const x = xAt(dayStart, ev.minuteStartUtc)
-                if (x < LABEL_WIDTH || x > chartRight) return null
+                if (x < labelW || x > chartRight) return null
                 const label = ev.type === 'activation' ? 'OUT►' : '◄OUT'
                 const dx = ev.type === 'activation' ? lx(3) : -lx(3)
                 const textAnchor = ev.type === 'activation' ? 'start' : 'end'
@@ -1040,7 +1048,9 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
         )}
         <div className={focusedDayUtc != null ? 'work-week-graph-header is-day-focus' : 'work-week-graph-header'}>
           <h2 className="work-week-graph-title">
-            {focusedDayUtc != null ? formatClockDate(focusedDayUtc, clockMode) : t.workWeek.weekGraphTitle}
+            {focusedDayUtc != null
+              ? `${dayNames[clockParts(focusedDayUtc, clockMode).weekday] ?? ''} ${formatClockDate(focusedDayUtc, clockMode)}`
+              : t.workWeek.weekGraphTitle}
           </h2>
           <div className="work-week-graph-nav">
             {focusedDayUtc != null ? (
@@ -1071,7 +1081,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 >
                   <span className="graph-period-edge" aria-hidden="true">‹</span>
                   <span className="work-week-graph-nav-calendar">
-                    {formatClockDate(focusedDayUtc, clockMode)}
+                    {`${dayNames[clockParts(focusedDayUtc, clockMode).weekday] ?? ''} ${formatClockDate(focusedDayUtc, clockMode)}`}
                   </span>
                   <span className="graph-period-edge" aria-hidden="true">›</span>
                 </GraphSwipeNav>
@@ -1309,3 +1319,4 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
     </div>
   )
 }
+ 

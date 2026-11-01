@@ -4,6 +4,7 @@ import { parseClockDateTime } from '../lib/clock'
 import {
   CHART_WIDTH,
   DEFAULT_ZOOM,
+  LABEL_WIDTH,
   MARGIN_TOP,
   clientToSvgPoint,
   isChartX,
@@ -27,6 +28,7 @@ type GraphStageProps = {
   visibleDays: DayData[]
   clockMode: ClockMode
   chartWidth?: number
+  labelWidth?: number
   rowHeight?: number
   marginTop?: number
   zoomDomain?: ZoomDomain
@@ -83,6 +85,7 @@ export function GraphStage({
   visibleDays,
   clockMode,
   chartWidth = CHART_WIDTH,
+  labelWidth = LABEL_WIDTH,
   rowHeight,
   marginTop = MARGIN_TOP,
   zoomDomain = DEFAULT_ZOOM,
@@ -100,6 +103,7 @@ export function GraphStage({
   const daysRef = useRef(visibleDays)
   const clockRef = useRef(clockMode)
   const chartWidthRef = useRef(chartWidth)
+  const labelWidthRef = useRef(labelWidth)
   const rowHeightRef = useRef(rowHeight)
   const marginTopRef = useRef(marginTop)
   const zoomRef = useRef(zoomDomain)
@@ -110,6 +114,7 @@ export function GraphStage({
   daysRef.current = visibleDays
   clockRef.current = clockMode
   chartWidthRef.current = chartWidth
+  labelWidthRef.current = labelWidth
   rowHeightRef.current = rowHeight
   marginTopRef.current = marginTop
   zoomRef.current = zoomDomain
@@ -132,12 +137,13 @@ export function GraphStage({
 
     const svgPt = clientToSvgPoint(svg, pointer.clientX, pointer.clientY)
     const chartW = chartWidthRef.current
+    const labelW = labelWidthRef.current
     const rowH = rowHeightRef.current
     const marginT = marginTopRef.current
     const dayCount = daysRef.current.length
     const onGraph =
       svgPt != null &&
-      isChartX(svgPt.x, chartW) &&
+      isChartX(svgPt.x, chartW, labelW) &&
       rowFromSvgY(svgPt.y, dayCount, rowH, marginT) != null
 
     if (!onGraph) {
@@ -145,7 +151,7 @@ export function GraphStage({
       return
     }
 
-    const minute = svgXToMinute(svgPt!.x, zoomRef.current, chartW)
+    const minute = svgXToMinute(svgPt!.x, zoomRef.current, chartW, labelW)
     const row = rowFromSvgY(svgPt!.y, dayCount, rowH, marginT)!
     const day = daysRef.current[row]
     const ms = minuteToMs(day, minute, clockRef.current)

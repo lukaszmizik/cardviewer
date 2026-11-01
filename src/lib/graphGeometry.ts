@@ -12,17 +12,23 @@ export const DAY_DETAIL_LABEL_SCALE = 2
 /** Jeden den — řádek musí pojmout 100px odpočinek + podtržení. */
 export const DAY_DETAIL_ROW_HEIGHT = 200
 export const LABEL_WIDTH = 126
+/** Denní graf bez sloupce dne — jen malý okraj pro popisky hodin. */
+export const DAY_DETAIL_LABEL_WIDTH = 32
 export const CHART_WIDTH = 540
-/** Šířka časové osy v denním detailu (4 h okno). */
-export const DAY_DETAIL_CHART_WIDTH = 980
+/** Šířka časové osy v denním detailu (4 h okno), včetně prostoru po sloupci dne. */
+export const DAY_DETAIL_CHART_WIDTH = 1074
 export const SVG_RIGHT_GUTTER = 36
 
-export function svgLayoutWidth(chartWidth = CHART_WIDTH): number {
-  return LABEL_WIDTH + chartWidth + SVG_RIGHT_GUTTER
+export function svgLayoutWidth(chartWidth = CHART_WIDTH, labelWidth = LABEL_WIDTH): number {
+  return labelWidth + chartWidth + SVG_RIGHT_GUTTER
 }
 
-export function chartPixelWidthFromSvgRect(svgRectWidth: number, chartWidth = CHART_WIDTH): number {
-  const layoutW = svgLayoutWidth(chartWidth)
+export function chartPixelWidthFromSvgRect(
+  svgRectWidth: number,
+  chartWidth = CHART_WIDTH,
+  labelWidth = LABEL_WIDTH,
+): number {
+  const layoutW = svgLayoutWidth(chartWidth, labelWidth)
   return Math.max(120, svgRectWidth * (chartWidth / layoutW))
 }
 export const MARGIN_TOP = 25
@@ -78,21 +84,32 @@ export function chartX(
   mode: ClockMode,
   zoom: ZoomDomain,
   chartWidth = CHART_WIDTH,
+  labelWidth = LABEL_WIDTH,
 ): number {
-  return LABEL_WIDTH + zoomedFraction(dayStartMs, ms, mode, zoom) * chartWidth
+  return labelWidth + zoomedFraction(dayStartMs, ms, mode, zoom) * chartWidth
 }
 
-export function svgXToMinute(svgX: number, zoom: ZoomDomain, chartWidth = CHART_WIDTH): number {
-  const t = (svgX - LABEL_WIDTH) / chartWidth
+export function svgXToMinute(
+  svgX: number,
+  zoom: ZoomDomain,
+  chartWidth = CHART_WIDTH,
+  labelWidth = LABEL_WIDTH,
+): number {
+  const t = (svgX - labelWidth) / chartWidth
   return zoom.startMinute + t * zoomSpan(zoom)
 }
 
-export function minuteToSvgX(minute: number, zoom: ZoomDomain, chartWidth = CHART_WIDTH): number {
-  return LABEL_WIDTH + ((minute - zoom.startMinute) / zoomSpan(zoom)) * chartWidth
+export function minuteToSvgX(
+  minute: number,
+  zoom: ZoomDomain,
+  chartWidth = CHART_WIDTH,
+  labelWidth = LABEL_WIDTH,
+): number {
+  return labelWidth + ((minute - zoom.startMinute) / zoomSpan(zoom)) * chartWidth
 }
 
-export function isChartX(svgX: number, chartWidth = CHART_WIDTH): boolean {
-  return svgX >= LABEL_WIDTH && svgX <= LABEL_WIDTH + chartWidth
+export function isChartX(svgX: number, chartWidth = CHART_WIDTH, labelWidth = LABEL_WIDTH): boolean {
+  return svgX >= labelWidth && svgX <= labelWidth + chartWidth
 }
 
 export function rowFromSvgY(
@@ -107,9 +124,14 @@ export function rowFromSvgY(
   return row
 }
 
-export function clipChartX(x1: number, x2: number, chartWidth = CHART_WIDTH): { x1: number; x2: number } | null {
-  const left = LABEL_WIDTH
-  const right = LABEL_WIDTH + chartWidth
+export function clipChartX(
+  x1: number,
+  x2: number,
+  chartWidth = CHART_WIDTH,
+  labelWidth = LABEL_WIDTH,
+): { x1: number; x2: number } | null {
+  const left = labelWidth
+  const right = labelWidth + chartWidth
   const a = Math.max(left, Math.min(x1, x2))
   const b = Math.min(right, Math.max(x1, x2))
   if (b - a < 0.4) return null
