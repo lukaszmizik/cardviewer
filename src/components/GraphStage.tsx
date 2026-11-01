@@ -8,24 +8,20 @@ import {
   ROW_HEIGHT,
   clampZoom,
   clientToSvgPoint,
-  formatMinuteClock,
   isChartX,
   rowFromSvgY,
   svgXToMinute,
   type GraphTool,
   type ZoomDomain,
 } from '../lib/graphGeometry'
-import type { DayData, ParsedActivity } from '../workWeekTxtParser'
-
-const INSPECT_TYPE_LABELS: Record<string, string> = {
-  řízení: 'řízení',
-  práce: 'práce',
-  pohotovost: 'pohotovost',
-  odpočinek: 'odpočinek',
-  'odpočinek>24h': 'odpoč. 24h–45h',
-  'odpočinek>45h': 'odpoč. ≥45h',
-  neznámá: 'neznámá',
-}
+import {
+  ACTIVITY_SYMBOL,
+  ACTIVITY_TYPE_LABELS,
+  findTopActivityAt,
+  formatActivityDuration,
+  getActivityDisplayColor,
+} from '../lib/activityPresentation'
+import type { DayData } from '../workWeekTxtParser'
 
 const LENS_CSS_W = 220
 const LENS_CSS_H = 120
@@ -53,17 +49,57 @@ function minuteToMs(day: DayData, minute: number, clockMode: ClockMode): number 
   return parseClockDateTime(`${pad(h)}:${pad(m)}`, day.dateStr, clockMode)
 }
 
-function activityAt(day: DayData, ms: number): ParsedActivity | undefined {
-  return day.activities.find((act) => ms >= act.startMs && ms < act.endMs)
+function activityAt(day: DayData, ms: number) {
+  return findTopActivityAt(day, ms)
 }
 
-function describeInspect(day: DayData | undefined, minute: number, clockMode: ClockMode): string {
-  if (!day) return ''
+function updateInspectPanel(
+  swatch: HTMLSpanElement,
+  typeEl: HTMLSpanElement,
+  durationEl: HTMLSpanElement,
+  flagsEl: HTMLDivElement,
+  crewFlag: HTMLSpanElement,
+  manualFlag: HTMLSpanElement,
+  day: DayData | undefined,
+  minute: number,
+  clockMode: ClockMode,
+) {
+  if (!day) {
+    typeEl.textContent = '—'
+    durationEl.textContent = ''
+    swatch.textContent = ''
+    swatch.style.background = '#64748b'
+    swatch.className = 'graph-inspect-swatch'
+    flagsEl.hidden = true
+    return
+  }
   const ms = minuteToMs(day, minute, clockMode)
   const act = activityAt(day, ms)
-  const time = formatMinuteClock(minute)
-  const type = act ? INSPECT_TYPE_LABELS[act.type] ?? act.type : '—'
-  return `${day.dayLabel} ${day.dateStr}  ${time}  ·  ${type}`
+  if (!act) {
+    typeEl.textContent = '—'
+    durationEl.textContent = ''
+    swatch.textContent = ''
+    swatch.style.background = '#64748b'
+    swatch.className = 'graph-inspect-swatch'
+    flagsEl.hidden = true
+    return
+  }
+  typeEl.textContent = ACTIVITY_TYPE_LABELS[act.type] ?? act.type
+  durationEl.textContent = formatActivityDuration(act.originalDurationMinutes ?? act.durationMinutes)
+  swatch.style.background = getActivityDisplayColor(act)
+  swatch.textContent = ACTIVITY_SYMBOL[act.type] ?? ''
+  swatch.className =
+    act.type === 'neznámá' ? 'graph-inspect-swatch tacho-icon tacho-icon-smaller' : 'graph-inspect-swatch tacho-icon'
+
+  const showCrew = act.isCrew === true && !act.isManualEntry
+  const showManual = act.isManualEntry === true
+  if (!showCrew && !showManual) {
+    flagsEl.hidden = true
+  } else {
+    flagsEl.hidden = false
+    crewFlag.hidden = !showCrew
+    manualFlag.hidden = !showManual
+  }
 }
 
 export function GraphStage({
@@ -79,6 +115,12 @@ export function GraphStage({
   const lensRef = useRef<HTMLCanvasElement>(null)
   const sourceRef = useRef<HTMLCanvasElement | null>(null)
   const inspectRef = useRef<HTMLDivElement>(null)
+  const inspectSwatchRef = useRef<HTMLSpanElement>(null)
+  const inspectTypeRef = useRef<HTMLSpanElement>(null)
+  const inspectDurationRef = useRef<HTMLSpanElement>(null)
+  const inspectFlagsRef = useRef<HTMLDivElement>(null)
+  const inspectCrewFlagRef = useRef<HTMLSpanElement>(null)
+  const inspectManualFlagRef = useRef<HTMLSpanElement>(null)
   const selectBoxRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const zoomRef = useRef(zoomDomain)
@@ -163,14 +205,30 @@ export function GraphStage({
     const localX = pointer.clientX - stageBox.left
     const localY = pointer.clientY - stageBox.top
 
-    if (svgPt && isChartX(svgPt.x)) {
+    if (svgPt && isChartX(svgPt.x) && toolRef.current === 'inspect') {
       const minute = svgXToMinute(svgPt.x, zoomRef.current)
       const row = rowFromSvgY(svgPt.y, daysRef.current.length)
       const day = row == null ? undefined : daysRef.current[row]
       const inspect = inspectRef.current
-      if (inspect) {
+      const swatch = inspectSwatchRef.current
+      const typeEl = inspectTypeRef.current
+      const durationEl = inspectDurationRef.current
+      const flagsEl = inspectFlagsRef.current
+      const crewFlag = inspectCrewFlagRef.current
+      const manualFlag = inspectManualFlagRef.current
+      if (inspect && swatch && typeEl && durationEl && flagsEl && crewFlag && manualFlag) {
         inspect.hidden = false
-        inspect.textContent = describeInspect(day, minute, clockRef.current)
+        updateInspectPanel(
+          swatch,
+          typeEl,
+          durationEl,
+          flagsEl,
+          crewFlag,
+          manualFlag,
+          day,
+          minute,
+          clockRef.current,
+        )
         const tipW = inspect.offsetWidth
         const tipH = inspect.offsetHeight
         let tx = localX + 12
@@ -325,7 +383,13 @@ export function GraphStage({
   }
 
   const cursor =
-    activeTool === 'select' ? 'crosshair' : activeTool === 'lens' ? 'none' : 'default'
+    activeTool === 'select'
+      ? 'crosshair'
+      : activeTool === 'lens'
+        ? 'none'
+        : activeTool === 'inspect'
+          ? 'help'
+          : 'default'
 
   return (
     <div
@@ -341,7 +405,21 @@ export function GraphStage({
       {children}
       <div ref={selectBoxRef} className="graph-select-box" hidden />
       <canvas ref={lensRef} className="graph-lens" width={LENS_CSS_W} height={LENS_CSS_H} aria-hidden="true" />
-      <div ref={inspectRef} className="graph-inspect" hidden />
+      <div ref={inspectRef} className="graph-inspect" hidden>
+        <span ref={inspectSwatchRef} className="graph-inspect-swatch" aria-hidden="true" />
+        <div className="graph-inspect-body">
+          <span ref={inspectTypeRef} className="graph-inspect-type" />
+          <span ref={inspectDurationRef} className="graph-inspect-duration" />
+          <div ref={inspectFlagsRef} className="graph-inspect-flags" hidden>
+            <span ref={inspectCrewFlagRef} className="graph-inspect-flag graph-inspect-flag--crew">
+              režim osádky
+            </span>
+            <span ref={inspectManualFlagRef} className="graph-inspect-flag graph-inspect-flag--manual">
+              manuální záznam
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

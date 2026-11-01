@@ -14,7 +14,7 @@ export const QUARTER_TICK_LEN = 3
 export const FULL_DAY_MINUTES = 24 * 60
 export const MIN_ZOOM_SPAN_MINUTES = 5
 
-export type GraphTool = 'none' | 'lens' | 'select'
+export type GraphTool = 'none' | 'lens' | 'select' | 'inspect'
 
 export type ZoomDomain = {
   startMinute: number

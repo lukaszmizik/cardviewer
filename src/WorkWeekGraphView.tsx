@@ -878,6 +878,15 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
             <div className="graph-toolbar" role="toolbar" aria-label="Nástroje grafu">
               <button
                 type="button"
+                className={activeTool === 'inspect' ? 'work-week-graph-nav-btn is-tool-active' : 'work-week-graph-nav-btn'}
+                aria-pressed={activeTool === 'inspect'}
+                onClick={() => setActiveTool((tool) => (tool === 'inspect' ? 'none' : 'inspect'))}
+                title="Zobrazit druh aktivity a trvání pod kurzorem"
+              >
+                ℹ️ Info pod kurzorem
+              </button>
+              <button
+                type="button"
                 className={activeTool === 'lens' ? 'work-week-graph-nav-btn is-tool-active' : 'work-week-graph-nav-btn'}
                 aria-pressed={activeTool === 'lens'}
                 onClick={() => setActiveTool((tool) => (tool === 'lens' ? 'none' : 'lens'))}
@@ -1003,10 +1012,6 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                           })
                           return (
                             <div key={i} className="work-week-graph-manual-item recorded-location-row">
-                              <span>
-                                {formatTimestamp(r.minuteStartUtc, clockMode)} | {r.gpsLocation} |{' '}
-                                {r.recordType ? (t.workWeek.recordedLocationTypes[r.recordType] ?? r.recordType) : '—'}
-                              </span>
                               {mapsUrl && (
                                 <a
                                   className="recorded-location-map-link"
@@ -1019,6 +1024,10 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                                   📍
                                 </a>
                               )}
+                              <span className="recorded-location-text">
+                                {formatTimestamp(r.minuteStartUtc, clockMode)} | {r.gpsLocation} |{' '}
+                                {r.recordType ? (t.workWeek.recordedLocationTypes[r.recordType] ?? r.recordType) : '—'}
+                              </span>
                             </div>
                           )
                         })}
