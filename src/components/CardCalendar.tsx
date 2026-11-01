@@ -56,7 +56,7 @@ export function CardCalendar({
   const recordedDays = useMemo(() => {
     const set = new Set<number>()
     for (const day of days) {
-      if (day.activities.length > 0) set.add(day.dateUtc)
+      if (day.activities.some((act) => act.type === 'řízení')) set.add(day.dateUtc)
     }
     return set
   }, [days])
@@ -116,7 +116,7 @@ export function CardCalendar({
 
   return (
     <section className="card-calendar" aria-label="Kalendář záznamů karty">
-      <p className="card-calendar-hint">Zelený kroužek označuje den se záznamem. Klepněte na řádek týdne.</p>
+      <p className="card-calendar-hint">Zelený kroužek označuje den s řízením. Klepněte na řádek týdne.</p>
       {months.map((month) => (
         <div key={month.key} className="card-calendar-month">
           <h3 className="card-calendar-month-title">{month.title}</h3>
