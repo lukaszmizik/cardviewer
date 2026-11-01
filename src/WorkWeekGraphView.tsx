@@ -3,7 +3,7 @@
  * Každý den = řádek, hodiny 0–24, aktivity jako barevné segmenty.
  */
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useLanguage } from './translations'
 import type { DayData, ParsedActivity, ActivityType, CountryMarker } from './workWeekTxtParser'
 import type { ManualEntrySegment, VehicleLoadUnloadEvent, FerryTrainEvent, OutModeEvent, FaultOrEvent, RecordedGpsLocation } from './TachoTypes'
@@ -22,6 +22,7 @@ import {
 import {
   CHART_WIDTH,
   DAYS_PER_WEEK,
+  DAY_DETAIL_ROW_HEIGHT,
   DEFAULT_ZOOM,
   HOUR_TICK_LEN,
   LABEL_WIDTH,
@@ -32,18 +33,17 @@ import {
   TICK_LEN,
   chartX,
   clipChartX,
-  formatMinuteClock,
-  formatMinuteTick,
-  isFullDayZoom,
+  dayWindowZoom,
   majorTicks,
   minuteToSvgX,
   minorTicks,
-  type GraphTool,
+  formatMinuteTick,
   type ZoomDomain,
 } from './lib/graphGeometry'
 import { TimeScaleSelect } from './components/TimeScaleSelect'
 import { CardInfoTable } from './components/CardInfoTable'
 import { GraphStage } from './components/GraphStage'
+import { DayGraphPan } from './components/DayGraphPan'
 import { googleMapsUrl } from './lib/mapsLink'
 import type { DriverCardData } from './types/tacho'
 
@@ -316,22 +316,56 @@ type GraphBlockProps = {
   }
   clockMode: ClockMode
   card?: DriverCardData | null
-  zoomDomain: ZoomDomain
-  activeTool: GraphTool
-  onZoomDomainChange: (zoom: ZoomDomain) => void
+  detailActive: boolean
+  chartWidth?: number
+  rowHeight?: number
+  singleDayUtc?: number
+  zoomDomain?: ZoomDomain
+  onDayOpen?: (dateUtc: number) => void
+  showFooter?: boolean
 }
 
-function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc, loadUnloadEvents = [], ferryTrainEvents = [], outModeEvents = [], symbolMap, displayWeekStartMs, blockId, title, dayNames, t, clockMode, card, zoomDomain, activeTool, onZoomDomainChange }: GraphBlockProps) {
+function GraphBlock({
+  days,
+  countryMarkers,
+  manualEntryBuffer,
+  lastWithdrawalUtc,
+  loadUnloadEvents = [],
+  ferryTrainEvents = [],
+  outModeEvents = [],
+  symbolMap,
+  displayWeekStartMs,
+  blockId,
+  title,
+  dayNames,
+  t,
+  clockMode,
+  card,
+  detailActive,
+  chartWidth: chartWidthProp,
+  rowHeight: rowHeightProp,
+  singleDayUtc,
+  zoomDomain: zoomDomainProp,
+  onDayOpen,
+  showFooter = true,
+}: GraphBlockProps) {
   const svgRef = useRef<SVGSVGElement>(null)
+  const chartW = chartWidthProp ?? CHART_WIDTH
+  const rowH = rowHeightProp ?? ROW_HEIGHT
+  const zoomDomain = zoomDomainProp ?? DEFAULT_ZOOM
   const dayMap = new Map<number, DayData>()
   for (const day of days) {
     dayMap.set(day.dateUtc, day)
   }
 
   const visibleDays: DayData[] = []
-  for (let i = 0; i < DAYS_PER_WEEK; i++) {
-    const dayStart = addDays(displayWeekStartMs, i, clockMode)
-    visibleDays.push(dayMap.get(dayStart) ?? createEmptyDay(dayStart, dayNames, clockMode))
+  if (singleDayUtc != null) {
+    visibleDays.push(dayMap.get(singleDayUtc) ?? createEmptyDay(singleDayUtc, dayNames, clockMode))
+  } else {
+    for (let i = 0; i < DAYS_PER_WEEK; i++) {
+      const dayStart = addDays(displayWeekStartMs, i, clockMode)
+      visibleDays.push(dayMap.get(dayStart) ?? createEmptyDay(dayStart, dayNames, clockMode))
+    }
   }
 
   const visibleFirstDate = visibleDays[0]!.dateUtc
@@ -354,22 +388,25 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
 
   const workShiftRanges = getWorkShiftRanges(countryMarkers, clockMode)
 
-  const height = MARGIN_TOP + visibleDays.length * ROW_HEIGHT + MARGIN_BOTTOM
-  const width = LABEL_WIDTH + CHART_WIDTH + 36
+  const height = MARGIN_TOP + visibleDays.length * rowH + MARGIN_BOTTOM
+  const width = LABEL_WIDTH + chartW + 36
   const axisMajors = majorTicks(zoomDomain)
   const axisMinors = minorTicks(zoomDomain)
-  const xAt = (dayStart: number, ms: number) => chartX(dayStart, ms, clockMode, zoomDomain)
+  const xAt = (dayStart: number, ms: number) => chartX(dayStart, ms, clockMode, zoomDomain, chartW)
+  const xMinute = (minute: number) => minuteToSvgX(minute, zoomDomain, chartW)
+  const chartRight = LABEL_WIDTH + chartW
 
   return (
     <div className="work-week-graph-block">
       {title != null && <h3 className="work-week-graph-block-title">{title}</h3>}
       <GraphStage
         svgRef={svgRef}
-        activeTool={activeTool}
-        zoomDomain={zoomDomain}
-        onZoomDomainChange={onZoomDomainChange}
+        detailActive={detailActive}
         visibleDays={visibleDays}
         clockMode={clockMode}
+        chartWidth={chartW}
+        rowHeight={rowH}
+        zoomDomain={zoomDomain}
       >
       <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="work-week-graph-svg" preserveAspectRatio="xMidYMid meet">
         <defs>
@@ -380,12 +417,12 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
             <line x1="0" y1="0" x2="4" y2="4" stroke="#c62828" strokeWidth="2.2" />
           </pattern>
           <clipPath id={`chart-clip-${blockId}`}>
-            <rect x={LABEL_WIDTH} y={MARGIN_TOP} width={CHART_WIDTH} height={visibleDays.length * ROW_HEIGHT} />
+            <rect x={LABEL_WIDTH} y={MARGIN_TOP} width={chartW} height={visibleDays.length * rowH} />
           </clipPath>
         </defs>
         <g id={`day-separators-${blockId}`}>
           {visibleDays.slice(0, -1).map((_, i) => {
-            const y = MARGIN_TOP + (i + 1) * ROW_HEIGHT
+            const y = MARGIN_TOP + (i + 1) * rowH
             return (
               <line key={i} x1={0} y1={y} x2={width} y2={y} stroke="#e0e0e0" strokeWidth={0.5} opacity={0.7} />
             )
@@ -393,7 +430,7 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
         </g>
         <g id={`quarter-ticks-top-${blockId}`}>
           {axisMinors.map((minute) => {
-            const x = minuteToSvgX(minute, zoomDomain)
+            const x = xMinute(minute)
             return (
               <line key={`top-q-${minute}`} x1={x} y1={MARGIN_TOP - QUARTER_TICK_LEN} x2={x} y2={MARGIN_TOP} stroke="#bbb" strokeWidth={0.5} opacity={0.7} />
             )
@@ -401,7 +438,7 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
         </g>
         <g id={`hour-ticks-top-${blockId}`}>
           {axisMajors.map((minute) => {
-            const x = minuteToSvgX(minute, zoomDomain)
+            const x = xMinute(minute)
             return (
               <g key={`top-${minute}`}>
                 <line x1={x} y1={MARGIN_TOP - HOUR_TICK_LEN} x2={x} y2={MARGIN_TOP} stroke="#333" strokeWidth={1} />
@@ -411,23 +448,23 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
           })}
         </g>
         {visibleDays.map((day, rowIndex) => {
-          const yBase = MARGIN_TOP + rowIndex * ROW_HEIGHT
+          const yBase = MARGIN_TOP + rowIndex * rowH
           const dayStart = day.dateUtc
           return (
-            <g key={day.dateUtc}>
+            <g key={day.dateUtc} className="graph-day-row">
               {axisMajors.map((minute) => {
-                const x = minuteToSvgX(minute, zoomDomain)
+                const x = xMinute(minute)
                 const rowTop = yBase + 3
                 return (
                   <g key={`tick-${minute}`}>
                     <line x1={x} y1={rowTop} x2={x} y2={rowTop + TICK_LEN} stroke={TICK_COLOR} strokeWidth="0.5" opacity={0.4} />
-                    <line x1={x} y1={yBase + ROW_HEIGHT - 3 - TICK_LEN} x2={x} y2={yBase + ROW_HEIGHT - 3} stroke={TICK_COLOR} strokeWidth="0.5" opacity={0.4} />
+                    <line x1={x} y1={yBase + rowH - 3 - TICK_LEN} x2={x} y2={yBase + rowH - 3} stroke={TICK_COLOR} strokeWidth="0.5" opacity={0.4} />
                   </g>
                 )
               })}
               <text
                 x={6}
-                y={yBase + ROW_HEIGHT / 2 - 1}
+                y={yBase + rowH / 2 - 1}
                 className="work-week-graph-day-name"
                 fill={GRAPH_AXIS_COLOR}
                 fontSize={GRAPH_DAY_NAME_FONT_SIZE}
@@ -438,7 +475,7 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
               </text>
               <text
                 x={6}
-                y={yBase + ROW_HEIGHT / 2 + 9}
+                y={yBase + rowH / 2 + 9}
                 className="work-week-graph-day-date"
                 fill={LABEL_COLOR}
                 fontSize={GRAPH_DAY_DATE_FONT_SIZE}
@@ -449,17 +486,17 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
               </text>
               <g clipPath={`url(#chart-clip-${blockId})`}>
               {getWorkShiftRangesForDay(workShiftRanges, day.dateUtc).map((range, ri) => {
-                const span = clipChartX(xAt(dayStart, range.startMs), xAt(dayStart, range.endMs))
+                const span = clipChartX(xAt(dayStart, range.startMs), xAt(dayStart, range.endMs), chartW)
                 if (!span) return null
                 const rowTop = yBase + 2
-                const rowH = ROW_HEIGHT - 4
+                const rowBarH = rowH - 4
                 return (
                   <rect
                     key={`crew-${ri}`}
                     x={span.x1}
                     y={rowTop}
                     width={Math.max(1, span.x2 - span.x1)}
-                    height={rowH}
+                    height={rowBarH}
                     fill={`url(#crew-mode-hatch-${blockId})`}
                     className="work-week-graph-crew-mode-bg"
                   />
@@ -467,7 +504,7 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
               })}
               {(() => {
                 const maxStrokeHalf = 8
-                const rowCenter = yBase + ROW_HEIGHT / 2
+                const rowCenter = yBase + rowH / 2
                 const sortedActivities = [...day.activities].sort((a, b) => {
                   const layer = (act: ParsedActivity) => (act.isManualEntry || act.type === 'neznámá' ? 0 : act.slot ?? 1)
                   return layer(a) - layer(b) || a.startMs - b.startMs
@@ -483,7 +520,7 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
                     (act.type === 'odpočinek' && dur >= LONG_REST_MIN) || act.type === 'odpočinek>24h' || act.type === 'odpočinek>45h'
                       ? 16
                       : (style?.strokeWidth ?? 5)
-                  const span = clipChartX(xAt(dayStart, act.startMs), xAt(dayStart, act.endMs))
+                  const span = clipChartX(xAt(dayStart, act.startMs), xAt(dayStart, act.endMs), chartW)
                   if (!span) return null
                   const { x1, x2 } = span
                   const y = rowCenter + maxStrokeHalf - strokeW / 2
@@ -525,13 +562,13 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
               {getMarkersOnDay(visibleMarkers, day.dateUtc, clockMode).map((marker, i) => {
                 const ms = markerTimeMs(marker, clockMode)
                 const x = xAt(dayStart, ms)
-                if (x < LABEL_WIDTH || x > LABEL_WIDTH + CHART_WIDTH) return null
+                if (x < LABEL_WIDTH || x > chartRight) return null
                 const code = marker.countryCode ?? 'CZ'
                 const isStart = marker.activityId === 'START_COUNTRY'
                 const label = isStart ? `${code} ►` : `◄ ${code}`
                 const dx = isStart ? 7 : -7
                 const textAnchor = isStart ? 'start' : 'end'
-                const anchorBottom = yBase + ROW_HEIGHT / 2 + 7
+                const anchorBottom = yBase + rowH / 2 + 7
                 return (
                   <g key={`anchor-${dayStart}-${i}`}>
                     <text x={x} y={yBase + 8} dx={dx} textAnchor={textAnchor} fill={ANCHOR_STROKE} fontSize={8} fontFamily="sans-serif" fontWeight={600}>{label}</text>
@@ -542,10 +579,10 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
               })}
               {getLoadUnloadOnDay(visibleLoadUnload, day.dateUtc).map((ev, i) => {
                 const x = xAt(dayStart, ev.minuteStartUtc)
-                if (x < LABEL_WIDTH || x > LABEL_WIDTH + CHART_WIDTH) return null
+                if (x < LABEL_WIDTH || x > chartRight) return null
                 const symbolId = LOAD_UNLOAD_SYMBOL_ID[ev.type]
                 const symbolChar = symbolMap?.[symbolId] ?? ''
-                const anchorBottom = yBase + ROW_HEIGHT / 2 + 7
+                const anchorBottom = yBase + rowH / 2 + 7
                 return (
                   <g key={`loadunload-${dayStart}-${ev.minuteStartUtc}-${i}`}>
                     <text x={x} y={yBase + 10} textAnchor="middle" fill={ANCHOR_STROKE} fontSize={12} fontFamily="SymbolTacho1">{symbolChar}</text>
@@ -555,9 +592,9 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
               })}
               {getFerryTrainOnDay(visibleFerryTrain, day.dateUtc).map((ev, i) => {
                 const x = xAt(dayStart, ev.minuteStartUtc)
-                if (x < LABEL_WIDTH || x > LABEL_WIDTH + CHART_WIDTH) return null
+                if (x < LABEL_WIDTH || x > chartRight) return null
                 const symbolChar = symbolMap?.[FERRY_TRAIN_SYMBOL_ID] ?? ''
-                const anchorBottom = yBase + ROW_HEIGHT / 2 + 7
+                const anchorBottom = yBase + rowH / 2 + 7
                 return (
                   <g key={`ferrytrain-${dayStart}-${ev.minuteStartUtc}-${i}`}>
                     <text x={x} y={yBase + 10} textAnchor="middle" fill={ANCHOR_STROKE} fontSize={12} fontFamily="SymbolTacho1">{symbolChar}</text>
@@ -567,13 +604,13 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
               })}
               {getOutModeOnDay(visibleOutMode, day.dateUtc).map((ev, i) => {
                 const x = xAt(dayStart, ev.minuteStartUtc)
-                if (x < LABEL_WIDTH || x > LABEL_WIDTH + CHART_WIDTH) return null
+                if (x < LABEL_WIDTH || x > chartRight) return null
                 const label = ev.type === 'activation' ? 'OUT►' : '◄OUT'
                 const dx = ev.type === 'activation' ? 3 : -3
                 const textAnchor = ev.type === 'activation' ? 'start' : 'end'
-                const rowCenter = yBase + ROW_HEIGHT / 2
+                const rowCenter = yBase + rowH / 2
                 const anchorTop = rowCenter + 4
-                const anchorBottom = yBase + ROW_HEIGHT - 4
+                const anchorBottom = yBase + rowH - 4
                 const textY = ev.type === 'activation' ? anchorBottom + 4 : anchorBottom - 2
                 return (
                   <g key={`outmode-${dayStart}-${ev.minuteStartUtc}-${ev.type}-${i}`}>
@@ -584,18 +621,38 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
                 )
               })}
               </g>
+              {onDayOpen && (
+                <rect
+                  x={0}
+                  y={yBase}
+                  width={LABEL_WIDTH}
+                  height={rowH}
+                  fill="transparent"
+                  className="graph-day-row-hit"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Otevřít den ${day.dateStr}`}
+                  onClick={() => onDayOpen(day.dateUtc)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      onDayOpen(day.dateUtc)
+                    }
+                  }}
+                />
+              )}
             </g>
           )
         })}
         <g id={`quarter-ticks-bottom-${blockId}`} transform={`translate(0, ${height - MARGIN_BOTTOM})`}>
           {axisMinors.map((minute) => {
-            const x = minuteToSvgX(minute, zoomDomain)
+            const x = xMinute(minute)
             return <line key={`bot-q-${minute}`} x1={x} y1={0} x2={x} y2={QUARTER_TICK_LEN} stroke="#bbb" strokeWidth={0.5} opacity={0.7} />
           })}
         </g>
         <g id={`hour-ticks-bottom-${blockId}`} transform={`translate(0, ${height - MARGIN_BOTTOM})`}>
           {axisMajors.map((minute) => {
-            const x = minuteToSvgX(minute, zoomDomain)
+            const x = xMinute(minute)
             return (
               <g key={`bot-${minute}`}>
                 <line x1={x} y1={0} x2={x} y2={TICK_LEN} stroke="#333" strokeWidth={1} />
@@ -606,8 +663,9 @@ function GraphBlock({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc
         </g>
       </svg>
       </GraphStage>
-      {card && <CardInfoTable card={card} clockMode={clockMode} />}
-      {(visibleDays.some((d) => d.activities.some((a) => !a.isManualEntry)) ||
+      {showFooter && card && <CardInfoTable card={card} clockMode={clockMode} />}
+      {showFooter &&
+      (visibleDays.some((d) => d.activities.some((a) => !a.isManualEntry)) ||
         (manualEntryBuffer ?? []).some((seg) => {
           const ms = manualSegmentMs(seg, clockMode)
           return ms >= visibleFirstDate && ms < visibleLastEnd
@@ -788,29 +846,53 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
     return weekStartMs(Date.now(), clockMode)
   }
   const [displayWeekStartMs, setDisplayWeekStartMs] = useState(getInitialWeekStart)
-  const [activeTool, setActiveTool] = useState<GraphTool>('none')
-  const [zoomDomain, setZoomDomain] = useState<ZoomDomain>(DEFAULT_ZOOM)
+  const [detailActive, setDetailActive] = useState(false)
+  const [focusedDayUtc, setFocusedDayUtc] = useState<number | null>(null)
+  const [dayPanStart, setDayPanStart] = useState(0)
 
   useEffect(() => {
     setDisplayWeekStartMs(getInitialWeekStart())
   }, [days, clockMode])
 
   useEffect(() => {
-    setZoomDomain(DEFAULT_ZOOM)
-  }, [displayWeekStartMs])
+    setDayPanStart(0)
+  }, [focusedDayUtc])
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key !== 'Escape') return
-      setActiveTool('none')
+      if (focusedDayUtc != null) {
+        setFocusedDayUtc(null)
+        event.preventDefault()
+        return
+      }
+      setDetailActive(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [focusedDayUtc])
 
   const goPrevWeek = () => setDisplayWeekStartMs((ms) => addDays(ms, -7, clockMode))
   const goNextWeek = () => setDisplayWeekStartMs((ms) => addDays(ms, 7, clockMode))
   const goToday = () => setDisplayWeekStartMs(weekStartMs(Date.now(), clockMode))
+
+  const dayBounds = useMemo(() => {
+    if (days.length === 0) return null
+    let first = days[0]!.dateUtc
+    let last = days[0]!.dateUtc
+    for (const day of days) {
+      if (day.dateUtc < first) first = day.dateUtc
+      if (day.dateUtc > last) last = day.dateUtc
+    }
+    return { first, last }
+  }, [days])
+
+  function focusDay(dateUtc: number) {
+    setFocusedDayUtc(dateUtc)
+    setDisplayWeekStartMs(weekStartMs(dateUtc, clockMode))
+  }
+
+  const dayZoom = dayWindowZoom(dayPanStart)
 
   const overlayClass = embedded ? 'work-week-graph-overlay is-embedded' : 'work-week-graph-overlay'
 
@@ -842,81 +924,92 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
           </button>
         )}
         <div className="work-week-graph-header">
-          <h2 className="work-week-graph-title">{t.workWeek.weekGraphTitle}</h2>
+          <h2 className="work-week-graph-title">
+            {focusedDayUtc != null ? formatClockDate(focusedDayUtc, clockMode) : t.workWeek.weekGraphTitle}
+          </h2>
           <div className="work-week-graph-nav">
-            <button
-              type="button"
-              className="work-week-graph-nav-btn"
-              onClick={goPrevWeek}
-              title={t.workWeek.prevWeek}
-            >
-              ‹
-            </button>
-            <span className="work-week-graph-nav-calendar">
-              {formatWeekRange(displayWeekStartMs, clockMode)}
-            </span>
-            <button
-              type="button"
-              className="work-week-graph-nav-btn"
-              onClick={goNextWeek}
-              title={t.workWeek.nextWeek}
-            >
-              ›
-            </button>
-            <button
-              type="button"
-              className="work-week-graph-nav-btn work-week-graph-nav-today"
-              onClick={goToday}
-              title="Přejít na aktuální týden"
-            >
-              Dnes
-            </button>
-            <TimeScaleSelect
-              value={clockMode}
-              onChange={onClockModeChange ?? (() => undefined)}
-            />
+            {focusedDayUtc != null ? (
+              <>
+                <button
+                  type="button"
+                  className="work-week-graph-nav-btn"
+                  onClick={() => setFocusedDayUtc(null)}
+                >
+                  ← Zpět na týden
+                </button>
+                <button
+                  type="button"
+                  className="work-week-graph-nav-btn"
+                  disabled={dayBounds != null && focusedDayUtc <= dayBounds.first}
+                  onClick={() => focusDay(addDays(focusedDayUtc, -1, clockMode))}
+                  title="Předchozí den"
+                >
+                  ‹ Předchozí den
+                </button>
+                <button
+                  type="button"
+                  className="work-week-graph-nav-btn"
+                  disabled={dayBounds != null && focusedDayUtc >= dayBounds.last}
+                  onClick={() => focusDay(addDays(focusedDayUtc, 1, clockMode))}
+                  title="Následující den"
+                >
+                  Následující den ›
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="work-week-graph-nav-btn"
+                  onClick={goPrevWeek}
+                  title={t.workWeek.prevWeek}
+                >
+                  ‹
+                </button>
+                <span className="work-week-graph-nav-calendar">
+                  {formatWeekRange(displayWeekStartMs, clockMode)}
+                </span>
+                <button
+                  type="button"
+                  className="work-week-graph-nav-btn"
+                  onClick={goNextWeek}
+                  title={t.workWeek.nextWeek}
+                >
+                  ›
+                </button>
+                <button
+                  type="button"
+                  className="work-week-graph-nav-btn work-week-graph-nav-today"
+                  onClick={goToday}
+                  title="Přejít na aktuální týden"
+                >
+                  Dnes
+                </button>
+              </>
+            )}
+            {focusedDayUtc != null ? (
+              <span className="graph-clock-mode-info" role="status">
+                {clockMode === 'utc' ? 'Graf zobrazen v UTC' : 'Graf zobrazen v místním čase'}
+              </span>
+            ) : (
+              <TimeScaleSelect
+                value={clockMode}
+                onChange={onClockModeChange ?? (() => undefined)}
+              />
+            )}
             <div className="graph-toolbar" role="toolbar" aria-label="Nástroje grafu">
               <button
                 type="button"
-                className={activeTool === 'inspect' ? 'work-week-graph-nav-btn is-tool-active' : 'work-week-graph-nav-btn'}
-                aria-pressed={activeTool === 'inspect'}
-                onClick={() => setActiveTool((tool) => (tool === 'inspect' ? 'none' : 'inspect'))}
-                title="Zobrazit druh aktivity a trvání pod kurzorem"
+                className={detailActive ? 'work-week-graph-nav-btn is-tool-active' : 'work-week-graph-nav-btn'}
+                aria-pressed={detailActive}
+                onClick={() => setDetailActive((on) => !on)}
+                title="Zobrazit druh aktivity a trvání nad segmentem"
               >
-                ℹ️ Info pod kurzorem
+                Zobrazit detail
               </button>
-              <button
-                type="button"
-                className={activeTool === 'lens' ? 'work-week-graph-nav-btn is-tool-active' : 'work-week-graph-nav-btn'}
-                aria-pressed={activeTool === 'lens'}
-                onClick={() => setActiveTool((tool) => (tool === 'lens' ? 'none' : 'lens'))}
-              >
-                🔍 Plovoucí lupa
-              </button>
-              <button
-                type="button"
-                className={activeTool === 'select' ? 'work-week-graph-nav-btn is-tool-active' : 'work-week-graph-nav-btn'}
-                aria-pressed={activeTool === 'select'}
-                onClick={() => setActiveTool((tool) => (tool === 'select' ? 'none' : 'select'))}
-              >
-                ✂️ Zvětšit výběr
-              </button>
-              <button
-                type="button"
-                className="work-week-graph-nav-btn"
-                disabled={isFullDayZoom(zoomDomain)}
-                onClick={() => setZoomDomain(DEFAULT_ZOOM)}
-                title="Vrátit osu na celých 24 hodin"
-              >
-                Reset zoom / 24h
-              </button>
-              {!isFullDayZoom(zoomDomain) && (
-                <span className="graph-zoom-range">
-                  {formatMinuteClock(zoomDomain.startMinute)} – {formatMinuteClock(zoomDomain.endMinute)}
-                </span>
-              )}
             </div>
           </div>
+          {focusedDayUtc == null && (
           <div className="work-week-graph-legend">
             {(Object.entries(ACTIVITY_STYLE) as [ActivityType, { color: string; strokeWidth: number }][]).map(
               ([type, { color, strokeWidth }]) => {
@@ -962,8 +1055,37 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
               <span className="work-week-graph-legend-label">režim osádky</span>
             </span>
           </div>
+          )}
         </div>
 
+        {focusedDayUtc != null ? (
+          <section className="day-view-card">
+            <p className="day-view-card-hint">Viditelný úsek 4 h — posuňte posuvníkem nebo tažením myši v grafu.</p>
+            <DayGraphPan panStartMinute={dayPanStart} onPanStartChange={setDayPanStart}>
+              <GraphBlock
+                days={days}
+                countryMarkers={countryMarkers}
+                manualEntryBuffer={manualEntryBuffer}
+                lastWithdrawalUtc={lastWithdrawalUtc}
+                loadUnloadEvents={loadUnloadEvents}
+                ferryTrainEvents={ferryTrainEvents}
+                outModeEvents={outModeEvents ?? []}
+                symbolMap={symbolMap}
+                displayWeekStartMs={displayWeekStartMs}
+                blockId="day-focus"
+                dayNames={dayNames}
+                t={t}
+                clockMode={clockMode}
+                detailActive={detailActive}
+                singleDayUtc={focusedDayUtc}
+                zoomDomain={dayZoom}
+                rowHeight={DAY_DETAIL_ROW_HEIGHT}
+                showFooter={false}
+              />
+            </DayGraphPan>
+          </section>
+        ) : (
+          <>
         <GraphBlock
           days={days}
           countryMarkers={countryMarkers}
@@ -980,9 +1102,8 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
           t={t}
           clockMode={clockMode}
           card={card}
-          zoomDomain={zoomDomain}
-          activeTool={activeTool}
-          onZoomDomainChange={setZoomDomain}
+          detailActive={detailActive}
+          onDayOpen={focusDay}
         />
 
         {(() => {
@@ -1056,10 +1177,11 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
             dayNames={dayNames}
             t={t}
             clockMode={clockMode}
-            zoomDomain={zoomDomain}
-            activeTool={activeTool}
-            onZoomDomainChange={setZoomDomain}
+            detailActive={detailActive}
+            onDayOpen={focusDay}
           />
+        )}
+          </>
         )}
 
         {faultsAndEvents.length > 0 && (

@@ -548,31 +548,73 @@ body {
   position: relative;
   width: 100%;
   user-select: none;
-  touch-action: none;
 }
 
-.graph-lens {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 220px;
-  height: 120px;
-  pointer-events: none;
-  opacity: 0;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.28);
-  background: #fff;
-  z-index: 3;
+.graph-day-row-hit {
+  cursor: pointer;
 }
 
-.graph-select-box {
-  position: absolute;
-  top: 0;
-  left: 0;
-  pointer-events: none;
-  background: rgba(99, 102, 241, 0.18);
-  border: 1px solid rgba(79, 70, 229, 0.85);
-  z-index: 2;
+.graph-day-row-hit:focus {
+  outline: 2px solid #6366f1;
+  outline-offset: -2px;
+}
+
+.day-view-card {
+  max-width: 42rem;
+  margin-top: 0.5rem;
+}
+
+.day-view-card-hint {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  color: #64748b;
+}
+
+.day-graph-pan {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.day-graph-pan-viewport {
+  max-width: 100%;
+  cursor: grab;
+  touch-action: pan-y;
+}
+
+.day-graph-pan-viewport:active {
+  cursor: grabbing;
+}
+
+.day-graph-pan-viewport .work-week-graph-block {
+  margin-top: 0;
+}
+
+.day-graph-pan-viewport .work-week-graph-svg {
+  display: block;
+  width: 100%;
+  max-width: 42rem;
+  height: auto;
+}
+
+.day-graph-pan-scrubber {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  font-size: 0.8125rem;
+  color: #475569;
+}
+
+.day-graph-pan-range {
+  flex: 1;
+  min-width: 8rem;
+}
+
+.day-graph-pan-range-label {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #334155;
 }
 
 .graph-inspect {
@@ -581,7 +623,7 @@ body {
   left: 0;
   z-index: 4;
   pointer-events: none;
-  display: flex;
+  display: none;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
@@ -589,6 +631,10 @@ body {
   background: #0f172a;
   color: #f8fafc;
   box-shadow: 0 4px 14px rgba(15, 23, 42, 0.28);
+}
+
+.graph-inspect.is-visible {
+  display: flex;
 }
 
 .graph-inspect-swatch {
@@ -698,6 +744,13 @@ body {
   cursor: pointer;
 }
 
+.graph-clock-mode-info {
+  margin-left: 6px;
+  font-size: 12px;
+  color: #555;
+  white-space: nowrap;
+}
+
 .work-week-graph-legend {
   display: flex;
   align-items: center;
@@ -764,7 +817,8 @@ body {
   font-size: 12px;
   color: #333;
   max-height: 320px;
-  overflow-y: auto;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .work-week-graph-table {
@@ -1056,4 +1110,141 @@ body {
   font-family: ui-monospace, monospace;
   font-size: 12px;
   color: #b45309;
+}
+
+@media (max-width: 720px) {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    overflow-x: hidden;
+  }
+
+  .app-header {
+    align-items: stretch;
+    gap: 10px;
+    padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
+  }
+
+  .app-nav {
+    order: 3;
+    flex: none;
+    width: 100%;
+  }
+
+  .app-nav-btn,
+  .work-week-graph-nav-btn,
+  .btn-accent {
+    min-height: 44px;
+  }
+
+  .app-nav-btn {
+    flex: 1;
+    padding: 10px 8px;
+    font-size: 13px;
+  }
+
+  .app-status {
+    margin: 0;
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .app-main {
+    padding: 0.75rem max(0.75rem, env(safe-area-inset-right)) max(0.75rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
+  }
+
+  .app-content-card,
+  .page-placeholder,
+  .work-week-graph-overlay.is-embedded .work-week-graph-window {
+    padding: 1rem 0.75rem 1.25rem;
+    border-radius: 10px;
+    min-height: 0;
+  }
+
+  .dashboard-header h1,
+  .work-week-graph-title,
+  .page-placeholder h1 {
+    font-size: 1.35rem;
+  }
+
+  .btn-accent {
+    align-self: stretch;
+    width: 100%;
+  }
+
+  .dropzone {
+    min-height: 160px;
+    padding: 1.25rem 1rem;
+  }
+
+  .import-panel--recent {
+    padding: 1rem;
+  }
+
+  .work-week-graph-header,
+  .work-week-graph-nav,
+  .graph-toolbar,
+  .time-scale-select {
+    width: 100%;
+  }
+
+  .work-week-graph-nav {
+    gap: 8px;
+  }
+
+  .work-week-graph-nav-calendar {
+    min-width: 0;
+    flex: 1 1 8rem;
+    text-align: center;
+  }
+
+  .graph-toolbar .work-week-graph-nav-btn {
+    flex: 1 1 auto;
+  }
+
+  .work-week-graph-legend {
+    gap: 10px 14px;
+  }
+
+  .work-week-graph-legend-label {
+    font-size: 13px;
+  }
+
+  .work-week-graph-table td:first-child,
+  .card-info-table td:first-child {
+    min-width: 7.5rem;
+    width: 38%;
+  }
+
+  .work-week-graph-warnings-wrapper {
+    width: 100%;
+  }
+
+  .day-view-card,
+  .day-graph-pan-viewport .work-week-graph-svg {
+    max-width: 100%;
+  }
+
+  .day-graph-pan-scrubber {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .day-graph-pan-range {
+    min-height: 44px;
+    width: 100%;
+  }
+
+  .card-info-summary {
+    align-items: flex-start;
+  }
+
+  .card-info-summary-meta,
+  .recent-file-name,
+  .recorded-location-text {
+    overflow-wrap: anywhere;
+  }
 }
