@@ -156,7 +156,7 @@ export class CcidSession {
       await device.open()
     } catch (cause) {
       if (isOsBlocked(cause)) throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
-      throw new CardReaderError('open', 'Čtečku se nepodařilo otevřít. Zavřete jiný program, který ji používá, a zkuste to znovu.')
+      throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
     }
 
     let endpoints: CcidEndpoints | null = null

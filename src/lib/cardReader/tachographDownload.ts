@@ -1,5 +1,6 @@
 import { CardReaderError } from './errors'
 import { CcidSession } from './ccid'
+import { ensurePcscBridge, pcscBridgeReady, PcscSession, type CardChannel } from './pcscBridge'
 
 /** Gen1 „TACHO“, gen2 „SMRDT“ — AID podle přílohy 2 nařízení 2016/799. */
 const AID_GEN1 = Uint8Array.of(0xff, 0x54, 0x41, 0x43, 0x48, 0x4f)
@@ -93,12 +94,12 @@ function readBinary(offset: number, le: number): Uint8Array {
   return Uint8Array.of(0x00, 0xb1, 0x00, 0x00, 0x04, 0x54, 0x02, (offset >> 8) & 0xff, offset & 0xff, leByte)
 }
 
-async function selectOk(session: CcidSession, apdu: Uint8Array): Promise<boolean> {
+async function selectOk(session: CardChannel, apdu: Uint8Array): Promise<boolean> {
   const response = await session.transmit(apdu)
   return response.sw1 === 0x90 && response.sw2 === 0x00
 }
 
-async function readSelectedFile(session: CcidSession): Promise<Uint8Array> {
+async function readSelectedFile(session: CardChannel): Promise<Uint8Array> {
   const parts: Uint8Array[] = []
   let offset = 0
   while (offset < MAX_EF_BYTES) {
@@ -137,7 +138,7 @@ function blocksFromFile(spec: EfSpec, bytes: Uint8Array): Uint8Array[] {
   return [tlv(spec.fid, spec.dataAppendix, data), tlv(spec.fid, spec.sigAppendix, signature)]
 }
 
-async function readFiles(session: CcidSession, files: EfSpec[], onFile: (fid: number) => void): Promise<Uint8Array[]> {
+async function readFiles(session: CardChannel, files: EfSpec[], onFile: (fid: number) => void): Promise<Uint8Array[]> {
   const blocks: Uint8Array[] = []
   for (const spec of files) {
     onFile(spec.fid)
@@ -151,31 +152,9 @@ async function readFiles(session: CcidSession, files: EfSpec[], onFile: (fid: nu
 
 export type DownloadProgress = (message: string) => void
 
-/** Složí výpis karty řidiče (TLV .DDD) včetně podpisů datových souborů. */
-export async function downloadDriverCard(onProgress?: DownloadProgress): Promise<Uint8Array> {
-  if (typeof navigator === 'undefined' || !navigator.usb) {
-    throw new CardReaderError(
-      'unsupported',
-      'Tento prohlížeč neumí WebUSB. Čtečku otevřete v Google Chrome nebo Microsoft Edge.',
-    )
-  }
-
-  let device: USBDevice
-  try {
-    device = await navigator.usb.requestDevice({ filters: [{ classCode: 0x0b }] })
-  } catch (cause) {
-    const name = cause instanceof DOMException ? cause.name : ''
-    if (name === 'NotFoundError' || name === 'SecurityError' || name === 'AbortError') {
-      throw new CardReaderError('denied', 'Přístup ke čtečce byl zrušen. Výběr zařízení potvrďte v okně prohlížeče.')
-    }
-    throw new CardReaderError('open', 'Čtečku se nepodařilo vybrat.')
-  }
-
-  onProgress?.('Otevírám čtečku…')
-  const session = await CcidSession.open(device)
+async function readDriverCard(session: CardChannel, onProgress?: DownloadProgress): Promise<Uint8Array> {
   try {
     onProgress?.('Reset karty (ATR)…')
-    await session.powerOn()
     const blocks: Uint8Array[] = []
 
     onProgress?.('Čtu identifikaci čipu…')
@@ -202,5 +181,51 @@ export async function downloadDriverCard(onProgress?: DownloadProgress): Promise
     return ddd
   } finally {
     await session.close()
+  }
+}
+
+async function downloadViaWindowsDriver(onProgress?: DownloadProgress): Promise<Uint8Array> {
+  onProgress?.('Připojuji čtečku přes ovladač Windows…')
+  const session = await PcscSession.open()
+  return readDriverCard(session, onProgress)
+}
+
+/** Složí výpis karty řidiče (TLV .DDD) včetně podpisů datových souborů. */
+export async function downloadDriverCard(onProgress?: DownloadProgress): Promise<Uint8Array> {
+  if (await pcscBridgeReady()) {
+    return downloadViaWindowsDriver(onProgress)
+  }
+
+  if (typeof navigator === 'undefined' || !navigator.usb) {
+    throw new CardReaderError(
+      'unsupported',
+      'Tento prohlížeč neumí WebUSB. Čtečku otevřete v Google Chrome nebo Microsoft Edge.',
+    )
+  }
+
+  let device: USBDevice
+  try {
+    device = await navigator.usb.requestDevice({ filters: [{ classCode: 0x0b }] })
+  } catch (cause) {
+    const name = cause instanceof DOMException ? cause.name : ''
+    if (name === 'NotFoundError' || name === 'SecurityError' || name === 'AbortError') {
+      throw new CardReaderError('denied', 'Přístup ke čtečce byl zrušen. Výběr zařízení potvrďte v okně prohlížeče.')
+    }
+    throw new CardReaderError('open', 'Čtečku se nepodařilo vybrat.')
+  }
+
+  onProgress?.('Otevírám čtečku…')
+  let session: CcidSession | null = null
+  try {
+    session = await CcidSession.open(device)
+    await session.powerOn()
+    return await readDriverCard(session, onProgress)
+  } catch (cause) {
+    await session?.close()
+    if (cause instanceof CardReaderError && (cause.code === 'blocked' || cause.code === 'open')) {
+      onProgress?.('Ovladač Windows drží čtečku, přepínám na něj…')
+      if (await ensurePcscBridge()) return downloadViaWindowsDriver(onProgress)
+    }
+    throw cause
   }
 }

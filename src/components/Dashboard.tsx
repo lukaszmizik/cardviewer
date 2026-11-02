@@ -57,10 +57,12 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
             : 'Kartu se nepodařilo načíst.'
       const title =
         cause instanceof CardReaderError && cause.code === 'blocked'
-          ? 'Čtečku blokuje systém'
+          ? 'Čtečku drží ovladač nebo jiný program'
           : cause instanceof CardReaderError && cause.code === 'no_card'
             ? 'Karta není ve čtečce'
-            : 'Kartu nelze načíst'
+            : cause instanceof CardReaderError && cause.code === 'no_reader'
+              ? 'Čtečka nenalezena'
+              : 'Kartu nelze načíst'
       setUsbError({ title, message })
       setUsbStatus(null)
     } finally {
@@ -154,7 +156,7 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
               Čtečka USB
             </h2>
             <p className="usb-dialog-text">
-              Připojte čtečku, vložte kartu řidiče a zvolte zařízení v okně prohlížeče. Funguje v Chrome a Edge (WebUSB).
+              Vložte kartu čipem napřed. S ovladačem Thales se čte přes Windows, stejně jako v Datacho — ten program nechte při čtení zavřený.
             </p>
             {usbStatus && <p className="file-uploader-status">{usbStatus}</p>}
             {usbError && (

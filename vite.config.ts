@@ -1,6 +1,37 @@
+import { spawn, type ChildProcess } from 'node:child_process'
+import net from 'node:net'
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
+
+function parserPortOpen(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port: 8787 }, () => {
+      socket.end()
+      resolve(true)
+    })
+    socket.on('error', () => resolve(false))
+  })
+}
+
+function localCardBridge(): Plugin {
+  let child: ChildProcess | null = null
+  return {
+    name: 'local-card-bridge',
+    async configureServer(server) {
+      if (await parserPortOpen()) return
+      child = spawn('go', ['run', './server/ddd-http'], {
+        cwd: server.config.root,
+        stdio: 'inherit',
+        windowsHide: true,
+      })
+      server.httpServer?.on('close', () => {
+        child?.kill()
+        child = null
+      })
+    },
+  }
+}
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), localCardBridge()],
 })
