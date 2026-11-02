@@ -32,7 +32,7 @@ export function Layout({ currentTab, onTabChange, card, children }: LayoutProps)
           height={87}
         />
         <div className="app-identity">
-          <h1 className="app-title">Čtečka karet v 1.0</h1>
+          <h1 className="app-title">Čtečka karet verze 1.0</h1>
         </div>
         <div className="app-tools">
           <nav className="app-nav" aria-label="Hlavní navigace">
