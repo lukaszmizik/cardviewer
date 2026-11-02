@@ -105,11 +105,11 @@ export function CardCalendar({
       result.push({
         key: `${parts.year}-${parts.month}`,
         title: `${MONTH_NAMES[parts.month - 1] ?? ''} ${parts.year}`,
-        weeks,
+        weeks: weeks.reverse(),
       })
       cursor = nextMonthStartMs(cursor, clockMode)
     }
-    return result
+    return result.reverse()
   }, [clockMode, days, recordedDays])
 
   const headers = weekdayHeaders(dayNames)

@@ -649,7 +649,6 @@ body {
 .card-calendar-day.has-record {
   color: #14532d;
   background: #86efac;
-  box-shadow: inset 0 0 0 2px #16a34a;
 }
 
 .work-week-graph-nav-today {
