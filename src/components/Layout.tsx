@@ -24,38 +24,31 @@ export function Layout({ currentTab, onTabChange, card, children }: LayoutProps)
   return (
     <div className="app-shell">
       <header className="app-header">
-        <div className="app-brand">
-          <div className="app-brand-row">
-            <img src="/logo.png" alt="" className="app-logo" width={112} height={63} />
-            <h1 className="app-title">Čtečka karet v 1.0</h1>
-          </div>
-          <aside className="app-author">
-            <p className="app-author-name">Lukáš Mizera</p>
-            <a className="app-author-mail" href="mailto:lukas@zmizik.com">lukas@zmizik.com</a>
-            <p className="app-author-note">Veškerá data do aplikace nahráváte dobrovolně.</p>
-          </aside>
+        <img src="/logo.png" alt="" className="app-logo" width={96} height={54} />
+        <div className="app-identity">
+          <h1 className="app-title">Čtečka karet v 1.0</h1>
         </div>
-
-        <nav className="app-nav" aria-label="Hlavní navigace">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              className={currentTab === tab.id ? 'app-nav-btn is-active' : 'app-nav-btn'}
-              onClick={() => onTabChange(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-
-        <p
-          className={card ? 'app-status app-status--ok' : 'app-status'}
-          role="status"
-        >
-          {card && <span className="app-status-dot" aria-hidden="true" />}
-          {statusText}
-        </p>
+        <div className="app-tools">
+          <nav className="app-nav" aria-label="Hlavní navigace">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={currentTab === tab.id ? 'app-nav-btn is-active' : 'app-nav-btn'}
+                onClick={() => onTabChange(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+          <p
+            className={card ? 'app-status app-status--ok' : 'app-status'}
+            role="status"
+          >
+            {card && <span className="app-status-dot" aria-hidden="true" />}
+            {statusText}
+          </p>
+        </div>
       </header>
 
       <main className="app-main">{children}</main>
