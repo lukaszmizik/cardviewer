@@ -30,7 +30,7 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
   const [usbDialogOpen, setUsbDialogOpen] = useState(false)
   const [usbReading, setUsbReading] = useState(false)
   const [usbStatus, setUsbStatus] = useState<string | null>(null)
-  const [usbError, setUsbError] = useState<string | null>(null)
+  const [usbError, setUsbError] = useState<{ title: string; message: string } | null>(null)
 
   async function readFromReader() {
     if (usbReading) return
@@ -55,7 +55,13 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
           : cause instanceof Error
             ? cause.message
             : 'Kartu se nepodařilo načíst.'
-      setUsbError(message)
+      const title =
+        cause instanceof CardReaderError && cause.code === 'blocked'
+          ? 'Čtečku blokuje systém'
+          : cause instanceof CardReaderError && cause.code === 'no_card'
+            ? 'Karta není ve čtečce'
+            : 'Kartu nelze načíst'
+      setUsbError({ title, message })
       setUsbStatus(null)
     } finally {
       setUsbReading(false)
@@ -153,7 +159,8 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
             {usbStatus && <p className="file-uploader-status">{usbStatus}</p>}
             {usbError && (
               <div className="work-week-warnings-panel file-uploader-error" role="alert">
-                <p className="file-uploader-error-text">{usbError}</p>
+                <h3 className="work-week-warnings-title">{usbError.title}</h3>
+                <p className="file-uploader-error-text">{usbError.message}</p>
               </div>
             )}
             <div className="dashboard-actions">

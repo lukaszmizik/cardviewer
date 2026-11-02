@@ -185,7 +185,7 @@ export async function downloadDriverCard(onProgress?: DownloadProgress): Promise
     onProgress?.('Vybírám aplikaci tachografu…')
     const gen1 = await selectOk(session, selectAid(AID_GEN1))
     if (!gen1) {
-      throw new CardReaderError('no_card', 'Na kartě není aplikace tachografu. Vložte kartu řidiče.')
+      throw new CardReaderError('protocol', 'Na kartě není aplikace tachografu. Vložte kartu řidiče čipem napřed.')
     }
     blocks.push(...(await readFiles(session, GEN1_FILES, (fid) => onProgress?.(`Čtu soubor ${fid.toString(16).toUpperCase()}…`))))
 
