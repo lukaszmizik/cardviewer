@@ -49,6 +49,8 @@ import {
 } from './lib/graphGeometry'
 import { TimeScaleSelect } from './components/TimeScaleSelect'
 import { CardInfoTable } from './components/CardInfoTable'
+import { CardHistoryTables } from './components/CardHistoryTables'
+import { bestDailyDistance, type DailyDistanceRecord } from './utils/weekDistance'
 import { GraphStage } from './components/GraphStage'
 import { DayGraphPan } from './components/DayGraphPan'
 import { GraphSwipeNav } from './components/GraphSwipeNav'
@@ -300,8 +302,12 @@ function formatTimeRange(startMs: number, endMs: number, mode: ClockMode): strin
 
 function WorkWeekGraphLegend({
   t,
+  distanceRecord,
+  clockMode,
 }: {
   t: { workWeek: { legendRest45h: string; legendRest24h: string; manualEntryLabel: string } }
+  distanceRecord: DailyDistanceRecord | null
+  clockMode: ClockMode
 }) {
   return (
     <div className="work-week-graph-legend">
@@ -347,6 +353,15 @@ function WorkWeekGraphLegend({
           <line x1={0} y1={5.5} x2={22} y2={5.5} stroke="#25D366" strokeWidth={8} strokeLinecap="butt" />
         </svg>
         <span className="work-week-graph-legend-label">režim osádky</span>
+      </span>
+      <span className="work-week-graph-legend-item">
+        <span className="work-week-graph-legend-trophy" aria-hidden="true">🏆</span>
+        <span className="work-week-graph-legend-label">
+          Nejvíce km/den:{' '}
+          {distanceRecord
+            ? `${formatClockDate(distanceRecord.dayStartMs, clockMode)} · ${new Intl.NumberFormat('cs-CZ').format(distanceRecord.kilometers)} km`
+            : '—'}
+        </span>
       </span>
     </div>
   )
@@ -949,6 +964,9 @@ function GraphBlock({
           </table>
         </div>
       )}
+      {showFooter && card && (
+        <CardHistoryTables card={card} weekStartMs={displayWeekStartMs} clockMode={clockMode} />
+      )}
     </div>
   )
 }
@@ -971,6 +989,10 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
   const [dayPanStart, setDayPanStart] = useState(0)
   const [cardOverviewOpen, setCardOverviewOpen] = useState(false)
   const inspectActive = detailActive && !narrowViewport
+  const distanceRecord = useMemo(
+    () => bestDailyDistance(card?.vehicleUses ?? [], displayWeekStartMs, clockMode),
+    [card, displayWeekStartMs, clockMode],
+  )
 
   useEffect(() => {
     setDisplayWeekStartMs(getInitialWeekStart())
@@ -1185,7 +1207,9 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
             </div>
             )}
           </div>
-          {focusedDayUtc == null && !cardOverviewOpen && <WorkWeekGraphLegend t={t} />}
+          {focusedDayUtc == null && !cardOverviewOpen && (
+            <WorkWeekGraphLegend t={t} distanceRecord={distanceRecord} clockMode={clockMode} />
+          )}
         </div>
 
         {cardOverviewOpen ? (
@@ -1202,7 +1226,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
           />
         ) : focusedDayUtc != null ? (
           <section className="day-view-card">
-            <WorkWeekGraphLegend t={t} />
+            <WorkWeekGraphLegend t={t} distanceRecord={distanceRecord} clockMode={clockMode} />
             <DayGraphPan panStartMinute={dayPanStart} onPanStartChange={setDayPanStart}>
               <GraphBlock
                 days={days}

@@ -2,10 +2,14 @@ import type {
   Activity,
   ActivityKind,
   ComplianceRule,
+  CardIncident,
   ComplianceViolation,
   DriverCardData,
+  LoadUnloadEntry,
+  LoadUnloadKind,
   Location,
   LocationRecordType,
+  VehicleUse,
 } from '../types/tacho'
 
 /** JSON výstup Go knihovny dddparser (tachoparser Card). */
@@ -25,6 +29,8 @@ export type DddParserCardJson = {
   card_vehicles_used_2?: DddVehiclesBlock
   card_event_data_1?: DddEventBlock
   card_event_data_2?: DddEventBlock
+  card_fault_data_1?: DddFaultBlock
+  card_fault_data_2?: DddFaultBlock
   last_card_download_1?: DddLastDownloadBlock
   last_card_download_2?: DddLastDownloadBlock
 }
@@ -133,6 +139,7 @@ type DddBorderBlock = {
 type DddLoadUnloadRecord = {
   timestamp?: string | null
   operation_type?: number
+  vehicle_odometer_value?: number | null
   gnss_place_auth_record?: {
     time_stamp?: string | null
     geo_coordinates?: DddGeo
@@ -143,25 +150,47 @@ type DddLoadUnloadBlock = {
   card_load_unload_records?: DddLoadUnloadRecord[]
 }
 
+type DddVehicleRecord = {
+  vehicle_first_use?: string | null
+  vehicle_last_use?: string | null
+  vehicle_odometer_begin?: number | null
+  vehicle_odometer_end?: number | null
+  vehicle_registration?: {
+    vehicle_registration_number?: string | null
+  }
+}
+
 type DddVehiclesBlock = {
-  card_vehicle_records?: Array<{
-    vehicle_first_use?: string | null
-    vehicle_last_use?: string | null
-    vehicle_registration?: {
-      vehicle_registration_number?: string | null
-    }
-  }>
+  card_vehicle_records?: DddVehicleRecord[]
+}
+
+type DddRegistration = {
+  vehicle_registration_number?: string | null
 }
 
 type DddEventRecord = {
   event_type?: number
   event_begin_time?: string | null
   event_end_time?: string | null
+  event_vehicle_registration?: DddRegistration
+}
+
+type DddFaultRecord = {
+  fault_type?: number
+  fault_begin_time?: string | null
+  fault_end_time?: string | null
+  fault_vehicle_registration?: DddRegistration
 }
 
 type DddEventBlock = {
   card_event_records_array?: Array<{
     card_event_records?: DddEventRecord[]
+  }>
+}
+
+type DddFaultBlock = {
+  card_fault_records_array?: Array<{
+    card_fault_records?: DddFaultRecord[]
   }>
 }
 
@@ -748,6 +777,171 @@ function mapViolations(card: DddParserCardJson): ComplianceViolation[] {
     .filter((item): item is ComplianceViolation => item != null)
 }
 
+const RECORDED_AFTER = Date.UTC(1990, 0, 1)
+
+const EVENT_LABELS: Record<number, string> = {
+  0: 'Bez dalších podrobností',
+  1: 'Vložení neplatné karty',
+  2: 'Konflikt karet',
+  3: 'Překrytí času',
+  4: 'Řízení bez odpovídající karty',
+  5: 'Vložení karty během jízdy',
+  6: 'Poslední relace karty nebyla správně uzavřena',
+  7: 'Překročení rychlosti',
+  8: 'Přerušení napájení',
+  9: 'Chyba údajů o pohybu',
+  10: 'Konflikt pohybu vozidla',
+  11: 'Konflikt času',
+  12: 'Chyba komunikace s dálkovým zařízením',
+  13: 'Chybí poloha z GNSS',
+  14: 'Chyba komunikace s GNSS',
+}
+
+const FAULT_LABELS: Record<number, string> = {
+  0x20: 'Závada záznamového zařízení',
+  0x21: 'Vnitřní závada jednotky vozidla',
+  0x22: 'Závada tiskárny',
+  0x23: 'Závada displeje',
+  0x24: 'Závada stahování',
+  0x25: 'Závada snímače',
+  0x30: 'Závada karty',
+  0x31: 'Závada karty',
+  0x40: 'Závada GNSS',
+  0x41: 'Závada přijímače GNSS',
+  0x42: 'Závada externího zařízení GNSS',
+}
+
+function recordedMs(value: string | null | undefined): number | null {
+  const ms = parseUnixMs(value)
+  if (ms == null || ms < RECORDED_AFTER) return null
+  return ms
+}
+
+function odometerKm(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
+  return Math.round(value)
+}
+
+function traveledKilometers(begin: number | null | undefined, end: number | null | undefined): number | null {
+  const from = odometerKm(begin)
+  const to = odometerKm(end)
+  if (from == null || to == null || to < from) return null
+  return to - from
+}
+
+function incidentLabel(code: number, labels: Record<number, string>, fallback: string): string {
+  return labels[code] ?? `${fallback} ${code}`
+}
+
+function mapVehicleUses(card: DddParserCardJson): VehicleUse[] {
+  return mergeByTime(
+    card.card_vehicles_used_2?.card_vehicle_records,
+    card.card_vehicles_used_1?.card_vehicle_records,
+    (record) => record.vehicle_first_use,
+  )
+    .map((record) => {
+      const fromUtc = recordedMs(record.vehicle_first_use)
+      const toUtc = recordedMs(record.vehicle_last_use)
+      const registration = registrationPlate(record.vehicle_registration?.vehicle_registration_number)
+      if (fromUtc == null || toUtc == null || registration == null) return null
+      return {
+        registration,
+        fromUtc,
+        toUtc,
+        kilometers: traveledKilometers(record.vehicle_odometer_begin, record.vehicle_odometer_end),
+      }
+    })
+    .filter((record): record is VehicleUse => record != null)
+    .sort((a, b) => b.fromUtc - a.fromUtc)
+}
+
+function mapIncidentList(
+  groups: Array<{ records?: Array<{ type?: number; begin?: string | null; end?: string | null; plate?: string | null }> }>,
+  labels: Record<number, string>,
+  fallback: string,
+): CardIncident[] {
+  const seen = new Set<string>()
+  const incidents: CardIncident[] = []
+  for (const group of groups) {
+    for (const record of group.records ?? []) {
+      const fromUtc = recordedMs(record.begin)
+      if (fromUtc == null) continue
+      const typeCode = record.type ?? 0
+      const key = `${typeCode}|${fromUtc}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      const toUtc = recordedMs(record.end)
+      incidents.push({
+        fromUtc,
+        toUtc: toUtc != null && toUtc >= fromUtc ? toUtc : null,
+        registration: registrationPlate(record.plate),
+        typeLabel: incidentLabel(typeCode, labels, fallback),
+      })
+    }
+  }
+  return incidents.sort((a, b) => b.fromUtc - a.fromUtc)
+}
+
+function eventGroups(block: DddEventBlock | undefined) {
+  return (block?.card_event_records_array ?? []).map((group) => ({
+    records: (group.card_event_records ?? []).map((record) => ({
+      type: record.event_type,
+      begin: record.event_begin_time,
+      end: record.event_end_time,
+      plate: record.event_vehicle_registration?.vehicle_registration_number,
+    })),
+  }))
+}
+
+function faultGroups(block: DddFaultBlock | undefined) {
+  return (block?.card_fault_records_array ?? []).map((group) => ({
+    records: (group.card_fault_records ?? []).map((record) => ({
+      type: record.fault_type,
+      begin: record.fault_begin_time,
+      end: record.fault_end_time,
+      plate: record.fault_vehicle_registration?.vehicle_registration_number,
+    })),
+  }))
+}
+
+function mapEvents(card: DddParserCardJson): CardIncident[] {
+  return mapIncidentList(
+    [...eventGroups(card.card_event_data_2), ...eventGroups(card.card_event_data_1)],
+    EVENT_LABELS,
+    'Událost',
+  )
+}
+
+function mapFaults(card: DddParserCardJson): CardIncident[] {
+  return mapIncidentList(
+    [...faultGroups(card.card_fault_data_2), ...faultGroups(card.card_fault_data_1)],
+    FAULT_LABELS,
+    'Závada',
+  )
+}
+
+function loadUnloadKind(operation: number | undefined): LoadUnloadKind {
+  if (operation === 2) return 'unload'
+  if (operation === 3) return 'both'
+  return 'load'
+}
+
+function mapLoadUnloadEntries(card: DddParserCardJson): LoadUnloadEntry[] {
+  const entries: LoadUnloadEntry[] = []
+  for (const record of card.card_load_unload_operations?.card_load_unload_records ?? []) {
+    const atUtc = recordedMs(record.timestamp ?? record.gnss_place_auth_record?.time_stamp)
+    if (atUtc == null) continue
+    const geo = record.gnss_place_auth_record?.geo_coordinates
+    entries.push({
+      atUtc,
+      kind: loadUnloadKind(record.operation_type),
+      odometerKm: odometerKm(record.vehicle_odometer_value),
+      location: geo?.latitude != null && geo.longitude != null ? geoLabel(geo) : null,
+    })
+  }
+  return entries.sort((a, b) => b.atUtc - a.atUtc)
+}
+
 function lastWithdrawalUtc(card: DddParserCardJson): number | null {
   const vehicles = mergeByTime(
     card.card_vehicles_used_2?.card_vehicle_records,
@@ -804,6 +998,10 @@ export function mapDddParserJson(parserJson: unknown): DriverCardData {
     locations: mappedLocations,
     activities: mapActivities(card),
     violations: mapViolations(card),
+    vehicleUses: mapVehicleUses(card),
+    events: mapEvents(card),
+    faults: mapFaults(card),
+    loadUnloadEntries: mapLoadUnloadEntries(card),
   }
 
   if (!mapped.cardNumber && !mapped.surname && mapped.activities.length === 0) {

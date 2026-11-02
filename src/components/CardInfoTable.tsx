@@ -8,9 +8,40 @@ type CardInfoTableProps = {
   clockMode: ClockMode
 }
 
+const LANGUAGE_NAMES: Record<string, string> = {
+  bg: 'bulharština',
+  cs: 'čeština',
+  da: 'dánština',
+  de: 'němčina',
+  el: 'řečtina',
+  en: 'angličtina',
+  es: 'španělština',
+  et: 'estonština',
+  fi: 'finština',
+  fr: 'francouzština',
+  hr: 'chorvatština',
+  hu: 'maďarština',
+  it: 'italština',
+  lt: 'litevština',
+  lv: 'lotyština',
+  nl: 'nizozemština',
+  pl: 'polština',
+  pt: 'portugalština',
+  ro: 'rumunština',
+  sk: 'slovenština',
+  sl: 'slovinština',
+  sv: 'švédština',
+}
+
 function cell(value: string | null | undefined): string {
   const text = value?.trim()
   return text ? text : '—'
+}
+
+function languageCell(value: string | null | undefined): string {
+  const text = value?.trim()
+  if (!text) return '—'
+  return LANGUAGE_NAMES[text.toLowerCase()] ?? text
 }
 
 function instant(ms: number | null | undefined, mode: ClockMode): string {
@@ -22,7 +53,7 @@ export function CardInfoTable({ card, clockMode }: CardInfoTableProps) {
   const rows: Array<[string, string]> = [
     ['Držitel', cell(driverDisplayName(card))],
     ['Datum narození', cell(card.dateOfBirth)],
-    ['Jazyk', cell(card.preferredLanguage)],
+    ['Preferovaný jazyk', languageCell(card.preferredLanguage)],
     ['Číslo karty', cell(card.cardNumber)],
     ['Vydávající stát', cell(card.issuingCountry)],
     ['Vydávající úřad', cell(card.issuingAuthority)],

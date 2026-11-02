@@ -52,6 +52,31 @@ export interface ComplianceViolation {
   message: string
 }
 
+export interface VehicleUse {
+  registration: string
+  fromUtc: number
+  toUtc: number
+  /** Ujeté kilometry podle počítadla. Chybí, když karta konec jízdy nezaznamenala. */
+  kilometers: number | null
+}
+
+export interface CardIncident {
+  fromUtc: number
+  toUtc: number | null
+  registration: string | null
+  typeLabel: string
+}
+
+export type LoadUnloadKind = 'load' | 'unload' | 'both'
+
+export interface LoadUnloadEntry {
+  atUtc: number
+  kind: LoadUnloadKind
+  /** Stav počítadla kilometrů v okamžiku zadání. */
+  odometerKm: number | null
+  location: string | null
+}
+
 export interface DriverCardData {
   cardNumber: string
   firstName: string
@@ -72,4 +97,8 @@ export interface DriverCardData {
   activities: Activity[]
   locations: Location[]
   violations: ComplianceViolation[]
+  vehicleUses?: VehicleUse[]
+  events?: CardIncident[]
+  faults?: CardIncident[]
+  loadUnloadEntries?: LoadUnloadEntry[]
 }
