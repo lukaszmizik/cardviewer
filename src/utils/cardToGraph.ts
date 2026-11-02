@@ -197,17 +197,46 @@ function toLoadUnload(locations: Location[]): VehicleLoadUnloadEvent[] {
     }))
 }
 
+function usableCoordinates(
+  latitude?: number,
+  longitude?: number,
+): { latitude: number; longitude: number } | null {
+  if (latitude == null || longitude == null) return null
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null
+  if (latitude === 0 && longitude === 0) return null
+  return { latitude, longitude }
+}
+
 function toGpsLocations(locations: Location[]): RecordedGpsLocation[] {
-  return locations
-    .filter((loc) => loc.recordType === 'gps' || loc.recordType === 'border_crossing')
-    .map((loc) => ({
+  const rows: RecordedGpsLocation[] = []
+  for (const loc of locations) {
+    const coords = usableCoordinates(loc.latitude, loc.longitude)
+    const country = loc.countryCode?.trim().toUpperCase()
+    if (loc.recordType === 'gps' || loc.recordType === 'border_crossing') {
+      rows.push({
+        minuteStartUtc: loc.recordedAtUtc,
+        gpsLocation: loc.label,
+        recordType: loc.recordType === 'border_crossing' ? 'border_crossing' : 'gps_3h',
+        latitude: coords?.latitude ?? loc.latitude,
+        longitude: coords?.longitude ?? loc.longitude,
+        countryCode: loc.countryCode,
+      })
+      continue
+    }
+    if (loc.recordType !== 'start_country' && loc.recordType !== 'end_country') continue
+    if (!coords && !country) continue
+    const position = coords ? `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}` : null
+    rows.push({
       minuteStartUtc: loc.recordedAtUtc,
-      gpsLocation: loc.label,
-      recordType: loc.recordType === 'border_crossing' ? 'border_crossing' : 'gps_3h',
-      latitude: loc.latitude,
-      longitude: loc.longitude,
-      countryCode: loc.countryCode,
-    }))
+      gpsLocation: position && country ? `${country} · ${position}` : position ?? country!,
+      recordType: loc.recordType,
+      latitude: coords?.latitude,
+      longitude: coords?.longitude,
+      countryCode: country,
+    })
+  }
+  return rows
 }
 
 function toFaults(violations: ComplianceViolation[]): FaultOrEvent[] {
