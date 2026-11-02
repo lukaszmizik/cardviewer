@@ -51,31 +51,26 @@ function endpointsOf(configuration: USBConfiguration, iface: USBInterface, alter
   }
 }
 
-function findInConfiguration(configuration: USBConfiguration, classCode: number | null): CcidEndpoints | null {
-  for (const iface of configuration.interfaces) {
-    for (const alternate of iface.alternates) {
-      if (classCode != null && alternate.interfaceClass !== classCode) continue
-      const endpoints = endpointsOf(configuration, iface, alternate)
-      if (endpoints) return endpoints
-    }
-  }
-  return null
+function isCcid(iface: USBInterface): boolean {
+  return iface.alternates.some((alternate) => alternate.interfaceClass === CCID_CLASS)
 }
 
-/** CCID (třída 0x0B) v konfiguracích zařízení, jinak první rozhraní s bulk koncovými body. */
-function findReaderEndpoints(device: USBDevice): CcidEndpoints {
-  const configurations = device.configuration
-    ? [device.configuration, ...device.configurations.filter((item) => item.configurationValue !== device.configuration?.configurationValue)]
-    : device.configurations
-  for (const configuration of configurations) {
-    const ccid = findInConfiguration(configuration, CCID_CLASS)
-    if (ccid) return ccid
+/** Nejdřív CCID, potom rozhraní 0 a 1, pak zbytek. */
+function interfacesToClaim(configuration: USBConfiguration): USBInterface[] {
+  const all = configuration.interfaces
+  const ccid = all.filter((iface) => isCcid(iface))
+  const slot01 = all.filter((iface) => (iface.interfaceNumber === 0 || iface.interfaceNumber === 1) && !ccid.includes(iface))
+  const rest = all.filter((iface) => !ccid.includes(iface) && !slot01.includes(iface))
+  return [...ccid, ...slot01, ...rest]
+}
+
+function endpointsForInterface(configuration: USBConfiguration, iface: USBInterface): CcidEndpoints | null {
+  const alternates = [...iface.alternates].sort((a, b) => Number(b.interfaceClass === CCID_CLASS) - Number(a.interfaceClass === CCID_CLASS))
+  for (const alternate of alternates) {
+    const endpoints = endpointsOf(configuration, iface, alternate)
+    if (endpoints) return endpoints
   }
-  for (const configuration of configurations) {
-    const first = findInConfiguration(configuration, null)
-    if (first) return first
-  }
-  throw new CardReaderError('open', 'Na čtečce není použitelné USB rozhraní.')
+  return null
 }
 
 async function ensureConfiguration(device: USBDevice): Promise<void> {
@@ -92,43 +87,48 @@ async function ensureConfiguration(device: USBDevice): Promise<void> {
   }
 }
 
-async function claimInterfaceRobust(device: USBDevice, interfaceNumber: number): Promise<void> {
-  const claimOnce = async () => {
-    const iface = device.configuration?.interfaces.find((item) => item.interfaceNumber === interfaceNumber)
-    if (iface?.claimed) {
-      try {
-        await device.releaseInterface(interfaceNumber)
-      } catch (cause) {
-        if (isOsBlocked(cause)) throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
-      }
-    }
-    const afterRelease = device.configuration?.interfaces.find((item) => item.interfaceNumber === interfaceNumber)
-    if (afterRelease?.claimed) return
+async function selectConfigurationWithCcid(device: USBDevice): Promise<void> {
+  await ensureConfiguration(device)
+  const active = device.configuration
+  if (active?.interfaces.some((iface) => isCcid(iface))) return
+  const ccidConfiguration = device.configurations.find((configuration) => configuration.interfaces.some((iface) => isCcid(iface)))
+  if (!ccidConfiguration || ccidConfiguration.configurationValue === active?.configurationValue) return
+  await device.selectConfiguration(ccidConfiguration.configurationValue)
+}
+
+/**
+ * Postupně zabere rozhraní aktivní konfigurace. Vrátí to, na kterém claimInterface uspěje.
+ */
+async function claimWorkingInterface(device: USBDevice): Promise<CcidEndpoints> {
+  const configuration = device.configuration
+  if (!configuration) throw new CardReaderError('open', 'Čtečka nemá vybranou USB konfiguraci.')
+
+  let sawBlocked = false
+  for (const iface of interfacesToClaim(configuration)) {
     try {
-      await device.claimInterface(interfaceNumber)
+      if (!iface.claimed) await device.claimInterface(iface.interfaceNumber)
     } catch (cause) {
-      if (isOsBlocked(cause)) throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
-      throw cause
+      if (isOsBlocked(cause)) sawBlocked = true
+      continue
     }
+
+    const endpoints = endpointsForInterface(configuration, iface)
+    if (!endpoints) {
+      try {
+        await device.releaseInterface(iface.interfaceNumber)
+      } catch {
+        /* rozhraní bez bulk konců pustíme dál */
+      }
+      continue
+    }
+    if (endpoints.alternateSetting !== 0) {
+      await device.selectAlternateInterface(iface.interfaceNumber, endpoints.alternateSetting)
+    }
+    return endpoints
   }
 
-  try {
-    await claimOnce()
-  } catch (cause) {
-    if (cause instanceof CardReaderError && cause.code !== 'blocked') throw cause
-    try {
-      await device.reset()
-      await ensureConfiguration(device)
-      await claimOnce()
-    } catch (retry) {
-      if (retry instanceof CardReaderError && retry.code === 'blocked') throw retry
-      if (retry instanceof CardReaderError && cause instanceof CardReaderError) throw cause
-      if (isOsBlocked(retry) || isOsBlocked(cause) || cause instanceof CardReaderError) {
-        throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
-      }
-      throw new CardReaderError('open', 'Rozhraní čtečky se nepodařilo zabrat ani po resetu zařízení.')
-    }
-  }
+  if (sawBlocked) throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
+  throw new CardReaderError('open', 'Žádné rozhraní čtečky se nepodařilo zabrat.')
 }
 
 type CcidMessage = {
@@ -161,15 +161,14 @@ export class CcidSession {
 
     let endpoints: CcidEndpoints | null = null
     try {
-      await ensureConfiguration(device)
-      endpoints = findReaderEndpoints(device)
-      if (device.configuration?.configurationValue !== endpoints.configurationValue) {
-        await device.selectConfiguration(endpoints.configurationValue)
-        endpoints = findReaderEndpoints(device)
-      }
-      await claimInterfaceRobust(device, endpoints.interfaceNumber)
-      if (endpoints.alternateSetting !== 0) {
-        await device.selectAlternateInterface(endpoints.interfaceNumber, endpoints.alternateSetting)
+      await selectConfigurationWithCcid(device)
+      try {
+        endpoints = await claimWorkingInterface(device)
+      } catch (cause) {
+        if (cause instanceof CardReaderError && cause.code !== 'blocked' && cause.code !== 'open') throw cause
+        await device.reset()
+        await selectConfigurationWithCcid(device)
+        endpoints = await claimWorkingInterface(device)
       }
       return new CcidSession(device, endpoints)
     } catch (cause) {
