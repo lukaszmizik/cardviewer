@@ -109,7 +109,6 @@ async function readSelectedFile(session: CardChannel): Promise<Uint8Array> {
       response = await session.transmit(readBinary(offset, response.sw2))
     }
     if (response.sw1 === 0x69 && response.sw2 === 0x82 && parts.length === 0) {
-      console.info('[card-reader] soubor vrací SW 6982, čtení pokračuje dalším souborem')
       return new Uint8Array()
     }
     if (response.sw1 === 0x6b || (response.sw1 === 0x6a && response.sw2 === 0x86)) break
@@ -142,13 +141,35 @@ function blocksFromFile(spec: EfSpec, bytes: Uint8Array): Uint8Array[] {
   return [tlv(spec.fid, spec.dataAppendix, data), tlv(spec.fid, spec.sigAppendix, signature)]
 }
 
-async function readFiles(session: CardChannel, files: EfSpec[], onFile: (fid: number) => void): Promise<Uint8Array[]> {
+function fileLabel(fid: number): string {
+  return fid.toString(16).toUpperCase().padStart(4, '0')
+}
+
+function noteMissing(missingFiles: string[] | undefined, fid: number, reason: string) {
+  const label = fileLabel(fid)
+  console.info(`[card-reader] soubor ${label} nebyl načten (${reason}), do DDD se nedoplní`)
+  missingFiles?.push(label)
+}
+
+async function readFiles(
+  session: CardChannel,
+  files: EfSpec[],
+  onFile: (fid: number) => void,
+  missingFiles?: string[],
+): Promise<Uint8Array[]> {
   const blocks: Uint8Array[] = []
   for (const spec of files) {
     onFile(spec.fid)
     const selected = await selectOk(session, selectEf(spec.fid))
-    if (!selected) continue
+    if (!selected) {
+      noteMissing(missingFiles, spec.fid, 'výběr souboru selhal')
+      continue
+    }
     const bytes = await readSelectedFile(session)
+    if (bytes.length === 0) {
+      noteMissing(missingFiles, spec.fid, 'karta nevrátila data')
+      continue
+    }
     blocks.push(...blocksFromFile(spec, bytes))
   }
   return blocks
@@ -156,26 +177,26 @@ async function readFiles(session: CardChannel, files: EfSpec[], onFile: (fid: nu
 
 export type DownloadProgress = (message: string) => void
 
-async function readDriverCard(session: CardChannel, onProgress?: DownloadProgress): Promise<Uint8Array> {
+async function readDriverCard(session: CardChannel, onProgress?: DownloadProgress, missingFiles?: string[]): Promise<Uint8Array> {
   try {
     onProgress?.('Reset karty (ATR)…')
     const blocks: Uint8Array[] = []
 
     onProgress?.('Čtu identifikaci čipu…')
     await selectOk(session, selectMasterFile())
-    blocks.push(...(await readFiles(session, MF_FILES, () => undefined)))
+    blocks.push(...(await readFiles(session, MF_FILES, () => undefined, missingFiles)))
 
     onProgress?.('Vybírám aplikaci tachografu…')
     const gen1 = await selectOk(session, selectAid(AID_GEN1))
     if (!gen1) {
       throw new CardReaderError('protocol', 'Na kartě není aplikace tachografu. Vložte kartu řidiče čipem napřed.')
     }
-    blocks.push(...(await readFiles(session, GEN1_FILES, (fid) => onProgress?.(`Čtu soubor ${fid.toString(16).toUpperCase()}…`))))
+    blocks.push(...(await readFiles(session, GEN1_FILES, (fid) => onProgress?.(`Čtu soubor ${fid.toString(16).toUpperCase()}…`), missingFiles)))
 
     const gen2 = await selectOk(session, selectAid(AID_GEN2))
     if (gen2) {
       onProgress?.('Čtu datové struktury 2. generace…')
-      blocks.push(...(await readFiles(session, GEN2_FILES, (fid) => onProgress?.(`Čtu soubor ${fid.toString(16).toUpperCase()}…`))))
+      blocks.push(...(await readFiles(session, GEN2_FILES, (fid) => onProgress?.(`Čtu soubor ${fid.toString(16).toUpperCase()}…`), missingFiles)))
     }
 
     const ddd = concat(blocks)
@@ -197,15 +218,15 @@ function logPath(path: 'PC/SC' | 'WebUSB', detail: string) {
   console.info(`[card-reader] cesta=${path} — ${detail}`)
 }
 
-async function downloadViaWindowsDriver(onProgress?: DownloadProgress): Promise<Uint8Array> {
+async function downloadViaWindowsDriver(onProgress?: DownloadProgress, missingFiles?: string[]): Promise<Uint8Array> {
   logPath('PC/SC', 'winscard.dll přes službu http://127.0.0.1:8787')
   onProgress?.('Připojuji čtečku přes Windows PC/SC…')
   const session = await PcscSession.open()
-  return readDriverCard(session, onProgress)
+  return readDriverCard(session, onProgress, missingFiles)
 }
 
 /** Složí výpis karty řidiče (TLV .DDD) včetně podpisů datových souborů. */
-export async function downloadDriverCard(onProgress?: DownloadProgress): Promise<Uint8Array> {
+export async function downloadDriverCard(onProgress?: DownloadProgress, missingFiles?: string[]): Promise<Uint8Array> {
   if (hostIsWindows()) {
     logPath('PC/SC', 'Windows, WebUSB se nepoužije')
     const ready = (await pcscBridgeReady()) || (await ensurePcscBridge())
@@ -213,12 +234,12 @@ export async function downloadDriverCard(onProgress?: DownloadProgress): Promise
       console.error('[card-reader] cesta=PC/SC nedostupná, přechod na WebUSB je na Windows vypnutý')
       throw new CardReaderError('unsupported', PCSC_UNAVAILABLE_MESSAGE)
     }
-    return downloadViaWindowsDriver(onProgress)
+    return downloadViaWindowsDriver(onProgress, missingFiles)
   }
 
   if (await pcscBridgeReady()) {
     logPath('PC/SC', 'místní služba je dostupná')
-    return downloadViaWindowsDriver(onProgress)
+    return downloadViaWindowsDriver(onProgress, missingFiles)
   }
 
   logPath('WebUSB', 'mimo Windows a PC/SC služba neběží')
@@ -246,14 +267,14 @@ export async function downloadDriverCard(onProgress?: DownloadProgress): Promise
   try {
     session = await CcidSession.open(device)
     await session.powerOn()
-    return await readDriverCard(session, onProgress)
+    return await readDriverCard(session, onProgress, missingFiles)
   } catch (cause) {
     await session?.close()
     if (cause instanceof CardReaderError && (cause.code === 'blocked' || cause.code === 'open')) {
       onProgress?.('Ovladač drží čtečku, zkouším PC/SC…')
       if (await ensurePcscBridge()) {
         logPath('PC/SC', 'WebUSB selhalo, místní služba naběhla')
-        return downloadViaWindowsDriver(onProgress)
+        return downloadViaWindowsDriver(onProgress, missingFiles)
       }
     }
     throw cause

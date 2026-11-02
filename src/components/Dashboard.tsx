@@ -5,6 +5,7 @@ import type { RecentCardFile } from '../lib/recentFiles'
 import { CardFileError, validateCardBytes } from '../lib/cardFile'
 import { CardReaderError } from '../lib/cardReader/errors'
 import { downloadDriverCard } from '../lib/cardReader/tachographDownload'
+import { saveDownloadedDdd, type DownloadedCardFile } from '../lib/saveDownloadedDdd'
 import { mapDddParserJson } from '../utils/dddMapper'
 import { parseDddBinary } from '../utils/dddParser'
 import { FileUploader } from './FileUploader'
@@ -12,7 +13,12 @@ import { FileUploader } from './FileUploader'
 type DashboardProps = {
   card: DriverCardData | null
   recentFiles: RecentCardFile[]
-  onDataLoaded: (parsedJson: DriverCardData, fileName: string) => void
+  downloadedCard: DownloadedCardFile | null
+  onDataLoaded: (
+    parsedJson: DriverCardData,
+    fileName: string,
+    raw?: { bytes: Uint8Array; missingFiles: string[] },
+  ) => void
   onOpenRecent: (file: RecentCardFile) => void
 }
 
@@ -26,11 +32,12 @@ function formatLoadedAt(ms: number): string {
   })
 }
 
-export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: DashboardProps) {
+export function Dashboard({ card, recentFiles, downloadedCard, onDataLoaded, onOpenRecent }: DashboardProps) {
   const [usbDialogOpen, setUsbDialogOpen] = useState(false)
   const [usbReading, setUsbReading] = useState(false)
   const [usbStatus, setUsbStatus] = useState<string | null>(null)
   const [usbError, setUsbError] = useState<{ title: string; message: string } | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   async function readFromReader() {
     if (usbReading) return
@@ -38,14 +45,15 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
     setUsbError(null)
     setUsbStatus('Připravuji komunikaci se čtečkou…')
     try {
-      const bytes = await downloadDriverCard((message) => setUsbStatus(message))
+      const missingFiles: string[] = []
+      const bytes = await downloadDriverCard((message) => setUsbStatus(message), missingFiles)
       validateCardBytes(bytes)
       setUsbStatus('Dekóduji výpis karty…')
       const parsed = mapDddParserJson(await parseDddBinary(bytes))
       const stamp = new Date()
       const pad = (n: number) => String(n).padStart(2, '0')
       const fileName = `C_ctecka_${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}.ddd`
-      onDataLoaded(parsed, fileName)
+      onDataLoaded(parsed, fileName, { bytes, missingFiles })
       setUsbDialogOpen(false)
       setUsbStatus(null)
     } catch (cause) {
@@ -83,6 +91,22 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
           <button type="button" className="btn-accent" onClick={() => setUsbDialogOpen(true)}>
             Načíst ze čtečky USB
           </button>
+          {downloadedCard && (
+            <button
+              type="button"
+              className="btn-accent"
+              onClick={() => {
+                setSaveError(null)
+                void saveDownloadedDdd(downloadedCard).catch((cause: unknown) => {
+                  if (cause instanceof DOMException && (cause.name === 'AbortError' || cause.name === 'NotAllowedError')) return
+                  setSaveError(cause instanceof Error ? cause.message : 'Soubor se nepodařilo uložit.')
+                })
+              }}
+            >
+              Uložit záznam (.DDD)
+            </button>
+          )}
+          {saveError && <p className="file-uploader-error-text">{saveError}</p>}
         </div>
 
         <aside className="import-panel import-panel--recent" aria-label="Poslední načtené soubory">

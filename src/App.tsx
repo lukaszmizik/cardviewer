@@ -6,11 +6,13 @@ import { GraphPage } from './pages/GraphPage'
 import type { DriverCardData } from './types/tacho'
 import type { AppTab } from './types/navigation'
 import { loadRecentFiles, rememberRecentFile, type RecentCardFile } from './lib/recentFiles'
+import type { DownloadedCardFile } from './lib/saveDownloadedDdd'
 
 function App() {
   const [currentTab, setCurrentTab] = useState<AppTab>('dashboard')
   const [card, setCard] = useState<DriverCardData | null>(null)
   const [recentFiles, setRecentFiles] = useState<RecentCardFile[]>(() => loadRecentFiles())
+  const [downloadedCard, setDownloadedCard] = useState<DownloadedCardFile | null>(null)
 
   function openCard(next: DriverCardData) {
     setCard(next)
@@ -23,11 +25,18 @@ function App() {
         <Dashboard
           card={card}
           recentFiles={recentFiles}
-          onDataLoaded={(parsedJson, fileName) => {
+          downloadedCard={downloadedCard}
+          onDataLoaded={(parsedJson, fileName, raw) => {
             setRecentFiles((current) => rememberRecentFile(current, fileName, parsedJson))
+            setDownloadedCard(
+              raw ? { bytes: raw.bytes, missingFiles: raw.missingFiles, cardNumber: parsedJson.cardNumber } : null,
+            )
             openCard(parsedJson)
           }}
-          onOpenRecent={(file) => openCard(file.card)}
+          onOpenRecent={(file) => {
+            setDownloadedCard(null)
+            openCard(file.card)
+          }}
         />
       )}
       {currentTab === 'graph' && (
