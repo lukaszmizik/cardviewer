@@ -25,8 +25,15 @@ export function Layout({ currentTab, onTabChange, card, children }: LayoutProps)
     <div className="app-shell">
       <header className="app-header">
         <div className="app-brand">
-          <img src="/favicon.svg" alt="" className="app-logo" width={28} height={27} />
-          <span className="app-title">TachoCard Viewer</span>
+          <div className="app-brand-row">
+            <img src="/logo.png" alt="" className="app-logo" width={112} height={63} />
+            <h1 className="app-title">Čtečka karet v 1.0</h1>
+          </div>
+          <aside className="app-author">
+            <p className="app-author-name">Lukáš Mizera</p>
+            <a className="app-author-mail" href="mailto:lukas@zmizik.com">lukas@zmizik.com</a>
+            <p className="app-author-note">Veškerá data do aplikace nahráváte dobrovolně.</p>
+          </aside>
         </div>
 
         <nav className="app-nav" aria-label="Hlavní navigace">
