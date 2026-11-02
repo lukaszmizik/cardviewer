@@ -32,6 +32,8 @@ export async function ensurePcscBridge(): Promise<boolean> {
 
 /** Čtení přes ovladač Windows (PC/SC), stejnou cestou jako Datacho. */
 export class PcscSession implements CardChannel {
+  private released = false
+
   static async open(): Promise<PcscSession> {
     const response = await fetch(`${PCSC_BASE}/pcsc/open`, { method: 'POST' })
     if (!response.ok) {
@@ -69,10 +71,13 @@ export class PcscSession implements CardChannel {
   }
 
   async close(): Promise<void> {
+    if (this.released) return
+    this.released = true
     try {
-      await fetch(`${PCSC_BASE}/pcsc/close`, { method: 'POST' })
-    } catch {
-      /* místní služba už neběží */
+      const response = await fetch(`${PCSC_BASE}/pcsc/close`, { method: 'POST' })
+      console.info(`[card-reader] PC/SC spojení uvolněno (${response.status})`)
+    } catch (cause) {
+      console.info('[card-reader] PC/SC spojení se nepodařilo uvolnit, místní služba neodpovídá', cause)
     }
   }
 }

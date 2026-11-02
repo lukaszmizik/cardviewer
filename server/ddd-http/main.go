@@ -70,9 +70,11 @@ func handlePcscOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := pcsc.Open(); err != nil {
+		log.Printf("PC/SC open: %v", err)
 		writePcscError(w, err)
 		return
 	}
+	log.Printf("PC/SC open: spojení se čtečkou navázáno")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -101,6 +103,7 @@ func handlePcscClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pcsc.Close()
+	log.Printf("PC/SC close: spojení uvolněno")
 	w.WriteHeader(http.StatusNoContent)
 }
 

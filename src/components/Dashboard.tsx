@@ -36,7 +36,7 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
     if (usbReading) return
     setUsbReading(true)
     setUsbError(null)
-    setUsbStatus('Čekám na výběr čtečky…')
+    setUsbStatus('Připravuji komunikaci se čtečkou…')
     try {
       const bytes = await downloadDriverCard((message) => setUsbStatus(message))
       validateCardBytes(bytes)

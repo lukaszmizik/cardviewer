@@ -1,4 +1,4 @@
-import { CardReaderError } from './errors'
+import { CardReaderError, PCSC_UNAVAILABLE_MESSAGE } from './errors'
 import { CcidSession } from './ccid'
 import { ensurePcscBridge, pcscBridgeReady, PcscSession, type CardChannel } from './pcscBridge'
 
@@ -108,6 +108,10 @@ async function readSelectedFile(session: CardChannel): Promise<Uint8Array> {
     if (response.sw1 === 0x6c) {
       response = await session.transmit(readBinary(offset, response.sw2))
     }
+    if (response.sw1 === 0x69 && response.sw2 === 0x82 && parts.length === 0) {
+      console.info('[card-reader] soubor vrací SW 6982, čtení pokračuje dalším souborem')
+      return new Uint8Array()
+    }
     if (response.sw1 === 0x6b || (response.sw1 === 0x6a && response.sw2 === 0x86)) break
     if (response.sw1 === 0x62 && response.sw2 === 0x82) {
       if (response.data.length > 0) parts.push(response.data)
@@ -184,17 +188,40 @@ async function readDriverCard(session: CardChannel, onProgress?: DownloadProgres
   }
 }
 
+function hostIsWindows(): boolean {
+  if (typeof navigator === 'undefined') return false
+  return /Win/i.test(navigator.platform) || /Windows/i.test(navigator.userAgent)
+}
+
+function logPath(path: 'PC/SC' | 'WebUSB', detail: string) {
+  console.info(`[card-reader] cesta=${path} — ${detail}`)
+}
+
 async function downloadViaWindowsDriver(onProgress?: DownloadProgress): Promise<Uint8Array> {
-  onProgress?.('Připojuji čtečku přes ovladač Windows…')
+  logPath('PC/SC', 'winscard.dll přes službu http://127.0.0.1:8787')
+  onProgress?.('Připojuji čtečku přes Windows PC/SC…')
   const session = await PcscSession.open()
   return readDriverCard(session, onProgress)
 }
 
 /** Složí výpis karty řidiče (TLV .DDD) včetně podpisů datových souborů. */
 export async function downloadDriverCard(onProgress?: DownloadProgress): Promise<Uint8Array> {
-  if (await pcscBridgeReady()) {
+  if (hostIsWindows()) {
+    logPath('PC/SC', 'Windows, WebUSB se nepoužije')
+    const ready = (await pcscBridgeReady()) || (await ensurePcscBridge())
+    if (!ready) {
+      console.error('[card-reader] cesta=PC/SC nedostupná, přechod na WebUSB je na Windows vypnutý')
+      throw new CardReaderError('unsupported', PCSC_UNAVAILABLE_MESSAGE)
+    }
     return downloadViaWindowsDriver(onProgress)
   }
+
+  if (await pcscBridgeReady()) {
+    logPath('PC/SC', 'místní služba je dostupná')
+    return downloadViaWindowsDriver(onProgress)
+  }
+
+  logPath('WebUSB', 'mimo Windows a PC/SC služba neběží')
 
   if (typeof navigator === 'undefined' || !navigator.usb) {
     throw new CardReaderError(
@@ -223,8 +250,11 @@ export async function downloadDriverCard(onProgress?: DownloadProgress): Promise
   } catch (cause) {
     await session?.close()
     if (cause instanceof CardReaderError && (cause.code === 'blocked' || cause.code === 'open')) {
-      onProgress?.('Ovladač Windows drží čtečku, přepínám na něj…')
-      if (await ensurePcscBridge()) return downloadViaWindowsDriver(onProgress)
+      onProgress?.('Ovladač drží čtečku, zkouším PC/SC…')
+      if (await ensurePcscBridge()) {
+        logPath('PC/SC', 'WebUSB selhalo, místní služba naběhla')
+        return downloadViaWindowsDriver(onProgress)
+      }
     }
     throw cause
   }

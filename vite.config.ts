@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import net from 'node:net'
+import path from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type Plugin } from 'vite'
 
@@ -19,8 +20,8 @@ function localCardBridge(): Plugin {
     name: 'local-card-bridge',
     async configureServer(server) {
       if (await parserPortOpen()) return
-      child = spawn('go', ['run', './server/ddd-http'], {
-        cwd: server.config.root,
+      child = spawn('go', ['run', '.'], {
+        cwd: path.join(server.config.root, 'server', 'ddd-http'),
         stdio: 'inherit',
         windowsHide: true,
       })

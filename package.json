@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "parser": "go run ./server/ddd-http",
+    "parser": "go run -C ./server/ddd-http .",
     "build:wasm": "node scripts/build-wasm.mjs",
     "build": "node scripts/build-wasm.mjs && vite build",
     "lint": "oxlint",
