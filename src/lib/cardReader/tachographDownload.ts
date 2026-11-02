@@ -99,7 +99,7 @@ async function selectOk(session: CardChannel, apdu: Uint8Array): Promise<boolean
   return response.sw1 === 0x90 && response.sw2 === 0x00
 }
 
-async function readSelectedFile(session: CardChannel): Promise<Uint8Array> {
+async function readSelectedFile(session: CardChannel): Promise<{ bytes: Uint8Array; denied: boolean }> {
   const parts: Uint8Array[] = []
   let offset = 0
   while (offset < MAX_EF_BYTES) {
@@ -109,7 +109,7 @@ async function readSelectedFile(session: CardChannel): Promise<Uint8Array> {
       response = await session.transmit(readBinary(offset, response.sw2))
     }
     if (response.sw1 === 0x69 && response.sw2 === 0x82 && parts.length === 0) {
-      return new Uint8Array()
+      return { bytes: new Uint8Array(), denied: true }
     }
     if (response.sw1 === 0x6b || (response.sw1 === 0x6a && response.sw2 === 0x86)) break
     if (response.sw1 === 0x62 && response.sw2 === 0x82) {
@@ -128,17 +128,19 @@ async function readSelectedFile(session: CardChannel): Promise<Uint8Array> {
     const expected = ask >= 256 ? 256 : ask
     if (response.data.length < expected) break
   }
-  return concat(parts)
+  return { bytes: concat(parts), denied: false }
 }
 
 function blocksFromFile(spec: EfSpec, bytes: Uint8Array): Uint8Array[] {
   if (bytes.length === 0) return []
-  if (spec.signatureLength <= 0 || bytes.length <= spec.signatureLength) {
-    return [tlv(spec.fid, spec.dataAppendix, bytes)]
+  // Soubor na kartě obsahuje jen data. Podpis je v DDD samostatný záznam a karta ho
+  // přes READ BINARY nevrací. Uříznutí konce souboru ničí jméno, poslední místa a GPS.
+  if (spec.signatureLength > 0) {
+    console.info(
+      `[card-reader] soubor ${fileLabel(spec.fid)} ${bytes.length} B dat, podpis karta neposkytla a do DDD se nedoplní`,
+    )
   }
-  const data = bytes.subarray(0, bytes.length - spec.signatureLength)
-  const signature = bytes.subarray(bytes.length - spec.signatureLength)
-  return [tlv(spec.fid, spec.dataAppendix, data), tlv(spec.fid, spec.sigAppendix, signature)]
+  return [tlv(spec.fid, spec.dataAppendix, bytes)]
 }
 
 function fileLabel(fid: number): string {
@@ -165,12 +167,16 @@ async function readFiles(
       noteMissing(missingFiles, spec.fid, 'výběr souboru selhal')
       continue
     }
-    const bytes = await readSelectedFile(session)
-    if (bytes.length === 0) {
-      noteMissing(missingFiles, spec.fid, 'karta nevrátila data')
+    const read = await readSelectedFile(session)
+    if (read.bytes.length === 0) {
+      noteMissing(
+        missingFiles,
+        spec.fid,
+        read.denied ? 'SW 6982, bez autentizace karty nedostupné' : 'karta nevrátila data',
+      )
       continue
     }
-    blocks.push(...blocksFromFile(spec, bytes))
+    blocks.push(...blocksFromFile(spec, read.bytes))
   }
   return blocks
 }
