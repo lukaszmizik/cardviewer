@@ -38,6 +38,7 @@ export function Dashboard({ card, recentFiles, downloadedCard, onDataLoaded, onO
   const [usbStatus, setUsbStatus] = useState<string | null>(null)
   const [usbError, setUsbError] = useState<{ title: string; message: string } | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveMessage, setSaveMessage] = useState<string | null>(null)
 
   async function readFromReader() {
     if (usbReading) return
@@ -91,21 +92,26 @@ export function Dashboard({ card, recentFiles, downloadedCard, onDataLoaded, onO
           <button type="button" className="btn-accent" onClick={() => setUsbDialogOpen(true)}>
             Načíst ze čtečky USB
           </button>
-          {downloadedCard && (
-            <button
-              type="button"
-              className="btn-accent"
-              onClick={() => {
-                setSaveError(null)
-                void saveDownloadedDdd(downloadedCard).catch((cause: unknown) => {
-                  if (cause instanceof DOMException && (cause.name === 'AbortError' || cause.name === 'NotAllowedError')) return
+          <button
+            type="button"
+            className="btn-accent"
+            disabled={!downloadedCard}
+            onClick={() => {
+              if (!downloadedCard) return
+              setSaveError(null)
+              setSaveMessage(null)
+              void saveDownloadedDdd(downloadedCard)
+                .then((fileName) => {
+                  if (fileName) setSaveMessage(`Soubor ${fileName} byl uložen.`)
+                })
+                .catch((cause: unknown) => {
                   setSaveError(cause instanceof Error ? cause.message : 'Soubor se nepodařilo uložit.')
                 })
-              }}
-            >
-              Uložit záznam (.DDD)
-            </button>
-          )}
+            }}
+          >
+            Exportovat .DDD
+          </button>
+          {saveMessage && <p className="file-uploader-status">{saveMessage}</p>}
           {saveError && <p className="file-uploader-error-text">{saveError}</p>}
         </div>
 

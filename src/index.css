@@ -197,9 +197,13 @@ body {
   background: #4338ca;
 }
 
-.btn-accent:disabled {
-  opacity: 0.65;
-  cursor: wait;
+.btn-accent:disabled,
+.btn-accent:disabled:hover {
+  background: #cbd5e1;
+  color: #64748b;
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 1;
 }
 
 .dropzone {

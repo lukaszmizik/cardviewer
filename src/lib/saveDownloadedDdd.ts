@@ -4,21 +4,38 @@ export type DownloadedCardFile = {
   missingFiles: string[]
 }
 
-type DirectoryPicker = (options?: { mode?: 'readwrite'; id?: string }) => Promise<FileSystemDirectoryHandle>
+type SaveFilePicker = (options?: {
+  suggestedName?: string
+  types?: { description?: string; accept: Record<string, string[]> }[]
+}) => Promise<FileSystemFileHandle>
 
 export function dddFileName(cardNumber: string): string {
   const number = cardNumber.replace(/[^\w.-]+/g, '') || 'bezcisla'
   return `karta_${number}.DDD`
 }
 
-function folderPicker(): DirectoryPicker | null {
-  const host = window as Window & { showDirectoryPicker?: DirectoryPicker }
-  if (typeof host.showDirectoryPicker !== 'function') return null
-  return host.showDirectoryPicker.bind(window)
+function savePicker(): SaveFilePicker | null {
+  const host = window as Window & { showSaveFilePicker?: SaveFilePicker }
+  if (typeof host.showSaveFilePicker !== 'function') return null
+  return host.showSaveFilePicker.bind(window)
 }
 
-/** Zapíše původní bajty výpisu do složky vybrané v dialogu prohlížeče. */
-export async function saveDownloadedDdd(card: DownloadedCardFile): Promise<void> {
+function pickerWasCancelled(cause: unknown): boolean {
+  return cause instanceof DOMException && (cause.name === 'AbortError' || cause.name === 'NotAllowedError')
+}
+
+function saveFailure(cause: unknown): Error {
+  if (cause instanceof DOMException) {
+    if (cause.name === 'NotAllowedError' || cause.name === 'SecurityError' || cause.name === 'NoModificationAllowedError') {
+      return new Error('Prohlížeč nepovolil uložení souboru. Zvolte složku, do které lze zapisovat, například Dokumenty nebo Plocha.')
+    }
+  }
+  if (cause instanceof Error && cause.message) return cause
+  return new Error('Soubor se nepodařilo uložit.')
+}
+
+/** Otevře dialog uložení s navrženým názvem a zapíše původní bajty výpisu. Zrušení vrátí null. */
+export async function saveDownloadedDdd(card: DownloadedCardFile): Promise<string | null> {
   const fileName = dddFileName(card.cardNumber)
   if (card.missingFiles.length > 0) {
     console.info(`[card-reader] neúplný export ${fileName}, chybí soubory: ${card.missingFiles.join(', ')}`)
@@ -26,14 +43,40 @@ export async function saveDownloadedDdd(card: DownloadedCardFile): Promise<void>
     console.info(`[card-reader] export ${fileName}, ${card.bytes.length} B`)
   }
 
-  const pick = folderPicker()
+  const pick = savePicker()
   if (!pick) {
-    throw new Error('Tento prohlížeč neumí vybrat složku. Uložení otevřete v Chrome nebo Edge.')
+    throw new Error('Tento prohlížeč neumí dialog uložení souboru. Export otevřete v Chrome nebo Edge.')
   }
 
-  const directory = await pick({ mode: 'readwrite', id: 'tacho-ddd' })
-  const handle = await directory.getFileHandle(fileName, { create: true })
+  let handle: FileSystemFileHandle
+  try {
+    handle = await pick({
+      suggestedName: fileName,
+      types: [
+        {
+          description: 'Tachografický výpis DDD',
+          accept: { 'application/octet-stream': ['.DDD'] },
+        },
+      ],
+    })
+  } catch (cause) {
+    if (pickerWasCancelled(cause)) return null
+    throw saveFailure(cause)
+  }
+
   const writable = await handle.createWritable()
-  await writable.write(new Blob([card.bytes.slice()]))
-  await writable.close()
+  try {
+    await writable.write(card.bytes)
+    await writable.close()
+  } catch (cause) {
+    await writable.abort().catch(() => undefined)
+    throw saveFailure(cause)
+  }
+
+  const written = await handle.getFile()
+  if (written.size !== card.bytes.byteLength) {
+    throw new Error('Soubor se nepodařilo zapsat celý.')
+  }
+  console.info(`[card-reader] uloženo ${written.name}, ${written.size} B`)
+  return written.name
 }
