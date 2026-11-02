@@ -332,14 +332,61 @@ function activityKindFromChange(change: DddActivityChange): ActivityKind {
   return WORK_TYPE_TO_KIND[change.work_type ?? 0] ?? 'unknown'
 }
 
-function pickActivityBlock(card: DddParserCardJson): DddActivityBlock | undefined {
-  const gen2 = card.card_driver_activity_2
-  const gen1 = card.card_driver_activity_1
-  const n2 = gen2?.decoded_activity_daily_records?.length ?? 0
-  const n1 = gen1?.decoded_activity_daily_records?.length ?? 0
-  if (n2 > 0) return gen2
-  if (n1 > 0) return gen1
-  return gen2 ?? gen1
+function dayHasInsertedCard(day: DddDailyRecord): boolean {
+  return (day.activity_change_info ?? []).some((raw) => {
+    const change = normalizeActivityChange(raw)
+    return change != null && change.card_present !== false
+  })
+}
+
+/**
+ * Jednotka 1. generace zapisuje jen do starého souboru, jednotka 2. generace do nového.
+ * Den, který je jen v jednom z nich, se nesmí zahodit. Když jsou zapsané oba a liší se,
+ * platí ten, ve kterém byla karta opravdu ve vozidle, jinak bohatší záznam.
+ */
+function mergeActivityDays(card: DddParserCardJson): DddDailyRecord[] {
+  const byDay = new Map<number, DddDailyRecord>()
+  const take = (day: DddDailyRecord, incomingIsGen2: boolean) => {
+    const key = parseUnixMs(day.activity_record_date)
+    if (key == null) return
+    const existing = byDay.get(key)
+    if (!existing) {
+      byDay.set(key, day)
+      return
+    }
+    const existingInserted = dayHasInsertedCard(existing)
+    const incomingInserted = dayHasInsertedCard(day)
+    if (existingInserted !== incomingInserted) {
+      if (incomingInserted) byDay.set(key, day)
+      return
+    }
+    const existingCount = existing.activity_change_info?.length ?? 0
+    const incomingCount = day.activity_change_info?.length ?? 0
+    if (incomingCount !== existingCount) {
+      if (incomingCount > existingCount) byDay.set(key, day)
+      return
+    }
+    if (incomingIsGen2) byDay.set(key, day)
+  }
+  for (const day of card.card_driver_activity_1?.decoded_activity_daily_records ?? []) take(day, false)
+  for (const day of card.card_driver_activity_2?.decoded_activity_daily_records ?? []) take(day, true)
+  return [...byDay.values()]
+}
+
+function mergeByTime<T>(primary: T[] | undefined, secondary: T[] | undefined, timeOf: (item: T) => string | null | undefined): T[] {
+  const merged: T[] = []
+  const seen = new Set<string>()
+  for (const item of primary ?? []) {
+    const key = timeOf(item)
+    if (key) seen.add(key)
+    merged.push(item)
+  }
+  for (const item of secondary ?? []) {
+    const key = timeOf(item)
+    if (key && seen.has(key)) continue
+    merged.push(item)
+  }
+  return merged
 }
 
 type SlotChange = {
@@ -376,12 +423,32 @@ function clipActivity<T extends { startUtc: number; endUtc: number; durationMinu
 
 /**
  * Ruční záznam je činnost bez vložené karty, která má na kartě konkrétní konec.
- * Konec může být týž den i o několik dní později, když mezitím karta nemá žádný denní záznam.
  * Otevřený úsek bez další změny ruční záznam není.
  */
 function isExplicitManualEntry(current: SlotChange, next: SlotChange | undefined): boolean {
   if (cardIsPresent(current.change)) return false
   return next != null
+}
+
+/** Stejný slot, stejná činnost a pořád bez karty — záznam v mezeře jen pokračuje. */
+function sameAbsentActivity(current: SlotChange, next: SlotChange): boolean {
+  return (
+    !cardIsPresent(current.change) &&
+    !cardIsPresent(next.change) &&
+    (current.change.driver === false) === (next.change.driver === false) &&
+    (current.change.work_type ?? 0) === (next.change.work_type ?? 0)
+  )
+}
+
+/** Mezi denními záznamy chybí aspoň jeden celý den. */
+function spansUnrecordedDays(current: SlotChange, next: SlotChange, dayMs: number): boolean {
+  return next.dayStart - current.dayStart > dayMs
+}
+
+/** Půlnoc místního času po začátku činnosti. Chybějící dny Datacho vede od této hranice. */
+function nextLocalMidnight(ms: number): number {
+  const date = new Date(ms)
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime()
 }
 
 function cardPresentIntervals(collected: SlotChange[]): Array<{ start: number; end: number }> {
@@ -482,8 +549,7 @@ function exclusiveByPriority(activities: Activity[]): Activity[] {
 }
 
 function mapActivities(card: DddParserCardJson): Activity[] {
-  const block = pickActivityBlock(card)
-  const days = block?.decoded_activity_daily_records ?? []
+  const days = mergeActivityDays(card)
   const collected: SlotChange[] = []
 
   for (const day of days) {
@@ -510,7 +576,16 @@ function mapActivities(card: DddParserCardJson): Activity[] {
     const current = collected[i]!
     const next = collected[i + 1]
     const startUtc = changeTime(current)
-    const endUtc = next ? changeTime(next) : current.dayStart + dayMs
+    let endUtc = next ? changeTime(next) : current.dayStart + dayMs
+    let unknownUntil: number | null = null
+    if (next && spansUnrecordedDays(current, next, dayMs) && !sameAbsentActivity(current, next)) {
+      const recordedUntil = Math.min(current.dayStart + dayMs, nextLocalMidnight(startUtc))
+      const nextUtc = changeTime(next)
+      if (recordedUntil > startUtc && recordedUntil < nextUtc) {
+        endUtc = recordedUntil
+        unknownUntil = nextUtc
+      }
+    }
     const durationMinutes = Math.round((endUtc - startUtc) / 60_000)
     if (durationMinutes <= 0) continue
 
@@ -530,6 +605,17 @@ function mapActivities(card: DddParserCardJson): Activity[] {
       isCrew: inVehicle && current.change.team === true,
       slot,
     })
+    if (unknownUntil != null) {
+      activities.push({
+        id: `gap-${i}`,
+        kind: 'unknown',
+        startUtc: endUtc,
+        endUtc: unknownUntil,
+        durationMinutes: Math.round((unknownUntil - endUtc) / 60_000),
+        isManualEntry: false,
+        slot: 1,
+      })
+    }
   }
 
   return assignVehicleRegistrations(exclusiveByPriority(activities), card)
@@ -542,7 +628,11 @@ function registrationPlate(value: string | null | undefined): string | null {
 
 /** Značka z období, kdy byla karta ve vozidle. Při překryvu bere novější záznam. */
 function assignVehicleRegistrations(activities: Activity[], card: DddParserCardJson): Activity[] {
-  const uses = (firstDefined(card.card_vehicles_used_2, card.card_vehicles_used_1)?.card_vehicle_records ?? [])
+  const uses = mergeByTime(
+    card.card_vehicles_used_2?.card_vehicle_records,
+    card.card_vehicles_used_1?.card_vehicle_records,
+    (record) => record.vehicle_first_use,
+  )
     .map((record) => ({
       first: parseUnixMs(record.vehicle_first_use),
       last: parseUnixMs(record.vehicle_last_use),
@@ -585,8 +675,12 @@ function mapLocations(card: DddParserCardJson): Location[] {
     index += 1
   }
 
-  const places = firstDefined(card.card_place_daily_work_period_2, card.card_place_daily_work_period_1)
-  for (const place of places?.place_records ?? []) {
+  const places = mergeByTime(
+    card.card_place_daily_work_period_2?.place_records,
+    card.card_place_daily_work_period_1?.place_records,
+    (place) => place.entry_time,
+  )
+  for (const place of places) {
     const entryType = place.entry_type_daily_work_period ?? 0
     const type: LocationRecordType = entryType === 1 || entryType === 3 || entryType === 5 ? 'end_country' : 'start_country'
     const code = nationCode(place.daily_work_period_country)
@@ -655,8 +749,12 @@ function mapViolations(card: DddParserCardJson): ComplianceViolation[] {
 }
 
 function lastWithdrawalUtc(card: DddParserCardJson): number | null {
-  const vehicles = firstDefined(card.card_vehicles_used_2, card.card_vehicles_used_1)
-  const times = (vehicles?.card_vehicle_records ?? [])
+  const vehicles = mergeByTime(
+    card.card_vehicles_used_2?.card_vehicle_records,
+    card.card_vehicles_used_1?.card_vehicle_records,
+    (record) => record.vehicle_first_use,
+  )
+  const times = vehicles
     .map((record) => parseUnixMs(record.vehicle_last_use))
     .filter((ms): ms is number => ms != null)
   return times.length ? Math.max(...times) : null
