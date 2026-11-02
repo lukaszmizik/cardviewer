@@ -9,9 +9,20 @@ type SaveFilePicker = (options?: {
   types?: { description?: string; accept: Record<string, string[]> }[]
 }) => Promise<FileSystemFileHandle>
 
-export function dddFileName(cardNumber: string): string {
+export function dddFileName(cardNumber: string, when = new Date()): string {
   const number = cardNumber.replace(/[^\w.-]+/g, '') || 'bezcisla'
-  return `karta_${number}.DDD`
+  const pad = (value: number, width = 2) => String(value).padStart(width, '0')
+  const stamp = [
+    when.getFullYear(),
+    pad(when.getMonth() + 1),
+    pad(when.getDate()),
+    '_',
+    pad(when.getHours()),
+    pad(when.getMinutes()),
+    pad(when.getSeconds()),
+    pad(when.getMilliseconds(), 3),
+  ].join('')
+  return `karta_${number}_${stamp}.DDD`
 }
 
 function savePicker(): SaveFilePicker | null {
