@@ -156,7 +156,7 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
               Čtečka USB
             </h2>
             <p className="usb-dialog-text">
-              Vložte kartu čipem napřed. S ovladačem Thales se čte přes Windows, stejně jako v Datacho — ten program nechte při čtení zavřený.
+              Připojte kartu s čipem
             </p>
             {usbStatus && <p className="file-uploader-status">{usbStatus}</p>}
             {usbError && (
@@ -167,7 +167,7 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
             )}
             <div className="dashboard-actions">
               <button type="button" className="btn-accent" disabled={usbReading} onClick={() => void readFromReader()}>
-                {usbReading ? 'Načítám…' : 'Připojit čtečku a načíst kartu'}
+                {usbReading ? 'Načítám…' : 'Stažení dat'}
               </button>
               <button type="button" className="work-week-graph-nav-btn" disabled={usbReading} onClick={() => setUsbDialogOpen(false)}>
                 Zavřít
