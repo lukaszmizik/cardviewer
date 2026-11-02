@@ -42,9 +42,8 @@ body {
 
 .app-logo {
   display: block;
-  width: 96px;
+  width: 160px;
   height: auto;
-  border-radius: 10px;
 }
 
 .app-identity {
@@ -63,17 +62,27 @@ body {
   line-height: 1.2;
 }
 
+.app-footer {
+  padding: 0 1.5rem 1.5rem;
+}
+
 .app-author {
-  max-width: 22rem;
-  margin: 0;
-  padding: 8px 12px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 80rem;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 18px;
+  padding: 14px 2rem;
   border: 1px solid #334155;
   border-left: 3px solid #38bdf8;
-  border-radius: 8px;
+  border-radius: 12px;
   background: #1e293b;
   color: #cbd5e1;
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: 14px;
+  line-height: 1.45;
 }
 
 .app-author-name,
@@ -96,7 +105,7 @@ body {
 }
 
 .app-author-note {
-  margin-top: 4px;
+  color: #94a3b8;
 }
 
 .app-tools {
@@ -168,7 +177,7 @@ body {
 
 .app-main {
   flex: 1;
-  padding: 2rem 1.5rem;
+  padding: 2rem 1.5rem 0.75rem;
 }
 
 .app-content-card {
@@ -1398,7 +1407,7 @@ body {
   .app-logo {
     grid-row: 1;
     grid-column: 1;
-    width: 72px;
+    width: 120px;
   }
 
   .app-identity {
@@ -1434,7 +1443,16 @@ body {
   }
 
   .app-main {
-    padding: 0.75rem max(0.75rem, env(safe-area-inset-right)) max(0.75rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
+    padding: 0.75rem max(0.75rem, env(safe-area-inset-right)) 0.5rem max(0.75rem, env(safe-area-inset-left));
+  }
+
+  .app-footer {
+    padding: 0 max(0.75rem, env(safe-area-inset-right)) max(0.75rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
+  }
+
+  .app-author {
+    padding: 12px 0.75rem;
+    border-radius: 10px;
   }
 
   .app-content-card,

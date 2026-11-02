@@ -24,7 +24,13 @@ export function Layout({ currentTab, onTabChange, card, children }: LayoutProps)
   return (
     <div className="app-shell">
       <header className="app-header">
-        <img src="/logo.png" alt="" className="app-logo" width={96} height={54} />
+        <img
+          src="/logo.png"
+          alt="Čtečka karet"
+          className="app-logo"
+          width={160}
+          height={87}
+        />
         <div className="app-identity">
           <h1 className="app-title">Čtečka karet v 1.0</h1>
         </div>
@@ -52,6 +58,13 @@ export function Layout({ currentTab, onTabChange, card, children }: LayoutProps)
       </header>
 
       <main className="app-main">{children}</main>
+      <footer className="app-footer">
+        <aside className="app-author">
+          <p className="app-author-name">Lukáš Mizera</p>
+          <a className="app-author-mail" href="mailto:lukas@zmizik.com">lukas@zmizik.com</a>
+          <p className="app-author-note">Veškerá data do aplikace nahráváte dobrovolně.</p>
+        </aside>
+      </footer>
     </div>
   )
 }
