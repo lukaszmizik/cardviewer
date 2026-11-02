@@ -375,19 +375,13 @@ function clipActivity<T extends { startUtc: number; endUtc: number; durationMinu
 }
 
 /**
- * Explicitní ruční vklad: bez karty a další změna je téhož dne, nebo
- * pokračování stejné činnosti o půlnoci (00:00 další den, stále bez karty).
+ * Ruční záznam je činnost bez vložené karty, která má na kartě konkrétní konec.
+ * Konec může být týž den i o několik dní později, když mezitím karta nemá žádný denní záznam.
+ * Otevřený úsek bez další změny ruční záznam není.
  */
-function isExplicitManualEntry(current: SlotChange, next: SlotChange | undefined, dayMs: number): boolean {
+function isExplicitManualEntry(current: SlotChange, next: SlotChange | undefined): boolean {
   if (cardIsPresent(current.change)) return false
-  if (!next) return false
-  if (next.dayStart === current.dayStart) return true
-  return (
-    next.dayStart === current.dayStart + dayMs &&
-    next.minutes === 0 &&
-    !cardIsPresent(next.change) &&
-    next.change.work_type === current.change.work_type
-  )
+  return next != null
 }
 
 function cardPresentIntervals(collected: SlotChange[]): Array<{ start: number; end: number }> {
@@ -523,7 +517,7 @@ function mapActivities(card: DddParserCardJson): Activity[] {
     if (isInactiveCoDriverStatus(current, startUtc, endUtc, presentIntervals)) continue
 
     const inVehicle = cardIsPresent(current.change)
-    const explicitManual = isExplicitManualEntry(current, next, dayMs)
+    const explicitManual = isExplicitManualEntry(current, next)
     const slot: 1 | 2 = current.change.driver === false ? 2 : 1
 
     activities.push({
