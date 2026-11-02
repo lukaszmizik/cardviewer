@@ -2,6 +2,11 @@ import { useState } from 'react'
 import type { DriverCardData } from '../types/tacho'
 import { driverDisplayName } from '../lib/placeholderCard'
 import type { RecentCardFile } from '../lib/recentFiles'
+import { CardFileError, validateCardBytes } from '../lib/cardFile'
+import { CardReaderError } from '../lib/cardReader/errors'
+import { downloadDriverCard } from '../lib/cardReader/tachographDownload'
+import { mapDddParserJson } from '../utils/dddMapper'
+import { parseDddBinary } from '../utils/dddParser'
 import { FileUploader } from './FileUploader'
 
 type DashboardProps = {
@@ -23,6 +28,39 @@ function formatLoadedAt(ms: number): string {
 
 export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: DashboardProps) {
   const [usbDialogOpen, setUsbDialogOpen] = useState(false)
+  const [usbReading, setUsbReading] = useState(false)
+  const [usbStatus, setUsbStatus] = useState<string | null>(null)
+  const [usbError, setUsbError] = useState<string | null>(null)
+
+  async function readFromReader() {
+    if (usbReading) return
+    setUsbReading(true)
+    setUsbError(null)
+    setUsbStatus('Čekám na výběr čtečky…')
+    try {
+      const bytes = await downloadDriverCard((message) => setUsbStatus(message))
+      validateCardBytes(bytes)
+      setUsbStatus('Dekóduji výpis karty…')
+      const parsed = mapDddParserJson(await parseDddBinary(bytes))
+      const stamp = new Date()
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const fileName = `C_ctecka_${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}.ddd`
+      onDataLoaded(parsed, fileName)
+      setUsbDialogOpen(false)
+      setUsbStatus(null)
+    } catch (cause) {
+      const message =
+        cause instanceof CardReaderError || cause instanceof CardFileError
+          ? cause.message
+          : cause instanceof Error
+            ? cause.message
+            : 'Kartu se nepodařilo načíst.'
+      setUsbError(message)
+      setUsbStatus(null)
+    } finally {
+      setUsbReading(false)
+    }
+  }
 
   return (
     <section className="app-content-card dashboard">
@@ -110,11 +148,20 @@ export function Dashboard({ card, recentFiles, onDataLoaded, onOpenRecent }: Das
               Čtečka USB
             </h2>
             <p className="usb-dialog-text">
-              Připojte čtečku karet, vložte kartu řidiče a potvrďte čtení. Přímé čtení ze zařízení doplníme později.
+              Připojte čtečku, vložte kartu řidiče a zvolte zařízení v okně prohlížeče. Funguje v Chrome a Edge (WebUSB).
             </p>
+            {usbStatus && <p className="file-uploader-status">{usbStatus}</p>}
+            {usbError && (
+              <div className="work-week-warnings-panel file-uploader-error" role="alert">
+                <p className="file-uploader-error-text">{usbError}</p>
+              </div>
+            )}
             <div className="dashboard-actions">
-              <button type="button" className="work-week-graph-nav-btn" onClick={() => setUsbDialogOpen(false)}>
-                Zrušit
+              <button type="button" className="btn-accent" disabled={usbReading} onClick={() => void readFromReader()}>
+                {usbReading ? 'Načítám…' : 'Připojit čtečku a načíst kartu'}
+              </button>
+              <button type="button" className="work-week-graph-nav-btn" disabled={usbReading} onClick={() => setUsbDialogOpen(false)}>
+                Zavřít
               </button>
             </div>
           </div>

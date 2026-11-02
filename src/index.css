@@ -197,6 +197,11 @@ body {
   background: #4338ca;
 }
 
+.btn-accent:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 .dropzone {
   display: flex;
   flex-direction: column;
