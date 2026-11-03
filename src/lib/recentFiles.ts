@@ -51,7 +51,12 @@ export function rememberRecentFile(
     cardNumber: card.cardNumber,
     card,
   }
-  if (raw) rawById.set(next.id, raw)
+  if (raw) {
+    rawById.set(next.id, {
+      bytes: raw.bytes.slice(),
+      missingFiles: raw.missingFiles.slice(),
+    })
+  }
   const withoutSameName = current.filter((item) => item.fileName.toLowerCase() !== fileName.toLowerCase())
   const list = [next, ...withoutSameName].slice(0, MAX_RECENT_FILES)
   const kept = new Set(list.map((item) => item.id))

@@ -150,12 +150,13 @@ export function Dashboard({
                       disabled={!raw}
                       title={raw ? `Uložit ${file.fileName}` : 'Soubor už v prohlížeči není. Načtěte kartu znovu.'}
                       onClick={() => {
-                        if (!raw) return
+                        const current = recentCardRaw(file.id)
+                        if (!current) return
                         setSaveError(null)
                         setSaveMessage(null)
                         void saveDownloadedDdd({
-                          bytes: raw.bytes,
-                          missingFiles: raw.missingFiles,
+                          bytes: current.bytes,
+                          missingFiles: current.missingFiles,
                           cardNumber: file.cardNumber,
                           fileName: file.fileName,
                         })

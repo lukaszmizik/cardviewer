@@ -11,6 +11,8 @@ function App() {
   const [currentTab, setCurrentTab] = useState<AppTab>('dashboard')
   const [card, setCard] = useState<DriverCardData | null>(null)
   const [recentFiles, setRecentFiles] = useState<RecentCardFile[]>(() => loadRecentFiles())
+  const recentRef = useRef(recentFiles)
+  recentRef.current = recentFiles
   const loadEpoch = useRef(0)
 
   function openCard(next: DriverCardData) {
@@ -21,14 +23,25 @@ function App() {
   function clearBrowsingHistory() {
     loadEpoch.current += 1
     clearStoredRecentFiles()
+    recentRef.current = []
     setCard(null)
     setRecentFiles([])
     setCurrentTab('dashboard')
   }
 
+  function commitRecentCard(
+    parsedJson: DriverCardData,
+    fileName: string,
+    raw: { bytes: Uint8Array; missingFiles: string[] } | undefined,
+  ) {
+    const next = rememberRecentFile(recentRef.current, fileName, parsedJson, raw, Date.now())
+    recentRef.current = next
+    setRecentFiles(next)
+  }
+
   return (
     <Layout currentTab={currentTab} onTabChange={setCurrentTab} card={card}>
-      {currentTab === 'dashboard' && (
+      <div hidden={currentTab !== 'dashboard'}>
         <Dashboard
           card={card}
           recentFiles={recentFiles}
@@ -36,14 +49,14 @@ function App() {
           onClearBrowsingHistory={clearBrowsingHistory}
           onDataLoaded={(parsedJson, fileName, raw, epoch) => {
             if (epoch !== loadEpoch.current) return
-            setRecentFiles((current) => rememberRecentFile(current, fileName, parsedJson, raw))
+            commitRecentCard(parsedJson, fileName, raw)
             openCard(parsedJson)
           }}
           onOpenRecent={(file) => {
             openCard(file.card)
           }}
         />
-      )}
+      </div>
       {currentTab === 'graph' && (
         <GraphPage data={card} onUploadCard={() => setCurrentTab('dashboard')} />
       )}
