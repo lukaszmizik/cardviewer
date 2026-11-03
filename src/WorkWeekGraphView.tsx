@@ -6,8 +6,16 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useLanguage } from './translations'
 import type { DayData, ParsedActivity, ActivityType, CountryMarker } from './workWeekTxtParser'
-import type { ManualEntrySegment, VehicleLoadUnloadEvent, FerryTrainEvent, OutModeEvent, FaultOrEvent, RecordedGpsLocation } from './TachoTypes'
-import type { SymbolMap } from './TachoTypes'
+import {
+  TACHO_SYMBOLS,
+  type FerryTrainEvent,
+  type FaultOrEvent,
+  type ManualEntrySegment,
+  type OutModeEvent,
+  type RecordedGpsLocation,
+  type SymbolMap,
+  type VehicleLoadUnloadEvent,
+} from './TachoTypes'
 import { DRIVING_SYMBOL } from './CardLogic'
 import type { ClockMode } from './lib/clock'
 import {
@@ -276,6 +284,10 @@ const LOAD_UNLOAD_SYMBOL_ID: Record<VehicleLoadUnloadEvent['type'], number> = {
   load: 52,
   unload: 53,
   both: 54,
+}
+
+function tachoSymbol(symbolMap: SymbolMap | null | undefined, id: number): string {
+  return symbolMap?.[id] || TACHO_SYMBOLS[id] || ''
 }
 
 function formatTimestamp(ms: number, mode: ClockMode): string {
@@ -708,7 +720,7 @@ function GraphBlock({
                 const x = xAt(dayStart, ev.minuteStartUtc)
                 if (x < labelW || x > chartRight) return null
                 const symbolId = LOAD_UNLOAD_SYMBOL_ID[ev.type]
-                const symbolChar = symbolMap?.[symbolId] ?? ''
+                const symbolChar = tachoSymbol(symbolMap, symbolId)
                 const anchorBottom = yBase + rowH / 2 + lx(7)
                 return (
                   <g key={`loadunload-${dayStart}-${ev.minuteStartUtc}-${i}`}>
@@ -720,7 +732,7 @@ function GraphBlock({
               {getFerryTrainOnDay(visibleFerryTrain, day.dateUtc, clockMode).map((ev, i) => {
                 const x = xAt(dayStart, ev.minuteStartUtc)
                 if (x < labelW || x > chartRight) return null
-                const symbolChar = symbolMap?.[FERRY_TRAIN_SYMBOL_ID] ?? ''
+                const symbolChar = tachoSymbol(symbolMap, FERRY_TRAIN_SYMBOL_ID)
                 const anchorBottom = yBase + rowH / 2 + lx(7)
                 return (
                   <g key={`ferrytrain-${dayStart}-${ev.minuteStartUtc}-${i}`}>
@@ -884,9 +896,12 @@ function GraphBlock({
                       <div className="work-week-graph-manual-list">
                         {visibleLoadUnload.map((ev, i) => {
                           const label = ev.type === 'load' ? t.manualEntry.load : ev.type === 'unload' ? t.manualEntry.unload : t.manualEntry.loadUnload
+                          const symbol = tachoSymbol(symbolMap, LOAD_UNLOAD_SYMBOL_ID[ev.type])
                           return (
                             <div key={i} className="work-week-graph-manual-item">
-                              {formatTimestamp(ev.minuteStartUtc, clockMode)} | <em>{label}</em>{ev.gpsLocation ? ` (${ev.gpsLocation})` : ''}
+                              {formatTimestamp(ev.minuteStartUtc, clockMode)} |{' '}
+                              {symbol ? <span className="tacho-icon">{symbol}</span> : null} <em>{label}</em>
+                              {ev.gpsLocation ? ` (${ev.gpsLocation})` : ''}
                             </div>
                           )
                         })}

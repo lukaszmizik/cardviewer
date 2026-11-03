@@ -744,7 +744,8 @@ function mapLocations(card: DddParserCardJson): Location[] {
 
   for (const load of card.card_load_unload_operations?.card_load_unload_records ?? []) {
     const geo = load.gnss_place_auth_record?.geo_coordinates
-    const type: LocationRecordType = load.operation_type === 2 ? 'unload' : 'load'
+    const type: LocationRecordType =
+      load.operation_type === 2 ? 'unload' : load.operation_type === 3 ? 'load_unload' : 'load'
     push(parseUnixMs(load.timestamp ?? load.gnss_place_auth_record?.time_stamp), geoLabel(geo), type, geo)
   }
 

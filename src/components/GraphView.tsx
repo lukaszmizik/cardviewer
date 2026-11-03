@@ -3,6 +3,7 @@ import type { DriverCardData } from '../types/tacho'
 import { WorkWeekGraphView } from '../WorkWeekGraphView'
 import { cardToGraph } from '../utils/cardToGraph'
 import type { ClockMode } from '../lib/clock'
+import { TACHO_SYMBOLS } from '../TachoTypes'
 
 type GraphViewProps = {
   data: DriverCardData | null
@@ -34,6 +35,7 @@ export function GraphView({ data, onUploadCard }: GraphViewProps) {
         manualEntryBuffer={graph.manualEntryBuffer}
         lastWithdrawalUtc={graph.lastWithdrawalUtc}
         loadUnloadEvents={graph.loadUnloadEvents}
+        symbolMap={TACHO_SYMBOLS}
         recordedGpsLocations={graph.recordedGpsLocations}
         faultsAndEvents={graph.faultsAndEvents}
         embedded

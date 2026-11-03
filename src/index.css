@@ -1122,6 +1122,16 @@ body {
   white-space: nowrap;
 }
 
+.card-history-vehicle-main td,
+.card-history-vehicle-extra td {
+  background: #f8fafc;
+}
+
+.card-history-vehicle-main td:first-child,
+.card-history-vehicle-extra td:first-child {
+  box-shadow: inset 3px 0 0 #6366f1;
+}
+
 .card-history-vehicle-main td {
   border-bottom: none;
   padding-bottom: 2px;
@@ -1129,6 +1139,8 @@ body {
 
 .card-history-vehicle-extra td {
   padding-top: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e2e8f0;
   white-space: normal;
   color: #64748b;
   font-size: 12px;

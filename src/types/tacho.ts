@@ -22,6 +22,7 @@ export type LocationRecordType =
   | 'end_country'
   | 'load'
   | 'unload'
+  | 'load_unload'
   | 'border_crossing'
 
 export interface Location {

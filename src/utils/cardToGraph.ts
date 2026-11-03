@@ -189,11 +189,11 @@ function toManualBuffer(card: DriverCardData, mode: ClockMode): ManualEntrySegme
 
 function toLoadUnload(locations: Location[]): VehicleLoadUnloadEvent[] {
   return locations
-    .filter((loc) => loc.recordType === 'load' || loc.recordType === 'unload')
+    .filter((loc) => loc.recordType === 'load' || loc.recordType === 'unload' || loc.recordType === 'load_unload')
     .map((loc) => ({
       minuteStartUtc: loc.recordedAtUtc,
       gpsLocation: loc.label,
-      type: loc.recordType === 'unload' ? 'unload' : 'load',
+      type: loc.recordType === 'unload' ? 'unload' : loc.recordType === 'load_unload' ? 'both' : 'load',
     }))
 }
 

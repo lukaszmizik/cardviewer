@@ -63,3 +63,11 @@ export type FaultOrEvent = {
 }
 
 export type SymbolMap = Record<number, string>
+
+/** Znaky fontu SymbolTacho1. Číslo je index glyfu, hodnota je znak, který ho vykreslí. */
+export const TACHO_SYMBOLS: SymbolMap = {
+  49: 'o',
+  52: 'r',
+  53: 's',
+  54: 't',
+}
