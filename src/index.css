@@ -432,6 +432,11 @@ body {
   color: #555;
 }
 
+.usb-dialog .file-uploader-status,
+.usb-dialog .file-uploader-error {
+  margin-bottom: 16px;
+}
+
 .work-week-file-input-hidden {
   position: absolute;
   width: 0;
