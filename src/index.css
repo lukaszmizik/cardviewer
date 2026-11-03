@@ -433,8 +433,40 @@ body {
 }
 
 .usb-dialog .file-uploader-status,
-.usb-dialog .file-uploader-error {
+.usb-dialog .file-uploader-error,
+.usb-dialog .usb-download-progress {
   margin-bottom: 16px;
+}
+
+.usb-download-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.usb-download-progress-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.usb-download-progress-track {
+  height: 8px;
+  overflow: hidden;
+  background: #e2e8f0;
+  border-radius: 999px;
+}
+
+.usb-download-progress-bar {
+  height: 100%;
+  background: #4f46e5;
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.usb-dialog .usb-download-progress .file-uploader-status {
+  margin-bottom: 0;
 }
 
 .work-week-file-input-hidden {

@@ -47,6 +47,7 @@ export function Dashboard({
   const [usbDialogOpen, setUsbDialogOpen] = useState(false)
   const [usbReading, setUsbReading] = useState(false)
   const [usbStatus, setUsbStatus] = useState<string | null>(null)
+  const [usbProgress, setUsbProgress] = useState<{ current: number; total: number } | null>(null)
   const [usbError, setUsbError] = useState<{ title: string; message: string } | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
@@ -58,12 +59,19 @@ export function Dashboard({
     setUsbReading(true)
     setUsbError(null)
     setUsbStatus('Připravuji komunikaci se čtečkou…')
+    setUsbProgress({ current: 0, total: 1 })
     const epoch = loadEpoch()
     try {
       const missingFiles: string[] = []
-      const bytes = await downloadDriverCard((message) => setUsbStatus(message), missingFiles)
+      const bytes = await downloadDriverCard((info) => {
+        setUsbStatus(info.message)
+        setUsbProgress({ current: info.current, total: Math.max(info.total, 1) })
+      }, missingFiles)
       validateCardBytes(bytes)
       setUsbStatus('Dekóduji výpis karty…')
+      setUsbProgress((current) =>
+        current ? { current: current.total, total: current.total } : { current: 1, total: 1 },
+      )
       const parsed = mapDddParserJson(await parseDddBinary(bytes))
       if (epoch !== loadEpoch()) return
       const stamp = new Date()
@@ -93,6 +101,7 @@ export function Dashboard({
       }
       setUsbError({ title, message })
       setUsbStatus(null)
+      setUsbProgress(null)
     } finally {
       setUsbReading(false)
     }
@@ -262,7 +271,36 @@ export function Dashboard({
             <p className="usb-dialog-text">
               Připojte kartu s čipem
             </p>
-            {usbStatus && <p className="file-uploader-status">{usbStatus}</p>}
+            {(usbStatus || usbProgress) && (
+              <div className="usb-download-progress">
+                {usbProgress && (
+                  <>
+                    <div className="usb-download-progress-head">
+                      <span>
+                        {usbProgress.current} / {usbProgress.total}
+                      </span>
+                      <span>{Math.min(100, Math.round((usbProgress.current / Math.max(usbProgress.total, 1)) * 100))} %</span>
+                    </div>
+                    <div
+                      className="usb-download-progress-track"
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={usbProgress.total}
+                      aria-valuenow={usbProgress.current}
+                      aria-label="Průběh stahování karty"
+                    >
+                      <div
+                        className="usb-download-progress-bar"
+                        style={{
+                          width: `${Math.min(100, (usbProgress.current / Math.max(usbProgress.total, 1)) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  </>
+                )}
+                {usbStatus && <p className="file-uploader-status">{usbStatus}</p>}
+              </div>
+            )}
             {usbError && (
               <div className="work-week-warnings-panel file-uploader-error" role="alert">
                 <h3 className="work-week-warnings-title">{usbError.title}</h3>

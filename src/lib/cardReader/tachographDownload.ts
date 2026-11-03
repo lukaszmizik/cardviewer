@@ -148,6 +148,40 @@ function fileLabel(fid: number): string {
   return fid.toString(16).toUpperCase().padStart(4, '0')
 }
 
+const FILE_TITLES: Record<number, string> = {
+  0x0002: 'Identifikace čipu',
+  0x0005: 'Informace o kartě',
+  0x0501: 'Identifikace řidiče',
+  0x0502: 'Řidičský průkaz',
+  0x0503: 'Události',
+  0x0504: 'Závady',
+  0x0505: 'Činnosti řidiče',
+  0x0506: 'Použitá vozidla',
+  0x0507: 'Místa začátku a konce směny',
+  0x0508: 'Stav počítadla kilometrů',
+  0x050e: 'Kalibrace a nastavení',
+  0x0520: 'Poslední stažení',
+  0x0521: 'Předchozí stažení',
+  0x0522: 'Specifické podmínky',
+  0x0523: 'Hranice',
+  0x0524: 'Nakládky a vykládky',
+  0x0525: 'Záznamy GNSS',
+  0x0526: 'Doplňkové GNSS',
+  0x0527: 'Doplňkové aktivity',
+  0x0528: 'Doplňková vozidla',
+  0x0529: 'Doplňková místa',
+  0x0530: 'Autentizace GNSS',
+  0x0540: 'Doplňkové události',
+  0xc100: 'Stav aplikace 1. generace',
+  0xc101: 'Stav aplikace 2. generace',
+  0xc108: 'Certifikát karty',
+  0xc109: 'Certifikát karty 2. generace',
+}
+
+function fileTitle(fid: number): string {
+  return FILE_TITLES[fid] ?? `Soubor ${fileLabel(fid)}`
+}
+
 function noteMissing(missingFiles: string[] | undefined, fid: number, reason: string) {
   const label = fileLabel(fid)
   console.info(`[card-reader] soubor ${label} nebyl načten (${reason}), do DDD se nedoplní`)
@@ -182,28 +216,72 @@ async function readFiles(
   return blocks
 }
 
-export type DownloadProgress = (message: string) => void
+export type DownloadProgressInfo = {
+  message: string
+  current: number
+  total: number
+  fileId?: string
+}
+
+export type DownloadProgress = (info: DownloadProgressInfo) => void
+
+const SETUP_STEPS = 4
+const DECODE_STEPS = 1
+
+function report(onProgress: DownloadProgress | undefined, current: number, total: number, message: string, fileId?: string) {
+  onProgress?.({ message, current, total, fileId })
+}
 
 async function readDriverCard(session: CardChannel, onProgress?: DownloadProgress, missingFiles?: string[]): Promise<Uint8Array> {
+  let total = SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS
+  let current = 0
+  const next = (message: string, fileId?: string) => {
+    current += 1
+    report(onProgress, current, total, message, fileId)
+  }
+
   try {
-    onProgress?.('Reset karty (ATR)…')
+    next('Resetuji kartu a čtu ATR…')
     const blocks: Uint8Array[] = []
 
-    onProgress?.('Čtu identifikaci čipu…')
+    next('Vybírám hlavní soubor karty…')
     await selectOk(session, selectMasterFile())
-    blocks.push(...(await readFiles(session, MF_FILES, () => undefined, missingFiles)))
+    blocks.push(
+      ...(await readFiles(
+        session,
+        MF_FILES,
+        (fid) => next(`${fileTitle(fid)} (${fileLabel(fid)})`, fileLabel(fid)),
+        missingFiles,
+      )),
+    )
 
-    onProgress?.('Vybírám aplikaci tachografu…')
+    next('Vybírám aplikaci tachografu…')
     const gen1 = await selectOk(session, selectAid(AID_GEN1))
     if (!gen1) {
       throw new CardReaderError('protocol', 'Na kartě není aplikace tachografu. Vložte kartu řidiče čipem napřed.')
     }
-    blocks.push(...(await readFiles(session, GEN1_FILES, (fid) => onProgress?.(`Čtu soubor ${fid.toString(16).toUpperCase()}…`), missingFiles)))
+    blocks.push(
+      ...(await readFiles(
+        session,
+        GEN1_FILES,
+        (fid) => next(`${fileTitle(fid)} (${fileLabel(fid)})`, fileLabel(fid)),
+        missingFiles,
+      )),
+    )
 
+    next('Ověřuji datové struktury 2. generace…')
     const gen2 = await selectOk(session, selectAid(AID_GEN2))
     if (gen2) {
-      onProgress?.('Čtu datové struktury 2. generace…')
-      blocks.push(...(await readFiles(session, GEN2_FILES, (fid) => onProgress?.(`Čtu soubor ${fid.toString(16).toUpperCase()}…`), missingFiles)))
+      total += GEN2_FILES.length
+      report(onProgress, current, total, 'Čtu datové struktury 2. generace…')
+      blocks.push(
+        ...(await readFiles(
+          session,
+          GEN2_FILES,
+          (fid) => next(`${fileTitle(fid)} (${fileLabel(fid)})`, fileLabel(fid)),
+          missingFiles,
+        )),
+      )
     }
 
     const ddd = concat(blocks)
@@ -227,7 +305,7 @@ function logPath(path: 'PC/SC' | 'WebUSB', detail: string) {
 
 async function downloadViaWindowsDriver(onProgress?: DownloadProgress, missingFiles?: string[]): Promise<Uint8Array> {
   logPath('PC/SC', 'winscard.dll přes službu http://127.0.0.1:8787')
-  onProgress?.('Připojuji čtečku přes Windows PC/SC…')
+  report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Připojuji čtečku přes systémovou službu…')
   const session = await PcscSession.open()
   return readDriverCard(session, onProgress, missingFiles)
 }
@@ -281,11 +359,11 @@ export async function downloadDriverCard(onProgress?: DownloadProgress, missingF
     throw new CardReaderError('open', 'Čtečku se nepodařilo vybrat.', trace.toText())
   }
 
-  onProgress?.('Otevírám čtečku…')
+  report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Otevírám čtečku…')
   let session: CcidSession | null = null
   try {
     session = await CcidSession.open(device, trace)
-    onProgress?.('Napájím kartu…')
+    report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Napájím kartu…')
     const atr = await session.powerOn()
     trace.ok('powerOn', `ATR ${atr.length} B`)
     const bytes = await readDriverCard(session, onProgress, missingFiles)
@@ -298,7 +376,7 @@ export async function downloadDriverCard(onProgress?: DownloadProgress, missingF
         ? new CardReaderError(cause.code, cause.message, [trace.toText(), cause.diagnostic].filter(Boolean).join('\n\n'))
         : new CardReaderError('open', 'Kartu se nepodařilo načíst.', `${trace.toText()}\n\n${formatCause(cause)}`)
     if (withTrace.code === 'blocked' || withTrace.code === 'open') {
-      onProgress?.('Prohlížeč k čtečce nepustil, zkouším systémovou službu…')
+      report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Prohlížeč k čtečce nepustil, zkouším systémovou službu…')
       if (await ensurePcscBridge()) {
         logPath('PC/SC', 'WebUSB selhalo, místní služba naběhla')
         return downloadViaWindowsDriver(onProgress, missingFiles)
