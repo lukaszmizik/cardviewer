@@ -1151,6 +1151,10 @@ body {
   padding-bottom: 0;
 }
 
+.card-history-plate {
+  font-weight: 700;
+}
+
 .card-history-vehicle-extra td {
   padding-top: 0;
   padding-bottom: 6px;

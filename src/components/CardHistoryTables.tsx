@@ -62,7 +62,7 @@ function vehicleRows(uses: VehicleUse[], weekStart: number, weekEnd: number, mod
       return (
         <Fragment key={`${use.registration}-${use.fromUtc}`}>
           <tr className="card-history-vehicle-main">
-            <td>{use.registration}</td>
+            <td className="card-history-plate">{use.registration}</td>
             <td>{formatClockDateTime(use.fromUtc, mode)}</td>
             <td>{formatClockDateTime(use.toUtc, mode)}</td>
             <td>{formatKm(use.kilometers)}</td>
