@@ -88,11 +88,10 @@ export function Dashboard({
             : cause instanceof CardReaderError && cause.code === 'no_reader'
               ? 'Čtečka nenalezena'
               : 'Kartu nelze načíst'
-      const diagnostic = cause instanceof CardReaderError ? cause.diagnostic : undefined
-      setUsbError({
-        title,
-        message: diagnostic ? `${message}\n\nDiagnostika WebUSB\n${diagnostic}` : message,
-      })
+      if (cause instanceof CardReaderError && cause.diagnostic) {
+        console.info(`[card-reader] Diagnostika WebUSB\n${cause.diagnostic}`)
+      }
+      setUsbError({ title, message })
       setUsbStatus(null)
     } finally {
       setUsbReading(false)
