@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import type { DriverCardData } from '../types/tacho'
 import { driverDisplayName } from '../lib/placeholderCard'
-import type { RecentCardFile } from '../lib/recentFiles'
+import { recentCardRaw, type RecentCardFile } from '../lib/recentFiles'
 import { CardFileError, validateCardBytes } from '../lib/cardFile'
 import { CardReaderError } from '../lib/cardReader/errors'
 import { downloadDriverCard } from '../lib/cardReader/tachographDownload'
-import { saveDownloadedDdd, type DownloadedCardFile } from '../lib/saveDownloadedDdd'
+import { dddFileName, saveDownloadedDdd } from '../lib/saveDownloadedDdd'
 import { mapDddParserJson } from '../utils/dddMapper'
 import { parseDddBinary } from '../utils/dddParser'
 import { FileUploader } from './FileUploader'
@@ -13,7 +13,6 @@ import { FileUploader } from './FileUploader'
 type DashboardProps = {
   card: DriverCardData | null
   recentFiles: RecentCardFile[]
-  downloadedCard: DownloadedCardFile | null
   onDataLoaded: (
     parsedJson: DriverCardData,
     fileName: string,
@@ -38,7 +37,6 @@ function formatLoadedAt(ms: number): string {
 export function Dashboard({
   card,
   recentFiles,
-  downloadedCard,
   onDataLoaded,
   onOpenRecent,
   loadEpoch,
@@ -74,9 +72,7 @@ export function Dashboard({
       )
       const parsed = mapDddParserJson(await parseDddBinary(bytes))
       if (epoch !== loadEpoch()) return
-      const stamp = new Date()
-      const pad = (n: number) => String(n).padStart(2, '0')
-      const fileName = `C_ctecka_${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}.ddd`
+      const fileName = dddFileName(parsed.cardNumber)
       onDataLoaded(parsed, fileName, { bytes, missingFiles }, epoch)
       setUsbDialogOpen(false)
       setUsbStatus(null)
@@ -118,34 +114,15 @@ export function Dashboard({
         <div className="import-panel import-panel--upload">
           <FileUploader
             loadEpoch={loadEpoch}
-            onDataLoaded={(parsedJson, fileName, epoch) => onDataLoaded(parsedJson, fileName, undefined, epoch)}
+            onDataLoaded={(parsedJson, fileName, epoch, bytes) =>
+              onDataLoaded(parsedJson, fileName, { bytes, missingFiles: [] }, epoch)
+            }
           />
           <div className="dashboard-actions">
             <button type="button" className="btn-accent" onClick={() => setUsbDialogOpen(true)}>
               Načíst ze čtečky USB
             </button>
-            <button
-              type="button"
-              className="btn-accent"
-              disabled={!downloadedCard}
-              onClick={() => {
-                if (!downloadedCard) return
-                setSaveError(null)
-                setSaveMessage(null)
-                void saveDownloadedDdd(downloadedCard)
-                  .then((fileName) => {
-                    if (fileName) setSaveMessage(`Soubor ${fileName} byl uložen.`)
-                  })
-                  .catch((cause: unknown) => {
-                    setSaveError(cause instanceof Error ? cause.message : 'Soubor se nepodařilo uložit.')
-                  })
-              }}
-            >
-              Exportovat .DDD
-            </button>
           </div>
-          {saveMessage && <p className="file-uploader-status">{saveMessage}</p>}
-          {saveError && <p className="file-uploader-error-text">{saveError}</p>}
         </div>
 
         <aside className="import-panel import-panel--recent" aria-label="Poslední načtené soubory">
@@ -154,24 +131,54 @@ export function Dashboard({
             <p className="recent-files-empty">Zatím není načtený žádný soubor.</p>
           ) : (
             <ul className="recent-files-list">
-              {recentFiles.map((file) => (
-                <li key={file.id}>
-                  <button type="button" className="recent-file-button" onClick={() => onOpenRecent(file)}>
-                    <span className="recent-file-name">{file.fileName}</span>
-                    <span className="recent-file-meta">
-                      {[file.driverName, file.cardNumber].filter(Boolean).join(' · ') || 'Karta řidiče'}
-                    </span>
-                    <time className="recent-file-time" dateTime={new Date(file.loadedAt).toISOString()}>
-                      {formatLoadedAt(file.loadedAt)}
-                    </time>
-                  </button>
-                </li>
-              ))}
+              {recentFiles.map((file) => {
+                const raw = recentCardRaw(file.id)
+                return (
+                  <li key={file.id} className="recent-file">
+                    <button type="button" className="recent-file-button" onClick={() => onOpenRecent(file)}>
+                      <span className="recent-file-name">{file.fileName}</span>
+                      <span className="recent-file-meta">
+                        {[file.driverName, file.cardNumber].filter(Boolean).join(' · ') || 'Karta řidiče'}
+                      </span>
+                      <time className="recent-file-time" dateTime={new Date(file.loadedAt).toISOString()}>
+                        {formatLoadedAt(file.loadedAt)}
+                      </time>
+                    </button>
+                    <button
+                      type="button"
+                      className="recent-file-export"
+                      disabled={!raw}
+                      title={raw ? `Uložit ${file.fileName}` : 'Soubor už v prohlížeči není. Načtěte kartu znovu.'}
+                      onClick={() => {
+                        if (!raw) return
+                        setSaveError(null)
+                        setSaveMessage(null)
+                        void saveDownloadedDdd({
+                          bytes: raw.bytes,
+                          missingFiles: raw.missingFiles,
+                          cardNumber: file.cardNumber,
+                          fileName: file.fileName,
+                        })
+                          .then((savedName) => {
+                            if (savedName) setSaveMessage(`Soubor ${savedName} byl uložen.`)
+                          })
+                          .catch((cause: unknown) => {
+                            setSaveError(cause instanceof Error ? cause.message : 'Soubor se nepodařilo uložit.')
+                          })
+                      }}
+                    >
+                      Exportovat .DDD
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
           <button type="button" className="recent-files-clear" onClick={() => setClearDialogOpen(true)}>
             Vymazat historii prohlížení
           </button>
+          {saveMessage && <p className="file-uploader-status">{saveMessage}</p>}
+          {saveError && <p className="file-uploader-error-text">{saveError}</p>}
           {clearedMessage && <p className="file-uploader-status">{clearedMessage}</p>}
         </aside>
       </div>

@@ -2,6 +2,7 @@ export type DownloadedCardFile = {
   bytes: Uint8Array
   cardNumber: string
   missingFiles: string[]
+  fileName?: string
 }
 
 type SaveFilePicker = (options?: {
@@ -47,7 +48,7 @@ function saveFailure(cause: unknown): Error {
 
 /** Otevře dialog uložení s navrženým názvem a zapíše původní bajty výpisu. Zrušení vrátí null. */
 export async function saveDownloadedDdd(card: DownloadedCardFile): Promise<string | null> {
-  const fileName = dddFileName(card.cardNumber)
+  const fileName = card.fileName || dddFileName(card.cardNumber)
   if (card.missingFiles.length > 0) {
     console.info(`[card-reader] neúplný export ${fileName}, chybí soubory: ${card.missingFiles.join(', ')}`)
   } else {

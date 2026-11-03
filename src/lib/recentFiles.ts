@@ -13,6 +13,17 @@ export type RecentCardFile = {
   card: DriverCardData
 }
 
+export type RecentCardRaw = {
+  bytes: Uint8Array
+  missingFiles: string[]
+}
+
+const rawById = new Map<string, RecentCardRaw>()
+
+export function recentCardRaw(id: string): RecentCardRaw | undefined {
+  return rawById.get(id)
+}
+
 export function loadRecentFiles(): RecentCardFile[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -25,22 +36,34 @@ export function loadRecentFiles(): RecentCardFile[] {
   }
 }
 
-export function rememberRecentFile(current: RecentCardFile[], fileName: string, card: DriverCardData): RecentCardFile[] {
+export function rememberRecentFile(
+  current: RecentCardFile[],
+  fileName: string,
+  card: DriverCardData,
+  raw?: RecentCardRaw,
+  loadedAt = Date.now(),
+): RecentCardFile[] {
   const next: RecentCardFile = {
-    id: `${Date.now()}-${fileName}`,
+    id: `${loadedAt}-${fileName}`,
     fileName,
-    loadedAt: Date.now(),
+    loadedAt,
     driverName: driverDisplayName(card),
     cardNumber: card.cardNumber,
     card,
   }
+  if (raw) rawById.set(next.id, raw)
   const withoutSameName = current.filter((item) => item.fileName.toLowerCase() !== fileName.toLowerCase())
   const list = [next, ...withoutSameName].slice(0, MAX_RECENT_FILES)
+  const kept = new Set(list.map((item) => item.id))
+  for (const item of current) {
+    if (!kept.has(item.id)) rawById.delete(item.id)
+  }
   saveRecentFiles(list)
   return list
 }
 
 export function clearStoredRecentFiles(): void {
+  rawById.clear()
   try {
     localStorage.removeItem(STORAGE_KEY)
   } catch {

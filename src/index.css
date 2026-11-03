@@ -364,25 +364,57 @@ body {
   gap: 8px;
 }
 
+.recent-file {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
 .recent-file-button {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
   width: 100%;
-  padding: 12px 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
+  padding: 0;
+  border: none;
+  background: transparent;
   color: #1e293b;
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.recent-file-button:hover {
-  background: #f1f5f9;
+.recent-file:hover {
   border-color: #cbd5e1;
+}
+
+.recent-file-export {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #3730a3;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.recent-file-export:hover:not(:disabled) {
+  background: #e0e7ff;
+}
+
+.recent-file-export:disabled {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #94a3b8;
+  cursor: not-allowed;
 }
 
 .recent-file-name {
