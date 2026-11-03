@@ -322,6 +322,8 @@ body {
   margin: 0;
   font-size: 13px;
   color: #78350f;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .dashboard-card-info {

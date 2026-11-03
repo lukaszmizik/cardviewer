@@ -1,4 +1,5 @@
 import { CardReaderError, NO_CARD_MESSAGE, USB_BLOCKED_MESSAGE } from './errors'
+import { UsbTrace, describeUsbDevice, formatCause } from './usbTrace'
 
 const CCID_CLASS = 0x0b
 const MSG_POWER_ON = 0x62
@@ -73,47 +74,92 @@ function endpointsForInterface(configuration: USBConfiguration, iface: USBInterf
   return null
 }
 
-async function ensureConfiguration(device: USBDevice): Promise<void> {
-  if (device.configuration != null) return
+function failOpen(trace: UsbTrace | undefined, step: string, code: 'blocked' | 'open', message: string, cause?: unknown): never {
+  if (cause != null) trace?.fail(step, cause)
+  else trace?.note(step, 'fail', message)
+  throw new CardReaderError(code, message, trace?.toText())
+}
+
+async function ensureConfiguration(device: USBDevice, trace?: UsbTrace): Promise<void> {
+  if (device.configuration != null) {
+    trace?.ok(
+      'selectConfiguration',
+      `už vybraná konfigurace ${device.configuration.configurationValue}`,
+    )
+    return
+  }
   try {
     await device.selectConfiguration(1)
+    trace?.ok('selectConfiguration', 'vybrána konfigurace 1')
   } catch (cause) {
-    if (isOsBlocked(cause)) throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
     const fallback = device.configurations[0]?.configurationValue
-    if (fallback == null || fallback === 1) {
-      throw new CardReaderError('open', 'U čtečky se nepodařilo vybrat USB konfiguraci.')
+    if (isOsBlocked(cause) && (fallback == null || fallback === 1)) {
+      failOpen(trace, 'selectConfiguration', 'blocked', USB_BLOCKED_MESSAGE, cause)
     }
-    await device.selectConfiguration(fallback)
+    if (fallback == null || fallback === 1) {
+      failOpen(trace, 'selectConfiguration', 'open', 'U čtečky se nepodařilo vybrat USB konfiguraci.', cause)
+    }
+    try {
+      await device.selectConfiguration(fallback)
+      trace?.ok('selectConfiguration', `konfigurace 1 selhala (${formatCause(cause)}), použita ${fallback}`)
+    } catch (fallbackCause) {
+      failOpen(trace, 'selectConfiguration', isOsBlocked(fallbackCause) ? 'blocked' : 'open', USB_BLOCKED_MESSAGE, fallbackCause)
+    }
   }
 }
 
-async function selectConfigurationWithCcid(device: USBDevice): Promise<void> {
-  await ensureConfiguration(device)
+async function selectConfigurationWithCcid(device: USBDevice, trace?: UsbTrace): Promise<void> {
+  await ensureConfiguration(device, trace)
   const active = device.configuration
-  if (active?.interfaces.some((iface) => isCcid(iface))) return
+  if (active?.interfaces.some((iface) => isCcid(iface))) {
+    trace?.ok('ccidConfiguration', `CCID je v aktivní konfiguraci ${active.configurationValue}`)
+    return
+  }
   const ccidConfiguration = device.configurations.find((configuration) => configuration.interfaces.some((iface) => isCcid(iface)))
-  if (!ccidConfiguration || ccidConfiguration.configurationValue === active?.configurationValue) return
-  await device.selectConfiguration(ccidConfiguration.configurationValue)
+  if (!ccidConfiguration || ccidConfiguration.configurationValue === active?.configurationValue) {
+    trace?.skip(
+      'ccidConfiguration',
+      ccidConfiguration
+        ? 'aktivní konfigurace už byla vybrána'
+        : 'žádná konfigurace nemá interfaceClass 0x0b',
+    )
+    return
+  }
+  try {
+    await device.selectConfiguration(ccidConfiguration.configurationValue)
+    trace?.ok('ccidConfiguration', `přepnuto na konfiguraci ${ccidConfiguration.configurationValue} s CCID`)
+  } catch (cause) {
+    failOpen(trace, 'ccidConfiguration', isOsBlocked(cause) ? 'blocked' : 'open', USB_BLOCKED_MESSAGE, cause)
+  }
 }
 
 /**
  * Postupně zabere rozhraní aktivní konfigurace. Vrátí to, na kterém claimInterface uspěje.
  */
-async function claimWorkingInterface(device: USBDevice): Promise<CcidEndpoints> {
+async function claimWorkingInterface(device: USBDevice, trace?: UsbTrace): Promise<CcidEndpoints> {
   const configuration = device.configuration
-  if (!configuration) throw new CardReaderError('open', 'Čtečka nemá vybranou USB konfiguraci.')
+  if (!configuration) failOpen(trace, 'claimInterface', 'open', 'Čtečka nemá vybranou USB konfiguraci.')
 
-  let sawBlocked = false
-  for (const iface of interfacesToClaim(configuration)) {
+  let firstBlocked: unknown
+  const order = interfacesToClaim(configuration)
+  trace?.ok(
+    'interfaces',
+    `pořadí pokusu: ${order.map((iface) => iface.interfaceNumber).join(', ') || '(žádné)'}`,
+  )
+  for (const iface of order) {
+    const label = `claimInterface(${iface.interfaceNumber})`
     try {
       if (!iface.claimed) await device.claimInterface(iface.interfaceNumber)
+      trace?.ok(label, `claimed=${iface.claimed}`)
     } catch (cause) {
-      if (isOsBlocked(cause)) sawBlocked = true
+      trace?.fail(label, cause)
+      firstBlocked ??= cause
       continue
     }
 
     const endpoints = endpointsForInterface(configuration, iface)
     if (!endpoints) {
+      trace?.skip(`endpoints interface ${iface.interfaceNumber}`, 'chybí bulk IN nebo bulk OUT')
       try {
         await device.releaseInterface(iface.interfaceNumber)
       } catch {
@@ -121,14 +167,28 @@ async function claimWorkingInterface(device: USBDevice): Promise<CcidEndpoints> 
       }
       continue
     }
+    trace?.ok(
+      `endpoints interface ${iface.interfaceNumber}`,
+      `alt=${endpoints.alternateSetting} bulkIn=${endpoints.bulkIn} bulkOut=${endpoints.bulkOut}`,
+    )
     if (endpoints.alternateSetting !== 0) {
-      await device.selectAlternateInterface(iface.interfaceNumber, endpoints.alternateSetting)
+      try {
+        await device.selectAlternateInterface(iface.interfaceNumber, endpoints.alternateSetting)
+        trace?.ok(
+          `selectAlternateInterface(${iface.interfaceNumber}, ${endpoints.alternateSetting})`,
+          'ok',
+        )
+      } catch (cause) {
+        failOpen(trace, `selectAlternateInterface(${iface.interfaceNumber})`, isOsBlocked(cause) ? 'blocked' : 'open', USB_BLOCKED_MESSAGE, cause)
+      }
     }
     return endpoints
   }
 
-  if (sawBlocked) throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
-  throw new CardReaderError('open', 'Žádné rozhraní čtečky se nepodařilo zabrat.')
+  if (firstBlocked != null) {
+    failOpen(trace, 'claimInterface', 'blocked', USB_BLOCKED_MESSAGE, firstBlocked)
+  }
+  failOpen(trace, 'claimInterface', 'open', 'Žádné rozhraní čtečky se nepodařilo zabrat.')
 }
 
 type CcidMessage = {
@@ -151,24 +211,35 @@ export class CcidSession {
     private readonly endpoints: CcidEndpoints,
   ) {}
 
-  static async open(device: USBDevice): Promise<CcidSession> {
+  static async open(device: USBDevice, trace?: UsbTrace): Promise<CcidSession> {
     try {
       await device.open()
+      trace?.ok('device.open', `opened=${device.opened}`)
     } catch (cause) {
-      if (isOsBlocked(cause)) throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
-      throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
+      failOpen(trace, 'device.open', 'blocked', USB_BLOCKED_MESSAGE, cause)
     }
 
     let endpoints: CcidEndpoints | null = null
     try {
-      await selectConfigurationWithCcid(device)
+      await selectConfigurationWithCcid(device, trace)
       try {
-        endpoints = await claimWorkingInterface(device)
+        endpoints = await claimWorkingInterface(device, trace)
       } catch (cause) {
         if (cause instanceof CardReaderError && cause.code !== 'blocked' && cause.code !== 'open') throw cause
-        await device.reset()
-        await selectConfigurationWithCcid(device)
-        endpoints = await claimWorkingInterface(device)
+        trace?.note(
+          'device.reset',
+          'skip',
+          `první claim selhal, zkouším reset zařízení (${cause instanceof Error ? cause.message : String(cause)})`,
+        )
+        try {
+          await device.reset()
+          trace?.ok('device.reset', 'reset dokončen')
+        } catch (resetCause) {
+          trace?.fail('device.reset', resetCause)
+          throw cause
+        }
+        await selectConfigurationWithCcid(device, trace)
+        endpoints = await claimWorkingInterface(device, trace)
       }
       return new CcidSession(device, endpoints)
     } catch (cause) {
@@ -188,8 +259,7 @@ export class CcidSession {
         /* zařízení už je zavřené */
       }
       if (cause instanceof CardReaderError) throw cause
-      if (isOsBlocked(cause)) throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
-      throw new CardReaderError('open', 'Rozhraní čtečky se nepodařilo zabrat.')
+      failOpen(trace, 'CcidSession.open', isOsBlocked(cause) ? 'blocked' : 'open', USB_BLOCKED_MESSAGE, cause)
     }
   }
 
@@ -268,8 +338,11 @@ export class CcidSession {
     try {
       sent = await this.device.transferOut(this.endpoints.bulkOut, message)
     } catch (cause) {
-      if (isOsBlocked(cause)) throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
-      throw new CardReaderError('protocol', 'Odeslání příkazu do čtečky selhalo.')
+      throw new CardReaderError(
+        isOsBlocked(cause) ? 'blocked' : 'protocol',
+        isOsBlocked(cause) ? USB_BLOCKED_MESSAGE : 'Odeslání příkazu do čtečky selhalo.',
+        `transferOut ep=${this.endpoints.bulkOut}\n${formatCause(cause)}`,
+      )
     }
     if (sent.status !== 'ok') {
       throw new CardReaderError('protocol', 'Odeslání příkazu do čtečky selhalo.')
@@ -306,8 +379,11 @@ export class CcidSession {
     try {
       result = await this.device.transferIn(this.endpoints.bulkIn, 10 + 65536)
     } catch (cause) {
-      if (isOsBlocked(cause)) throw new CardReaderError('blocked', USB_BLOCKED_MESSAGE)
-      throw new CardReaderError('protocol', 'Čtečka neodpověděla.')
+      throw new CardReaderError(
+        isOsBlocked(cause) ? 'blocked' : 'protocol',
+        isOsBlocked(cause) ? USB_BLOCKED_MESSAGE : 'Čtečka neodpověděla.',
+        `transferIn ep=${this.endpoints.bulkIn}\n${formatCause(cause)}`,
+      )
     }
     if (result.status !== 'ok' || !result.data || result.data.byteLength < 10) {
       throw new CardReaderError('protocol', 'Čtečka neodpověděla.')

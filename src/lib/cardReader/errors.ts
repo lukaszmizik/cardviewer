@@ -11,10 +11,12 @@ export const NO_CARD_MESSAGE =
 
 export class CardReaderError extends Error {
   readonly code: CardReaderErrorCode
+  readonly diagnostic?: string
 
-  constructor(code: CardReaderErrorCode, message: string) {
+  constructor(code: CardReaderErrorCode, message: string, diagnostic?: string) {
     super(message)
     this.name = 'CardReaderError'
     this.code = code
+    this.diagnostic = diagnostic
   }
 }

@@ -1,6 +1,7 @@
 import { CardReaderError, PCSC_UNAVAILABLE_MESSAGE } from './errors'
 import { CcidSession } from './ccid'
 import { ensurePcscBridge, pcscBridgeReady, PcscSession, type CardChannel } from './pcscBridge'
+import { UsbTrace, describeUsbDevice, formatCause } from './usbTrace'
 
 /** Gen1 „TACHO“, gen2 „SMRDT“ — AID podle přílohy 2 nařízení 2016/799. */
 const AID_GEN1 = Uint8Array.of(0xff, 0x54, 0x41, 0x43, 0x48, 0x4f)
@@ -249,40 +250,60 @@ export async function downloadDriverCard(onProgress?: DownloadProgress, missingF
   }
 
   logPath('WebUSB', 'mimo Windows a PC/SC služba neběží')
+  const trace = new UsbTrace()
+  trace.ok(
+    'platform',
+    `ua=${navigator.userAgent} platform=${navigator.platform} usb=${typeof navigator.usb === 'object'}`,
+  )
 
   if (typeof navigator === 'undefined' || !navigator.usb) {
     throw new CardReaderError(
       'unsupported',
       'Tento prohlížeč neumí WebUSB. Čtečku otevřete v Google Chrome nebo Microsoft Edge.',
+      trace.toText(),
     )
   }
 
   let device: USBDevice
   try {
     device = await navigator.usb.requestDevice({ filters: [{ classCode: 0x0b }] })
+    trace.ok('requestDevice', describeUsbDevice(device))
   } catch (cause) {
     const name = cause instanceof DOMException ? cause.name : ''
+    trace.fail('requestDevice', cause)
     if (name === 'NotFoundError' || name === 'SecurityError' || name === 'AbortError') {
-      throw new CardReaderError('denied', 'Přístup ke čtečce byl zrušen. Výběr zařízení potvrďte v okně prohlížeče.')
+      throw new CardReaderError(
+        'denied',
+        'Přístup ke čtečce byl zrušen. Výběr zařízení potvrďte v okně prohlížeče.',
+        trace.toText(),
+      )
     }
-    throw new CardReaderError('open', 'Čtečku se nepodařilo vybrat.')
+    throw new CardReaderError('open', 'Čtečku se nepodařilo vybrat.', trace.toText())
   }
 
   onProgress?.('Otevírám čtečku…')
   let session: CcidSession | null = null
   try {
-    session = await CcidSession.open(device)
-    await session.powerOn()
-    return await readDriverCard(session, onProgress, missingFiles)
+    session = await CcidSession.open(device, trace)
+    onProgress?.('Napájím kartu…')
+    const atr = await session.powerOn()
+    trace.ok('powerOn', `ATR ${atr.length} B`)
+    const bytes = await readDriverCard(session, onProgress, missingFiles)
+    trace.ok('readDriverCard', `${bytes.length} B`)
+    return bytes
   } catch (cause) {
     await session?.close()
-    if (cause instanceof CardReaderError && (cause.code === 'blocked' || cause.code === 'open')) {
+    const withTrace =
+      cause instanceof CardReaderError
+        ? new CardReaderError(cause.code, cause.message, [trace.toText(), cause.diagnostic].filter(Boolean).join('\n\n'))
+        : new CardReaderError('open', 'Kartu se nepodařilo načíst.', `${trace.toText()}\n\n${formatCause(cause)}`)
+    if (withTrace.code === 'blocked' || withTrace.code === 'open') {
       onProgress?.('Ovladač drží čtečku, zkouším PC/SC…')
       if (await ensurePcscBridge()) {
         logPath('PC/SC', 'WebUSB selhalo, místní služba naběhla')
         return downloadViaWindowsDriver(onProgress, missingFiles)
       }
     }
-    throw cause
+    throw withTrace
   }
 }
