@@ -191,12 +191,12 @@ function noteMissing(missingFiles: string[] | undefined, fid: number, reason: st
 async function readFiles(
   session: CardChannel,
   files: EfSpec[],
-  onFile: (fid: number) => void,
+  onFile: (fid: number) => void | Promise<void>,
   missingFiles?: string[],
 ): Promise<Uint8Array[]> {
   const blocks: Uint8Array[] = []
   for (const spec of files) {
-    onFile(spec.fid)
+    await onFile(spec.fid)
     const selected = await selectOk(session, selectEf(spec.fid))
     if (!selected) {
       noteMissing(missingFiles, spec.fid, 'výběr souboru selhal')
@@ -228,23 +228,37 @@ export type DownloadProgress = (info: DownloadProgressInfo) => void
 const SETUP_STEPS = 4
 const DECODE_STEPS = 1
 
-function report(onProgress: DownloadProgress | undefined, current: number, total: number, message: string, fileId?: string) {
+function yieldToUi(): Promise<void> {
+  return new Promise((resolve) => {
+    const paint = () => {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        return
+      }
+      setTimeout(resolve, 16)
+    }
+    paint()
+  })
+}
+
+async function report(onProgress: DownloadProgress | undefined, current: number, total: number, message: string, fileId?: string) {
   onProgress?.({ message, current, total, fileId })
+  await yieldToUi()
 }
 
 async function readDriverCard(session: CardChannel, onProgress?: DownloadProgress, missingFiles?: string[]): Promise<Uint8Array> {
   let total = SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS
   let current = 0
-  const next = (message: string, fileId?: string) => {
+  const next = async (message: string, fileId?: string) => {
     current += 1
-    report(onProgress, current, total, message, fileId)
+    await report(onProgress, current, total, message, fileId)
   }
 
   try {
-    next('Resetuji kartu a čtu ATR…')
+    await next('Resetuji kartu a čtu ATR…')
     const blocks: Uint8Array[] = []
 
-    next('Vybírám hlavní soubor karty…')
+    await next('Vybírám hlavní soubor karty…')
     await selectOk(session, selectMasterFile())
     blocks.push(
       ...(await readFiles(
@@ -255,7 +269,7 @@ async function readDriverCard(session: CardChannel, onProgress?: DownloadProgres
       )),
     )
 
-    next('Vybírám aplikaci tachografu…')
+    await next('Vybírám aplikaci tachografu…')
     const gen1 = await selectOk(session, selectAid(AID_GEN1))
     if (!gen1) {
       throw new CardReaderError('protocol', 'Na kartě není aplikace tachografu. Vložte kartu řidiče čipem napřed.')
@@ -269,11 +283,11 @@ async function readDriverCard(session: CardChannel, onProgress?: DownloadProgres
       )),
     )
 
-    next('Ověřuji datové struktury 2. generace…')
+    await next('Ověřuji datové struktury 2. generace…')
     const gen2 = await selectOk(session, selectAid(AID_GEN2))
     if (gen2) {
       total += GEN2_FILES.length
-      report(onProgress, current, total, 'Čtu datové struktury 2. generace…')
+      await report(onProgress, current, total, 'Čtu datové struktury 2. generace…')
       blocks.push(
         ...(await readFiles(
           session,
@@ -305,7 +319,7 @@ function logPath(path: 'PC/SC' | 'WebUSB', detail: string) {
 
 async function downloadViaWindowsDriver(onProgress?: DownloadProgress, missingFiles?: string[]): Promise<Uint8Array> {
   logPath('PC/SC', 'winscard.dll přes službu http://127.0.0.1:8787')
-  report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Připojuji čtečku přes systémovou službu…')
+  await report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Připojuji čtečku přes systémovou službu…')
   const session = await PcscSession.open()
   return readDriverCard(session, onProgress, missingFiles)
 }
@@ -359,11 +373,11 @@ export async function downloadDriverCard(onProgress?: DownloadProgress, missingF
     throw new CardReaderError('open', 'Čtečku se nepodařilo vybrat.', trace.toText())
   }
 
-  report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Otevírám čtečku…')
+  await report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Otevírám čtečku…')
   let session: CcidSession | null = null
   try {
     session = await CcidSession.open(device, trace)
-    report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Napájím kartu…')
+    await report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Napájím kartu…')
     const atr = await session.powerOn()
     trace.ok('powerOn', `ATR ${atr.length} B`)
     const bytes = await readDriverCard(session, onProgress, missingFiles)
@@ -376,7 +390,7 @@ export async function downloadDriverCard(onProgress?: DownloadProgress, missingF
         ? new CardReaderError(cause.code, cause.message, [trace.toText(), cause.diagnostic].filter(Boolean).join('\n\n'))
         : new CardReaderError('open', 'Kartu se nepodařilo načíst.', `${trace.toText()}\n\n${formatCause(cause)}`)
     if (withTrace.code === 'blocked' || withTrace.code === 'open') {
-      report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Prohlížeč k čtečce nepustil, zkouším systémovou službu…')
+      await report(onProgress, 0, SETUP_STEPS + MF_FILES.length + GEN1_FILES.length + DECODE_STEPS, 'Prohlížeč k čtečce nepustil, zkouším systémovou službu…')
       if (await ensurePcscBridge()) {
         logPath('PC/SC', 'WebUSB selhalo, místní služba naběhla')
         return downloadViaWindowsDriver(onProgress, missingFiles)
