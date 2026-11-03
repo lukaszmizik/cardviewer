@@ -82,7 +82,7 @@ export function Dashboard({
             : 'Kartu se nepodařilo načíst.'
       const title =
         cause instanceof CardReaderError && cause.code === 'blocked'
-          ? 'Čtečku drží ovladač nebo jiný program'
+          ? 'Prohlížeč k čtečce nepustil'
           : cause instanceof CardReaderError && cause.code === 'no_card'
             ? 'Karta není ve čtečce'
             : cause instanceof CardReaderError && cause.code === 'no_reader'

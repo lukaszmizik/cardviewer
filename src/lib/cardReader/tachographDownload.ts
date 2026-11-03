@@ -298,7 +298,7 @@ export async function downloadDriverCard(onProgress?: DownloadProgress, missingF
         ? new CardReaderError(cause.code, cause.message, [trace.toText(), cause.diagnostic].filter(Boolean).join('\n\n'))
         : new CardReaderError('open', 'Kartu se nepodařilo načíst.', `${trace.toText()}\n\n${formatCause(cause)}`)
     if (withTrace.code === 'blocked' || withTrace.code === 'open') {
-      onProgress?.('Ovladač drží čtečku, zkouším PC/SC…')
+      onProgress?.('Prohlížeč k čtečce nepustil, zkouším systémovou službu…')
       if (await ensurePcscBridge()) {
         logPath('PC/SC', 'WebUSB selhalo, místní služba naběhla')
         return downloadViaWindowsDriver(onProgress, missingFiles)

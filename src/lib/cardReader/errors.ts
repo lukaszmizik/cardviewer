@@ -1,10 +1,10 @@
 export type CardReaderErrorCode = 'unsupported' | 'denied' | 'open' | 'blocked' | 'no_card' | 'no_reader' | 'protocol' | 'empty'
 
 export const PCSC_UNAVAILABLE_MESSAGE =
-  'Na Windows se karta čte přes PC/SC (ovladač čtečky), ne přes WebUSB. Místní služba na 127.0.0.1:8787 neběží, proto se čtení nespustilo. Nechte spuštěné npm run dev a zkuste to znovu. Datacho při čtení nechte zavřené.'
+  'Na tomto počítači se karta čte přes systémovou službu čtečky (PC/SC). Služba na adrese 127.0.0.1:8787 nyní neběží, proto se čtení nespustilo. Spusťte aplikaci včetně místní služby a akci zopakujte. Ostatní programy, které čtečku používají, před čtením ukončete.'
 
 export const USB_BLOCKED_MESSAGE =
-  'Prohlížeč čtečku neotevře, protože ji drží ovladač Windows (Thales Smart Card). To není jiný program — Datacho může být vypnuté a přesto WebUSB kartu nedostane. Čtení proto běží přes stejný ovladač jako Datacho. Nechte spuštěné npm run dev (služba na portu 8787) a zkuste to znovu. Datacho při čtení nechte zavřené.'
+  'Prohlížeč čtečku rozpoznal, ale přístup k jejímu rozhraní nepovolil. U čipových čteček to prohlížeč z bezpečnostních důvodů na některých zařízeních, zejména v telefonu, neumožňuje. Na počítači se karta stahuje přes systémovou službu čtečky. V telefonu kartu stáhněte na počítači a soubor sem nahrajte. Pokud čtete na počítači, ukončete ostatní programy, které čtečku mohou používat, a akci zopakujte.'
 
 export const NO_CARD_MESSAGE =
   'Ve čtečce není karta. Vložte kartu řidiče čipem napřed a čtení spusťte až potom.'
