@@ -398,6 +398,24 @@ body {
   color: #94a3b8;
 }
 
+.recent-files-clear {
+  margin-top: 4px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.recent-files-clear:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
 .usb-dialog {
   position: relative;
   width: min(92vw, 420px);

@@ -5,10 +5,11 @@ import { mapDddParserJson } from '../utils/dddMapper'
 import { parseDddBinary } from '../utils/dddParser'
 
 type FileUploaderProps = {
-  onDataLoaded: (parsedJson: DriverCardData, fileName: string) => void
+  onDataLoaded: (parsedJson: DriverCardData, fileName: string, epoch: number) => void
+  loadEpoch: () => number
 }
 
-export function FileUploader({ onDataLoaded }: FileUploaderProps) {
+export function FileUploader({ onDataLoaded, loadEpoch }: FileUploaderProps) {
   const fileInputId = useId()
   const [isDragging, setIsDragging] = useState(false)
   const [isReading, setIsReading] = useState(false)
@@ -18,14 +19,17 @@ export function FileUploader({ onDataLoaded }: FileUploaderProps) {
     if (!file || isReading) return
     setIsReading(true)
     setError(null)
+    const epoch = loadEpoch()
     try {
       validateCardFile(file)
       const buffer = await file.arrayBuffer()
       const bytes = new Uint8Array(buffer)
       validateCardBytes(bytes)
       const parserJson = await parseDddBinary(bytes)
-      onDataLoaded(mapDddParserJson(parserJson), file.name)
+      if (epoch !== loadEpoch()) return
+      onDataLoaded(mapDddParserJson(parserJson), file.name, epoch)
     } catch (cause) {
+      if (epoch !== loadEpoch()) return
       const message =
         cause instanceof CardFileError
           ? cause.message

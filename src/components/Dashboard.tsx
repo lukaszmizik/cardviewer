@@ -17,9 +17,12 @@ type DashboardProps = {
   onDataLoaded: (
     parsedJson: DriverCardData,
     fileName: string,
-    raw?: { bytes: Uint8Array; missingFiles: string[] },
+    raw: { bytes: Uint8Array; missingFiles: string[] } | undefined,
+    epoch: number,
   ) => void
   onOpenRecent: (file: RecentCardFile) => void
+  loadEpoch: () => number
+  onClearBrowsingHistory: () => void
 }
 
 function formatLoadedAt(ms: number): string {
@@ -32,32 +35,45 @@ function formatLoadedAt(ms: number): string {
   })
 }
 
-export function Dashboard({ card, recentFiles, downloadedCard, onDataLoaded, onOpenRecent }: DashboardProps) {
+export function Dashboard({
+  card,
+  recentFiles,
+  downloadedCard,
+  onDataLoaded,
+  onOpenRecent,
+  loadEpoch,
+  onClearBrowsingHistory,
+}: DashboardProps) {
   const [usbDialogOpen, setUsbDialogOpen] = useState(false)
   const [usbReading, setUsbReading] = useState(false)
   const [usbStatus, setUsbStatus] = useState<string | null>(null)
   const [usbError, setUsbError] = useState<{ title: string; message: string } | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [clearDialogOpen, setClearDialogOpen] = useState(false)
+  const [clearedMessage, setClearedMessage] = useState<string | null>(null)
 
   async function readFromReader() {
     if (usbReading) return
     setUsbReading(true)
     setUsbError(null)
     setUsbStatus('Připravuji komunikaci se čtečkou…')
+    const epoch = loadEpoch()
     try {
       const missingFiles: string[] = []
       const bytes = await downloadDriverCard((message) => setUsbStatus(message), missingFiles)
       validateCardBytes(bytes)
       setUsbStatus('Dekóduji výpis karty…')
       const parsed = mapDddParserJson(await parseDddBinary(bytes))
+      if (epoch !== loadEpoch()) return
       const stamp = new Date()
       const pad = (n: number) => String(n).padStart(2, '0')
       const fileName = `C_ctecka_${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}.ddd`
-      onDataLoaded(parsed, fileName, { bytes, missingFiles })
+      onDataLoaded(parsed, fileName, { bytes, missingFiles }, epoch)
       setUsbDialogOpen(false)
       setUsbStatus(null)
     } catch (cause) {
+      if (epoch !== loadEpoch()) return
       const message =
         cause instanceof CardReaderError || cause instanceof CardFileError
           ? cause.message
@@ -88,7 +104,10 @@ export function Dashboard({ card, recentFiles, downloadedCard, onDataLoaded, onO
 
       <div className="import-grid">
         <div className="import-panel import-panel--upload">
-          <FileUploader onDataLoaded={onDataLoaded} />
+          <FileUploader
+            loadEpoch={loadEpoch}
+            onDataLoaded={(parsedJson, fileName, epoch) => onDataLoaded(parsedJson, fileName, undefined, epoch)}
+          />
           <div className="dashboard-actions">
             <button type="button" className="btn-accent" onClick={() => setUsbDialogOpen(true)}>
               Načíst ze čtečky USB
@@ -138,6 +157,10 @@ export function Dashboard({ card, recentFiles, downloadedCard, onDataLoaded, onO
               ))}
             </ul>
           )}
+          <button type="button" className="recent-files-clear" onClick={() => setClearDialogOpen(true)}>
+            Vymazat historii prohlížení
+          </button>
+          {clearedMessage && <p className="file-uploader-status">{clearedMessage}</p>}
         </aside>
       </div>
 
@@ -164,6 +187,52 @@ export function Dashboard({ card, recentFiles, downloadedCard, onDataLoaded, onO
               </tr>
             </tbody>
           </table>
+        </div>
+      )}
+
+      {clearDialogOpen && (
+        <div
+          className="work-week-graph-overlay"
+          onClick={() => setClearDialogOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="clear-history-title"
+        >
+          <div className="usb-dialog" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="work-week-graph-close"
+              onClick={() => setClearDialogOpen(false)}
+              aria-label="Zavřít"
+            >
+              ×
+            </button>
+            <h2 id="clear-history-title" className="work-week-graph-title">
+              Vymazat historii prohlížení
+            </h2>
+            <p className="usb-dialog-text">
+              Opravdu chcete vymazat všechna lokálně uložená data karet? Tato akce odstraní historii načtených karet i aktuálně zobrazenou kartu.
+            </p>
+            <div className="dashboard-actions">
+              <button
+                type="button"
+                className="btn-accent"
+                onClick={() => {
+                  onClearBrowsingHistory()
+                  setClearDialogOpen(false)
+                  setUsbDialogOpen(false)
+                  setSaveError(null)
+                  setSaveMessage(null)
+                  setClearedMessage('Lokálně uložená data karet byla vymazána.')
+                }}
+              >
+                Vymazat
+              </button>
+              <button type="button" className="work-week-graph-nav-btn" onClick={() => setClearDialogOpen(false)}>
+                Zrušit
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

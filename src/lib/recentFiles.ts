@@ -40,6 +40,14 @@ export function rememberRecentFile(current: RecentCardFile[], fileName: string, 
   return list
 }
 
+export function clearStoredRecentFiles(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+  } catch {
+    /* úložiště prohlížeče není dostupné */
+  }
+}
+
 function saveRecentFiles(files: RecentCardFile[]) {
   let list = files
   while (list.length > 0) {
