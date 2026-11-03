@@ -1122,6 +1122,19 @@ body {
   white-space: nowrap;
 }
 
+.card-history-vehicle-main td {
+  border-bottom: none;
+  padding-bottom: 2px;
+}
+
+.card-history-vehicle-extra td {
+  padding-top: 0;
+  white-space: normal;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .work-week-graph-legend-summary {
   margin-top: 8px;
   padding-top: 8px;

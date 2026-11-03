@@ -156,8 +156,11 @@ type DddVehicleRecord = {
   vehicle_odometer_begin?: number | null
   vehicle_odometer_end?: number | null
   vehicle_registration?: {
+    vehicle_registration_nation?: number | null
     vehicle_registration_number?: string | null
   }
+  vu_data_block_counter?: number | null
+  vehicle_identification_number?: string | null
 }
 
 type DddVehiclesBlock = {
@@ -844,11 +847,20 @@ function mapVehicleUses(card: DddParserCardJson): VehicleUse[] {
       const toUtc = recordedMs(record.vehicle_last_use)
       const registration = registrationPlate(record.vehicle_registration?.vehicle_registration_number)
       if (fromUtc == null || toUtc == null || registration == null) return null
+      const vin = record.vehicle_identification_number?.replace(/\0/g, '').trim()
       return {
         registration,
         fromUtc,
         toUtc,
         kilometers: traveledKilometers(record.vehicle_odometer_begin, record.vehicle_odometer_end),
+        registrationNation: nationCode(record.vehicle_registration?.vehicle_registration_nation ?? undefined),
+        vin: vin ? vin : undefined,
+        odometerBeginKm: odometerKm(record.vehicle_odometer_begin),
+        odometerEndKm: odometerKm(record.vehicle_odometer_end),
+        dataBlockCounter:
+          typeof record.vu_data_block_counter === 'number' && Number.isFinite(record.vu_data_block_counter)
+            ? record.vu_data_block_counter
+            : null,
       }
     })
     .filter((record): record is VehicleUse => record != null)

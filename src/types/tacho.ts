@@ -58,6 +58,14 @@ export interface VehicleUse {
   toUtc: number
   /** Ujeté kilometry podle počítadla. Chybí, když karta konec jízdy nezaznamenala. */
   kilometers: number | null
+  /** Stát registrace vozidla z karty, kód ISO. */
+  registrationNation?: string
+  /** Identifikační číslo vozidla. U 1. generace karta VIN neukládá. */
+  vin?: string
+  odometerBeginKm?: number | null
+  odometerEndKm?: number | null
+  /** Čítač datového bloku vozidlové jednotky. */
+  dataBlockCounter?: number | null
 }
 
 export interface CardIncident {

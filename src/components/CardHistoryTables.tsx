@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import type { ClockMode } from '../lib/clock'
 import { addDays, formatClockDateTime } from '../lib/clock'
 import type { CardIncident, DriverCardData, LoadUnloadEntry, VehicleUse } from '../types/tacho'
@@ -43,18 +43,39 @@ function emptyRow(columns: number) {
   )
 }
 
+function vehicleDetail(use: VehicleUse): string {
+  const parts: string[] = []
+  if (use.registrationNation) parts.push(`Stát registrace ${use.registrationNation}`)
+  if (use.vin) parts.push(`VIN ${use.vin}`)
+  if (use.odometerBeginKm != null || use.odometerEndKm != null) {
+    parts.push(`Počítadlo ${formatKm(use.odometerBeginKm ?? null)} – ${formatKm(use.odometerEndKm ?? null)}`)
+  }
+  if (use.dataBlockCounter != null) parts.push(`Čítač bloku dat ${use.dataBlockCounter}`)
+  return parts.join(' · ')
+}
+
 function vehicleRows(uses: VehicleUse[], weekStart: number, weekEnd: number, mode: ClockMode) {
   return uses
     .filter((use) => overlapsWeek(use.fromUtc, use.toUtc, weekStart, weekEnd))
     .sort((a, b) => b.fromUtc - a.fromUtc)
-    .map((use) => (
-      <tr key={`${use.registration}-${use.fromUtc}`}>
-        <td>{use.registration}</td>
-        <td>{formatClockDateTime(use.fromUtc, mode)}</td>
-        <td>{formatClockDateTime(use.toUtc, mode)}</td>
-        <td>{formatKm(use.kilometers)}</td>
-      </tr>
-    ))
+    .map((use) => {
+      const detail = vehicleDetail(use)
+      return (
+        <Fragment key={`${use.registration}-${use.fromUtc}`}>
+          <tr className="card-history-vehicle-main">
+            <td>{use.registration}</td>
+            <td>{formatClockDateTime(use.fromUtc, mode)}</td>
+            <td>{formatClockDateTime(use.toUtc, mode)}</td>
+            <td>{formatKm(use.kilometers)}</td>
+          </tr>
+          {detail ? (
+            <tr className="card-history-vehicle-extra">
+              <td colSpan={4}>{detail}</td>
+            </tr>
+          ) : null}
+        </Fragment>
+      )
+    })
 }
 
 function incidentRows(items: CardIncident[], weekStart: number, weekEnd: number, mode: ClockMode) {
