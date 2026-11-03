@@ -50,7 +50,6 @@ function vehicleDetail(use: VehicleUse): string {
   if (use.odometerBeginKm != null || use.odometerEndKm != null) {
     parts.push(`Počítadlo ${formatKm(use.odometerBeginKm ?? null)} – ${formatKm(use.odometerEndKm ?? null)}`)
   }
-  if (use.dataBlockCounter != null) parts.push(`Čítač bloku dat ${use.dataBlockCounter}`)
   return parts.join(' · ')
 }
 
