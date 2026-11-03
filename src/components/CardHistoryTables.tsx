@@ -24,9 +24,9 @@ function overlapsWeek(fromUtc: number, toUtc: number, weekStart: number, weekEnd
   return fromUtc < weekEnd && toUtc > weekStart
 }
 
-function HistoryTable({ title, children }: { title: string; children: ReactNode }) {
+function HistoryTable({ title, accent, children }: { title: string; accent: string; children: ReactNode }) {
   return (
-    <section className="card-history">
+    <section className={`card-history card-history--${accent}`}>
       <h3 className="card-history-title">{title}</h3>
       <div className="work-week-graph-table-wrapper">
         <table className="work-week-graph-table card-history-table">{children}</table>
@@ -110,7 +110,7 @@ export function CardHistoryTables({ card, weekStartMs, clockMode }: CardHistoryT
 
   return (
     <div className="card-history-group">
-      <HistoryTable title="Historie použitých vozidel">
+      <HistoryTable title="Historie použitých vozidel" accent="vehicles">
         <thead>
           <tr>
             <th>Vozidlo</th>
@@ -121,7 +121,7 @@ export function CardHistoryTables({ card, weekStartMs, clockMode }: CardHistoryT
         </thead>
         <tbody>{vehicles.length > 0 ? vehicles : emptyRow(4)}</tbody>
       </HistoryTable>
-      <HistoryTable title="Události">
+      <HistoryTable title="Události" accent="events">
         <thead>
           <tr>
             <th>Od</th>
@@ -132,7 +132,7 @@ export function CardHistoryTables({ card, weekStartMs, clockMode }: CardHistoryT
         </thead>
         <tbody>{events.length > 0 ? events : emptyRow(4)}</tbody>
       </HistoryTable>
-      <HistoryTable title="Závady">
+      <HistoryTable title="Závady" accent="faults">
         <thead>
           <tr>
             <th>Od</th>
@@ -143,7 +143,7 @@ export function CardHistoryTables({ card, weekStartMs, clockMode }: CardHistoryT
         </thead>
         <tbody>{faults.length > 0 ? faults : emptyRow(4)}</tbody>
       </HistoryTable>
-      <HistoryTable title="Zadané nakládky a vykládky">
+      <HistoryTable title="Zadané nakládky a vykládky" accent="loads">
         <thead>
           <tr>
             <th>Datum</th>

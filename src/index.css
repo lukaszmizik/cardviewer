@@ -1107,9 +1107,27 @@ body {
 
 .card-history-title {
   margin: 0 0 6px;
+  padding-left: 10px;
+  border-left: 3px solid var(--card-history-accent, #6366f1);
   font-size: 15px;
   font-weight: 600;
   color: #0f172a;
+}
+
+.card-history--vehicles {
+  --card-history-accent: #4f46e5;
+}
+
+.card-history--events {
+  --card-history-accent: #0284c7;
+}
+
+.card-history--faults {
+  --card-history-accent: #d97706;
+}
+
+.card-history--loads {
+  --card-history-accent: #15803d;
 }
 
 .card-history-table td:first-child {
@@ -1125,26 +1143,22 @@ body {
 .card-history-vehicle-main td,
 .card-history-vehicle-extra td {
   background: #f8fafc;
-}
-
-.card-history-vehicle-main td:first-child,
-.card-history-vehicle-extra td:first-child {
-  box-shadow: inset 3px 0 0 #6366f1;
+  border-bottom: none;
 }
 
 .card-history-vehicle-main td {
-  border-bottom: none;
-  padding-bottom: 2px;
+  padding-top: 8px;
+  padding-bottom: 0;
 }
 
 .card-history-vehicle-extra td {
   padding-top: 0;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 6px;
+  border-bottom: 8px solid #fff;
   white-space: normal;
   color: #64748b;
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.35;
 }
 
 .work-week-graph-legend-summary {
