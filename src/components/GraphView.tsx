@@ -35,6 +35,7 @@ export function GraphView({ data, onUploadCard }: GraphViewProps) {
         manualEntryBuffer={graph.manualEntryBuffer}
         lastWithdrawalUtc={graph.lastWithdrawalUtc}
         loadUnloadEvents={graph.loadUnloadEvents}
+        ferryTrainEvents={graph.ferryTrainEvents}
         symbolMap={TACHO_SYMBOLS}
         recordedGpsLocations={graph.recordedGpsLocations}
         faultsAndEvents={graph.faultsAndEvents}

@@ -913,10 +913,13 @@ function GraphBlock({
                       <strong>{t.workWeek.ferryTrainSection}</strong>
                       <div className="work-week-graph-manual-list">
                         {ferryTrainEvents.filter((ev) => ev.minuteStartUtc >= visibleFirstDate && ev.minuteStartUtc < visibleLastEnd).map((ev, i) => {
-                          const label = ev.type === 'activation' ? t.workWeek.activation : t.workWeek.deactivation
+                          const label = ev.type === 'activation' ? 'trajekt' : 'konec trajektu'
+                          const symbol = tachoSymbol(symbolMap, FERRY_TRAIN_SYMBOL_ID)
                           return (
                             <div key={i} className="work-week-graph-manual-item">
-                              {formatTimestamp(ev.minuteStartUtc, clockMode)} | <em>{label}</em>{ev.gpsLocation ? ` (${ev.gpsLocation})` : ''}
+                              {formatTimestamp(ev.minuteStartUtc, clockMode)} |{' '}
+                              {symbol ? <span className="tacho-icon">{symbol}</span> : null} <em>{label}</em>
+                              {ev.gpsLocation ? ` (${ev.gpsLocation})` : ''}
                             </div>
                           )
                         })}

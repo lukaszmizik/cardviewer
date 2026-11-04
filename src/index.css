@@ -326,20 +326,10 @@ body {
   word-break: break-word;
 }
 
-.dashboard-card-info {
-  max-height: none;
-}
-
 .dashboard-actions {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-}
-
-.recent-files {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 
 .recent-files-title {
@@ -355,42 +345,15 @@ body {
   font-size: 0.9375rem;
 }
 
-.recent-files-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.recent-file {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
-}
-
-.recent-file-button {
+.loaded-card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  width: 100%;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: #1e293b;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
 }
 
-.recent-file:hover {
-  border-color: #cbd5e1;
+.loaded-card p {
+  margin: 0;
 }
 
 .recent-file-export {

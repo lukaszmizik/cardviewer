@@ -5,14 +5,12 @@ import { CompliancePage } from './pages/CompliancePage'
 import { GraphPage } from './pages/GraphPage'
 import type { DriverCardData } from './types/tacho'
 import type { AppTab } from './types/navigation'
-import { clearStoredRecentFiles, loadRecentFiles, rememberRecentFile, type RecentCardFile } from './lib/recentFiles'
+import { forgetStoredCards, type LoadedCardFile } from './lib/recentFiles'
 
 function App() {
   const [currentTab, setCurrentTab] = useState<AppTab>('dashboard')
   const [card, setCard] = useState<DriverCardData | null>(null)
-  const [recentFiles, setRecentFiles] = useState<RecentCardFile[]>(() => loadRecentFiles())
-  const recentRef = useRef(recentFiles)
-  recentRef.current = recentFiles
+  const [loadedFile, setLoadedFile] = useState<LoadedCardFile | null>(null)
   const loadEpoch = useRef(0)
 
   function openCard(next: DriverCardData) {
@@ -20,23 +18,29 @@ function App() {
     setCurrentTab('graph')
   }
 
-  function clearBrowsingHistory() {
+  function dropLoadedCard() {
     loadEpoch.current += 1
-    clearStoredRecentFiles()
-    recentRef.current = []
+    forgetStoredCards()
     setCard(null)
-    setRecentFiles([])
+    setLoadedFile(null)
+  }
+
+  function clearBrowsingHistory() {
+    dropLoadedCard()
     setCurrentTab('dashboard')
   }
 
-  function commitRecentCard(
+  function commitLoadedCard(
     parsedJson: DriverCardData,
     fileName: string,
-    raw: { bytes: Uint8Array; missingFiles: string[] } | undefined,
+    raw: { bytes: Uint8Array; missingFiles: string[] },
   ) {
-    const next = rememberRecentFile(recentRef.current, fileName, parsedJson, raw, Date.now())
-    recentRef.current = next
-    setRecentFiles(next)
+    setLoadedFile({
+      fileName,
+      loadedAt: Date.now(),
+      bytes: raw.bytes.slice(),
+      missingFiles: raw.missingFiles.slice(),
+    })
   }
 
   return (
@@ -44,16 +48,14 @@ function App() {
       <div hidden={currentTab !== 'dashboard'}>
         <Dashboard
           card={card}
-          recentFiles={recentFiles}
+          loadedFile={loadedFile}
           loadEpoch={() => loadEpoch.current}
           onClearBrowsingHistory={clearBrowsingHistory}
+          onDropLoadedCard={dropLoadedCard}
           onDataLoaded={(parsedJson, fileName, raw, epoch) => {
             if (epoch !== loadEpoch.current) return
-            commitRecentCard(parsedJson, fileName, raw)
+            commitLoadedCard(parsedJson, fileName, raw)
             openCard(parsedJson)
-          }}
-          onOpenRecent={(file) => {
-            openCard(file.card)
           }}
         />
       </div>

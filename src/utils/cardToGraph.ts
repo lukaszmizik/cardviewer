@@ -7,6 +7,7 @@ import type {
   FaultOrEvent,
   ManualEntrySegment,
   RecordedGpsLocation,
+  FerryTrainEvent,
   VehicleLoadUnloadEvent,
 } from '../TachoTypes'
 
@@ -32,6 +33,7 @@ export type CardGraphModel = {
   manualEntryBuffer: ManualEntrySegment[]
   lastWithdrawalUtc: number | null
   loadUnloadEvents: VehicleLoadUnloadEvent[]
+  ferryTrainEvents: FerryTrainEvent[]
   recordedGpsLocations: RecordedGpsLocation[]
   faultsAndEvents: FaultOrEvent[]
 }
@@ -187,6 +189,13 @@ function toManualBuffer(card: DriverCardData, mode: ClockMode): ManualEntrySegme
   })
 }
 
+function toFerry(card: DriverCardData): FerryTrainEvent[] {
+  return (card.specificConditions ?? []).map((entry) => ({
+    minuteStartUtc: entry.atUtc,
+    type: entry.kind === 'ferry_end' ? 'deactivation' : 'activation',
+  }))
+}
+
 function toLoadUnload(locations: Location[]): VehicleLoadUnloadEvent[] {
   return locations
     .filter((loc) => loc.recordType === 'load' || loc.recordType === 'unload' || loc.recordType === 'load_unload')
@@ -302,6 +311,7 @@ export function cardToGraph(card: DriverCardData, clockMode: ClockMode = 'local'
     manualEntryBuffer: toManualBuffer(card, clockMode),
     lastWithdrawalUtc: card.lastWithdrawalUtc,
     loadUnloadEvents: toLoadUnload(card.locations),
+    ferryTrainEvents: toFerry(card),
     recordedGpsLocations: toGpsLocations(card.locations),
     faultsAndEvents: toFaults(card.violations),
   }

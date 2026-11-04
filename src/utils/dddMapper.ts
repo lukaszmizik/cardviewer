@@ -8,6 +8,8 @@ import type {
   LoadUnloadEntry,
   LoadUnloadKind,
   Location,
+  SpecificConditionEntry,
+  SpecificConditionKind,
   LocationRecordType,
   VehicleUse,
 } from '../types/tacho'
@@ -25,6 +27,8 @@ export type DddParserCardJson = {
   gnss_accumulated_driving?: DddGnssBlock
   card_border_crossings?: DddBorderBlock
   card_load_unload_operations?: DddLoadUnloadBlock
+  specific_conditions_1?: DddSpecificConditionsBlock
+  specific_conditions_2?: DddSpecificConditionsBlock
   card_vehicles_used_1?: DddVehiclesBlock
   card_vehicles_used_2?: DddVehiclesBlock
   card_event_data_1?: DddEventBlock
@@ -148,6 +152,15 @@ type DddLoadUnloadRecord = {
 
 type DddLoadUnloadBlock = {
   card_load_unload_records?: DddLoadUnloadRecord[]
+}
+
+type DddSpecificConditionRecord = {
+  entry_time?: string | null
+  specific_condition_type?: number
+}
+
+type DddSpecificConditionsBlock = {
+  specific_condition_records?: DddSpecificConditionRecord[]
 }
 
 type DddVehicleRecord = {
@@ -939,6 +952,29 @@ function loadUnloadKind(operation: number | undefined): LoadUnloadKind {
   return 'load'
 }
 
+/** 1 začátek OUT, 2 konec OUT, 3 začátek trajektu, 4 konec trajektu. */
+function specificConditionKind(type: number | undefined): SpecificConditionKind | null {
+  if (type === 3) return 'ferry'
+  if (type === 4) return 'ferry_end'
+  return null
+}
+
+function mapSpecificConditions(card: DddParserCardJson): SpecificConditionEntry[] {
+  const records = mergeByTime(
+    card.specific_conditions_2?.specific_condition_records,
+    card.specific_conditions_1?.specific_condition_records,
+    (record) => record.entry_time,
+  )
+  const entries: SpecificConditionEntry[] = []
+  for (const record of records) {
+    const atUtc = parseUnixMs(record.entry_time)
+    const kind = specificConditionKind(record.specific_condition_type)
+    if (atUtc == null || kind == null) continue
+    entries.push({ atUtc, kind })
+  }
+  return entries.sort((a, b) => a.atUtc - b.atUtc)
+}
+
 function mapLoadUnloadEntries(card: DddParserCardJson): LoadUnloadEntry[] {
   const entries: LoadUnloadEntry[] = []
   for (const record of card.card_load_unload_operations?.card_load_unload_records ?? []) {
@@ -1015,6 +1051,7 @@ export function mapDddParserJson(parserJson: unknown): DriverCardData {
     events: mapEvents(card),
     faults: mapFaults(card),
     loadUnloadEntries: mapLoadUnloadEntries(card),
+    specificConditions: mapSpecificConditions(card),
   }
 
   if (!mapped.cardNumber && !mapped.surname && mapped.activities.length === 0) {

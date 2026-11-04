@@ -1,7 +1,7 @@
 import { useState } from 'react'
+import type { LoadedCardFile } from '../lib/recentFiles'
 import type { DriverCardData } from '../types/tacho'
 import { driverDisplayName } from '../lib/placeholderCard'
-import { recentCardRaw, type RecentCardFile } from '../lib/recentFiles'
 import { CardFileError, validateCardBytes } from '../lib/cardFile'
 import { CardReaderError } from '../lib/cardReader/errors'
 import { downloadDriverCard } from '../lib/cardReader/tachographDownload'
@@ -12,16 +12,16 @@ import { FileUploader } from './FileUploader'
 
 type DashboardProps = {
   card: DriverCardData | null
-  recentFiles: RecentCardFile[]
+  loadedFile: LoadedCardFile | null
   onDataLoaded: (
     parsedJson: DriverCardData,
     fileName: string,
-    raw: { bytes: Uint8Array; missingFiles: string[] } | undefined,
+    raw: { bytes: Uint8Array; missingFiles: string[] },
     epoch: number,
   ) => void
-  onOpenRecent: (file: RecentCardFile) => void
   loadEpoch: () => number
   onClearBrowsingHistory: () => void
+  onDropLoadedCard: () => void
 }
 
 function formatLoadedAt(ms: number): string {
@@ -36,11 +36,11 @@ function formatLoadedAt(ms: number): string {
 
 export function Dashboard({
   card,
-  recentFiles,
+  loadedFile,
   onDataLoaded,
-  onOpenRecent,
   loadEpoch,
   onClearBrowsingHistory,
+  onDropLoadedCard,
 }: DashboardProps) {
   const [usbDialogOpen, setUsbDialogOpen] = useState(false)
   const [usbReading, setUsbReading] = useState(false)
@@ -54,6 +54,7 @@ export function Dashboard({
 
   async function readFromReader() {
     if (usbReading) return
+    onDropLoadedCard()
     setUsbReading(true)
     setUsbError(null)
     setUsbStatus('Připravuji komunikaci se čtečkou…')
@@ -125,55 +126,44 @@ export function Dashboard({
           </div>
         </div>
 
-        <aside className="import-panel import-panel--recent" aria-label="Poslední načtené soubory">
-          <h2 className="recent-files-title">Poslední načtené soubory</h2>
-          {recentFiles.length === 0 ? (
-            <p className="recent-files-empty">Zatím není načtený žádný soubor.</p>
+        <aside className="import-panel import-panel--recent" aria-label="Načtená karta">
+          <h2 className="recent-files-title">Načtená karta</h2>
+          {card && loadedFile ? (
+            <div className="loaded-card">
+              <p className="recent-file-name">{loadedFile.fileName}</p>
+              <p className="recent-file-meta">
+                {[driverDisplayName(card), card.cardNumber].filter(Boolean).join(' · ') || 'Karta řidiče'}
+              </p>
+              <p className="recent-file-meta">Platnost {card.dateOfExpiry ?? '—'}</p>
+              <time className="recent-file-time" dateTime={new Date(loadedFile.loadedAt).toISOString()}>
+                {formatLoadedAt(loadedFile.loadedAt)}
+              </time>
+              <button
+                type="button"
+                className="recent-file-export"
+                title={`Uložit ${loadedFile.fileName}`}
+                onClick={() => {
+                  setSaveError(null)
+                  setSaveMessage(null)
+                  void saveDownloadedDdd({
+                    bytes: loadedFile.bytes,
+                    missingFiles: loadedFile.missingFiles,
+                    cardNumber: card.cardNumber,
+                    fileName: loadedFile.fileName,
+                  })
+                    .then((savedName) => {
+                      if (savedName) setSaveMessage(`Soubor ${savedName} byl uložen.`)
+                    })
+                    .catch((cause: unknown) => {
+                      setSaveError(cause instanceof Error ? cause.message : 'Soubor se nepodařilo uložit.')
+                    })
+                }}
+              >
+                Exportovat .DDD
+              </button>
+            </div>
           ) : (
-            <ul className="recent-files-list">
-              {recentFiles.map((file) => {
-                const raw = recentCardRaw(file.id)
-                return (
-                  <li key={file.id} className="recent-file">
-                    <button type="button" className="recent-file-button" onClick={() => onOpenRecent(file)}>
-                      <span className="recent-file-name">{file.fileName}</span>
-                      <span className="recent-file-meta">
-                        {[file.driverName, file.cardNumber].filter(Boolean).join(' · ') || 'Karta řidiče'}
-                      </span>
-                      <time className="recent-file-time" dateTime={new Date(file.loadedAt).toISOString()}>
-                        {formatLoadedAt(file.loadedAt)}
-                      </time>
-                    </button>
-                    <button
-                      type="button"
-                      className="recent-file-export"
-                      disabled={!raw}
-                      title={raw ? `Uložit ${file.fileName}` : 'Soubor už v prohlížeči není. Načtěte kartu znovu.'}
-                      onClick={() => {
-                        const current = recentCardRaw(file.id)
-                        if (!current) return
-                        setSaveError(null)
-                        setSaveMessage(null)
-                        void saveDownloadedDdd({
-                          bytes: current.bytes,
-                          missingFiles: current.missingFiles,
-                          cardNumber: file.cardNumber,
-                          fileName: file.fileName,
-                        })
-                          .then((savedName) => {
-                            if (savedName) setSaveMessage(`Soubor ${savedName} byl uložen.`)
-                          })
-                          .catch((cause: unknown) => {
-                            setSaveError(cause instanceof Error ? cause.message : 'Soubor se nepodařilo uložit.')
-                          })
-                      }}
-                    >
-                      Exportovat .DDD
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
+            <p className="recent-files-empty">Není načtená žádná karta.</p>
           )}
           <button type="button" className="recent-files-clear" onClick={() => setClearDialogOpen(true)}>
             Vymazat historii prohlížení
@@ -183,32 +173,6 @@ export function Dashboard({
           {clearedMessage && <p className="file-uploader-status">{clearedMessage}</p>}
         </aside>
       </div>
-
-      {card && (
-        <div className="work-week-graph-table-wrapper dashboard-card-info">
-          <table className="work-week-graph-table">
-            <thead>
-              <tr>
-                <th colSpan={2}>Aktuálně načtená karta</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td className="work-week-graph-table-cell">Jméno</td>
-                <td className="work-week-graph-table-cell">{driverDisplayName(card)}</td>
-              </tr>
-              <tr>
-                <td className="work-week-graph-table-cell">Číslo karty</td>
-                <td className="work-week-graph-table-cell">{card.cardNumber}</td>
-              </tr>
-              <tr>
-                <td className="work-week-graph-table-cell">Platnost</td>
-                <td className="work-week-graph-table-cell">{card.dateOfExpiry ?? '—'}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      )}
 
       {clearDialogOpen && (
         <div
@@ -231,7 +195,7 @@ export function Dashboard({
               Vymazat historii prohlížení
             </h2>
             <p className="usb-dialog-text">
-              Opravdu chcete vymazat všechna lokálně uložená data karet? Tato akce odstraní historii načtených karet i aktuálně zobrazenou kartu.
+              Opravdu chcete vymazat lokálně uložená data karty? Tato akce odstraní aktuálně načtenou kartu.
             </p>
             <div className="dashboard-actions">
               <button
