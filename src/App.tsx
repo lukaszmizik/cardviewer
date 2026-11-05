@@ -62,7 +62,7 @@ function App() {
       {currentTab === 'graph' && (
         <GraphPage data={card} onUploadCard={() => setCurrentTab('dashboard')} />
       )}
-      {currentTab === 'compliance' && <CompliancePage />}
+      {currentTab === 'compliance' && <CompliancePage card={card} />}
     </Layout>
   )
 }

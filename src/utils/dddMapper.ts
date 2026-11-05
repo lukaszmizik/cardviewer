@@ -438,6 +438,8 @@ type SlotChange = {
   dayStart: number
   minutes: number
   change: DddActivityChange
+  /** Pořadí v surovém denním seznamu. Při shodném čase se nesmí rozhodit. */
+  order: number
 }
 
 function changeTime(item: SlotChange): number {
@@ -472,15 +474,19 @@ function spansUnrecordedDays(current: SlotChange, next: SlotChange, dayMs: numbe
   return next.dayStart - current.dayStart > dayMs
 }
 
-/** Půlnoc místního času po začátku činnosti. Chybějící dny Datacho vede od této hranice. */
-function nextLocalMidnight(ms: number): number {
-  const date = new Date(ms)
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime()
+function laterChange(collected: SlotChange[], index: number): SlotChange | undefined {
+  const startUtc = changeTime(collected[index]!)
+  for (let cursor = index + 1; cursor < collected.length; cursor += 1) {
+    const candidate = collected[cursor]!
+    if (changeTime(candidate) > startUtc) return candidate
+  }
+  return undefined
 }
 
 function mapActivities(card: DddParserCardJson): Activity[] {
   const days = mergeActivityDays(card)
   const collected: SlotChange[] = []
+  let order = 0
 
   for (const day of days) {
     const dayStart = parseUnixMs(day.activity_record_date)
@@ -493,34 +499,42 @@ function mapActivities(card: DddParserCardJson): Activity[] {
         dayStart,
         minutes: Math.max(0, change.minutes ?? 0),
         change,
+        order,
       })
+      order += 1
     }
   }
 
-  collected.sort((a, b) => changeTime(a) - changeTime(b))
+  collected.sort((a, b) => changeTime(a) - changeTime(b) || a.order - b.order)
 
   const dayMs = 24 * 60 * 60_000
-  const sameSlot = (a: SlotChange, b: SlotChange) => (a.change.driver === false) === (b.change.driver === false)
   const activities: Activity[] = []
   for (let i = 0; i < collected.length; i += 1) {
     const current = collected[i]!
-    const next = collected.slice(i + 1).find((item) => sameSlot(item, current))
     const startUtc = changeTime(current)
-    let endUtc = next ? changeTime(next) : current.dayStart + dayMs
+    const nextInOrder = collected[i + 1]
+    const sharesTimestamp = nextInOrder != null && changeTime(nextInOrder) === startUtc
+    const nextLater = laterChange(collected, i)
+    let endUtc = nextLater ? changeTime(nextLater) : current.dayStart + dayMs
     let unknownUntil: number | null = null
-    if (next && spansUnrecordedDays(current, next, dayMs) && !sameAbsentActivity(current, next)) {
-      const recordedUntil = Math.min(current.dayStart + dayMs, nextLocalMidnight(startUtc))
-      const nextUtc = changeTime(next)
+    if (sharesTimestamp) {
+      // Dřívější záznam ve stejné minutě se neprotahuje přes pozdější. Pořadí v kartě zůstává.
+      endUtc = startUtc
+    } else if (nextLater && spansUnrecordedDays(current, nextLater, dayMs) && !sameAbsentActivity(current, nextLater)) {
+      const recordedUntil = current.dayStart + dayMs
+      const nextUtc = changeTime(nextLater)
       if (recordedUntil > startUtc && recordedUntil < nextUtc) {
         endUtc = recordedUntil
         unknownUntil = nextUtc
       }
     }
+    if (endUtc < startUtc) continue
     const durationMinutes = Math.round((endUtc - startUtc) / 60_000)
-    if (durationMinutes <= 0) continue
+    if (durationMinutes < 0) continue
+    if (durationMinutes === 0 && !sharesTimestamp) continue
 
     const inVehicle = cardIsPresent(current.change)
-    const explicitManual = isExplicitManualEntry(current, next)
+    const explicitManual = isExplicitManualEntry(current, sharesTimestamp ? nextInOrder : nextLater)
     const slot: 1 | 2 = current.change.driver === false ? 2 : 1
 
     activities.push({
@@ -541,7 +555,6 @@ function mapActivities(card: DddParserCardJson): Activity[] {
         endUtc: unknownUntil,
         durationMinutes: Math.round((unknownUntil - endUtc) / 60_000),
         isManualEntry: false,
-        slot: 1,
       })
     }
   }
