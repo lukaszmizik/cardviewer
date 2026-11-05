@@ -1,0 +1,129 @@
+{
+  "exportedAtUtc": "2026-11-05T20:20:31.335Z",
+  "cases": [
+    {
+      "id": "recorded:activity-span",
+      "status": "recorded_fact",
+      "startUtc": 1722124800000,
+      "endUtc": 1785715200000,
+      "sourceActivityIds": [],
+      "module": "analyzeDriverActivities",
+      "summary": "Zaznamenáno 1526 aktivit v původní časové ose.",
+      "reason": "Počty a časy pocházejí z aktivit karty, ne z oříznutého grafu.",
+      "needed": "Pro denní návaznost zadat explicitní kotvu.",
+      "note": ""
+    },
+    {
+      "id": "recorded:length-classes",
+      "status": "recorded_fact",
+      "startUtc": 1722124800000,
+      "endUtc": 1785673920000,
+      "sourceActivityIds": [],
+      "module": "restCandidates",
+      "summary": "222 souvislých odpočinků, z toho 27 s týdenní délkou (25 alespoň 45 h, 2 alespoň 24 h a méně než 45 h).",
+      "reason": "Jde o délkovou způsobilost, ne o právně potvrzený odpočinek. Ruční záznam není chyba.",
+      "needed": "Týdenní roli vybrat explicitně. Samotná délka ji nepřiřazuje.",
+      "note": ""
+    },
+    {
+      "id": "insufficient:daily-anchor",
+      "status": "insufficient_data",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "dailyRestChain",
+      "summary": "Denní návaznost nemá kotvu.",
+      "reason": "Počátek 24hodinového okna se z prvního záznamu karty neodvozuje.",
+      "needed": "Zadat skutečný konec předchozího denního nebo týdenního odpočinku v UTC.",
+      "note": ""
+    },
+    {
+      "id": "insufficient:weekly-selection",
+      "status": "insufficient_data",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "weeklyRest",
+      "summary": "Týdenní odpočinek není vybraný.",
+      "reason": "Délková způsobilost není právní použití odpočinku jako týdenního.",
+      "needed": "Explicitně vybrat odpočinky a jejich týden.",
+      "note": ""
+    },
+    {
+      "id": "insufficient:unknown:gap-1330:1774224000000",
+      "status": "insufficient_data",
+      "startUtc": 1774224000000,
+      "endUtc": 1776816000000,
+      "sourceActivityIds": [
+        "gap-1330"
+      ],
+      "module": "restIntervals",
+      "summary": "Neznámý úsek není odpočinek.",
+      "reason": "Chybějící záznam se nedoplňuje domnělým odpočinkem a nepřemosťuje se.",
+      "needed": "Doplnit zdrojový záznam, nebo úsek ponechat jako neznámý.",
+      "note": ""
+    },
+    {
+      "id": "insufficient:unknown:act-1524:1785690000000",
+      "status": "insufficient_data",
+      "startUtc": 1785690000000,
+      "endUtc": 1785715200000,
+      "sourceActivityIds": [
+        "act-1524"
+      ],
+      "module": "restIntervals",
+      "summary": "Neznámý úsek není odpočinek.",
+      "reason": "Chybějící záznam se nedoplňuje domnělým odpočinkem a nepřemosťuje se.",
+      "needed": "Doplnit zdrojový záznam, nebo úsek ponechat jako neznámý.",
+      "note": ""
+    },
+    {
+      "id": "not-implemented:infringements",
+      "status": "not_implemented",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "analyzeDriverActivities",
+      "summary": "Přestupky se nevyhodnocují.",
+      "reason": "Jádro eviduje údaje a varianty. Právní nález nevytváří.",
+      "needed": "Samostatná vrstva nálezů, až budou pravidla dokončená.",
+      "note": ""
+    },
+    {
+      "id": "not-implemented:consecutive_weeks",
+      "status": "not_implemented",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "analyzeDriverActivities",
+      "summary": "Pravidlo dvou po sobě jdoucích týdnů není implementováno.",
+      "reason": "Týdenní modul tuto kontrolu záměrně nechává jako not_evaluated.",
+      "needed": "Doplnit pravidlo dvou týdnů až po explicitním výběru odpočinků.",
+      "note": ""
+    },
+    {
+      "id": "not-implemented:international_regime",
+      "status": "not_implemented",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "analyzeDriverActivities",
+      "summary": "Zvláštní režim mezinárodní nákladní dopravy není implementován.",
+      "reason": "Karta sama neprokazuje dopravu mimo stát usazení.",
+      "needed": "Výslovně zadat režim a doplnit čtyřtýdenní podmínku.",
+      "note": ""
+    },
+    {
+      "id": "not-implemented:compensation_taken",
+      "status": "not_implemented",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "analyzeDriverActivities",
+      "summary": "Čerpání kompenzace zkráceného týdenního odpočinku není implementováno.",
+      "reason": "Deficit se smí jen evidovat. K jinému odpočinku se nepřiřazuje.",
+      "needed": "Pozdější modul, který kompenzaci teprve spáruje.",
+      "note": ""
+    }
+  ]
+}

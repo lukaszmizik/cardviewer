@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { analyzeDriverActivities } from '../src/analysis/analyzeDriverActivities.ts'
-import { buildDiagnosticExport, deriveDiagnosticCases } from '../src/analysis/diagnosticCases.ts'
+import { buildDiagnosticExport, deriveDiagnosticCases, derivePeriodDiagnostics } from '../src/analysis/diagnosticCases.ts'
 import type { Activity, DriverCardData } from '../src/types/tacho.ts'
 
 const HOUR = 60 * 60 * 1000
@@ -86,14 +86,50 @@ test('mnoho neznámých úseků se ve výpisu sloučí', () => {
   assert.equal(unknownCases.some((item) => item.id === 'insufficient:unknown-summary'), true)
 })
 
-test('export obsahuje poznámku a neobsahuje identitu řidiče', () => {
-  const cases = deriveDiagnosticCases(analyzeDriverActivities({ card: card([]) }))
-  const exported = buildDiagnosticExport(cases, { 'insufficient:no-activities': 'ověřit u dopravce' }, '2026-03-02T06:00:00.000Z')
+test('export obsahuje poznámku, stav projektu a neobsahuje identitu řidiče', () => {
+  const analysis = analyzeDriverActivities({ card: card([]) })
+  const cases = deriveDiagnosticCases(analysis)
+  const periods = derivePeriodDiagnostics(analysis)
+  const exported = buildDiagnosticExport(
+    cases,
+    periods,
+    { 'insufficient:no-activities': 'ověřit u dopravce' },
+    '2026-03-02T06:00:00.000Z',
+  )
   const json = JSON.stringify(exported)
+  assert.equal(exported.schemaVersion, '2')
+  assert.equal(exported.projectStatus.modules.includes('dailyRestChain'), true)
   assert.equal(exported.cases[0]?.note, 'ověřit u dopravce')
   assert.equal(json.includes('SECRET-CARD'), false)
   assert.equal(json.includes('Tajny'), false)
   assert.equal(json.includes('Ridic'), false)
   assert.equal(json.includes('cardNumber'), false)
   assert.equal(Object.hasOwn(exported, 'activities'), false)
+})
+
+test('bez kotvy se konkrétní denní okna nevymýšlejí', () => {
+  const activities = Array.from({ length: 12 }, (_, index) =>
+    activity(`rest-${index}`, 'rest', ANCHOR + index * 30 * HOUR, ANCHOR + index * 30 * HOUR + 26 * HOUR),
+  )
+  const periods = derivePeriodDiagnostics(analyzeDriverActivities({ card: card(activities) }))
+  const missing = periods.find((item) => item.id === 'period:missing-daily-anchor')
+  assert.ok(missing)
+  assert.equal(missing?.blocker, 'missing_input')
+  assert.deepEqual(missing?.variants, [])
+  assert.equal(periods.some((item) => item.id.startsWith('period:daily:')), false)
+  assert.equal(periods.filter((item) => item.id.startsWith('period:rest-')).length, 0)
+})
+
+test('dvě vrácené denní varianty jsou v konkrétním období', () => {
+  const activities = [
+    activity('part-3', 'rest', Date.parse('2026-03-02T08:00:00.000Z'), Date.parse('2026-03-02T11:00:00.000Z')),
+    activity('part-9', 'rest', Date.parse('2026-03-02T14:00:00.000Z'), Date.parse('2026-03-02T23:00:00.000Z')),
+  ]
+  const periods = derivePeriodDiagnostics(analyzeDriverActivities({ card: card(activities), dailyAnchorUtc: ANCHOR }))
+  const branch = periods.find((item) => item.blocker === 'multiple_interpretations')
+  assert.ok(branch)
+  assert.equal(branch?.variants.length, 2)
+  assert.equal(branch?.variants.some((item) => item.startsWith('continuous_reduced')), true)
+  assert.equal(branch?.variants.some((item) => item.startsWith('split_regular')), true)
+  assert.equal(periods.some((item) => item.id === 'period:missing-daily-anchor'), false)
 })

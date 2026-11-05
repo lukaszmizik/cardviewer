@@ -11,7 +11,7 @@ Dokument popisuje, co umí výpočty v `src/analysis` k datu poslední úpravy d
 - `dailyRestChain.ts` navazuje 24hodinová období od explicitní kotvy. Další kotva je skutečný konec odpočinku.
 - `weeklyRest.ts` klasifikuje týdenní délku a posoudí jen explicitně vybrané odpočinky.
 - `analyzeDriverActivities.ts` složí tyto kroky z původních `DriverCardData.activities`.
-- `diagnosticCases.ts` z výsledku vybere případy k prověření.
+- `diagnosticCases.ts` z výsledku vybere souhrnné případy a konkrétní odpočinky nebo období. Export má schéma verze 2.
 
 ## Podporované typy výsledků
 

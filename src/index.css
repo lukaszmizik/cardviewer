@@ -493,7 +493,8 @@ body {
   color: #555;
 }
 
-.page-placeholder h2 {
+.page-placeholder h2,
+.diagnostic-review h3 {
   margin: 1.5rem 0 0.75rem;
   font-size: 1.1rem;
   color: #0f172a;

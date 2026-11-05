@@ -1,5 +1,6 @@
 import type { ActivityAnalysis, NotEvaluatedTopic } from './analyzeDriverActivities.ts'
 import type { DailyChainNode } from './dailyRestChain.ts'
+import type { WeeklySelectionReport } from './weeklyRest.ts'
 
 export type DiagnosticStatus =
   | 'recorded_fact'
@@ -19,10 +20,55 @@ export type DiagnosticCase = {
   needed: string
 }
 
-export type DiagnosticExport = {
-  exportedAtUtc: string
-  cases: Array<DiagnosticCase & { note: string }>
+export const DIAGNOSTIC_SCHEMA_VERSION = '2'
+
+export type PeriodBlocker = 'missing_implementation' | 'missing_input' | 'multiple_interpretations' | 'source_uncertainty'
+
+export type PeriodDiagnostic = {
+  id: string
+  blocker: PeriodBlocker
+  startUtc: number | null
+  endUtc: number | null
+  sourceActivityIds: string[]
+  established: string[]
+  variants: string[]
+  blockedBy: string
+  nextStep: string
+  module: string
 }
+
+export type DiagnosticProjectStatus = {
+  schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION
+  modules: string[]
+  limitations: string[]
+  unresolvedCaseIds: string[]
+}
+
+export type DiagnosticExport = {
+  schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION
+  exportedAtUtc: string
+  projectStatus: DiagnosticProjectStatus
+  cases: Array<DiagnosticCase & { note: string }>
+  periods: Array<PeriodDiagnostic & { note: string }>
+}
+
+const MODULES = [
+  'restIntervals',
+  'restCandidates',
+  'restWindowIntersection',
+  'dailyRestOptions',
+  'dailyRestChain',
+  'weeklyRest',
+  'analyzeDriverActivities',
+]
+
+const LIMITATIONS = [
+  'Denní okna se počítají jen z explicitní kotvy.',
+  'Týdenní použití se posuzuje jen z explicitního výběru a WeekClock.',
+  'Více délkových hranic jednoho odpočinku není více právních interpretací.',
+  'Neznámý úsek se nedoplňuje odpočinkem.',
+  'Přestupky, dvě po sobě jdoucí týdny, mezinárodní režim a čerpání kompenzace nejsou implementované.',
+]
 
 const LIST_LIMIT = 8
 
@@ -64,19 +110,288 @@ export function deriveDiagnosticCases(analysis: ActivityAnalysis): DiagnosticCas
   return cases
 }
 
+export function derivePeriodDiagnostics(analysis: ActivityAnalysis): PeriodDiagnostic[] {
+  const periods: PeriodDiagnostic[] = []
+  pushMissingDailyPeriods(analysis, periods)
+  pushMissingWeeklyPeriods(analysis, periods)
+  pushConcreteDailyPeriods(analysis, periods)
+  pushConcreteWeeklyPeriods(analysis, periods)
+  pushUnknownPeriods(analysis, periods)
+  pushAmbiguousPeriods(analysis, periods)
+  return periods
+}
+
 export function buildDiagnosticExport(
   cases: readonly DiagnosticCase[],
+  periods: readonly PeriodDiagnostic[],
   notes: Readonly<Record<string, string>>,
   exportedAtUtc: string,
 ): DiagnosticExport {
+  const withNotes = <T extends { id: string; sourceActivityIds: string[] }>(item: T) => ({
+    ...item,
+    sourceActivityIds: [...item.sourceActivityIds],
+    note: notes[item.id] ?? '',
+  })
+  const exportedCases = cases.map(withNotes)
+  const exportedPeriods = periods.map(withNotes)
   return {
+    schemaVersion: DIAGNOSTIC_SCHEMA_VERSION,
     exportedAtUtc,
-    cases: cases.map((item) => ({
-      ...item,
-      sourceActivityIds: [...item.sourceActivityIds],
-      note: notes[item.id] ?? '',
-    })),
+    projectStatus: {
+      schemaVersion: DIAGNOSTIC_SCHEMA_VERSION,
+      modules: [...MODULES],
+      limitations: [...LIMITATIONS],
+      unresolvedCaseIds: [
+        ...exportedCases.filter((item) => item.status !== 'recorded_fact').map((item) => item.id),
+        ...exportedPeriods.map((item) => item.id),
+      ],
+    },
+    cases: exportedCases,
+    periods: exportedPeriods,
   }
+}
+
+function pushMissingDailyPeriods(analysis: ActivityAnalysis, periods: PeriodDiagnostic[]): void {
+  if (analysis.assessed.daily.status !== 'requires_input') return
+  periods.push({
+    id: 'period:missing-daily-anchor',
+    blocker: 'missing_input',
+    startUtc: null,
+    endUtc: null,
+    sourceActivityIds: [],
+    established: [
+      `Spočteno ${analysis.candidates.restIntervals.length} souvislých odpočinků.`,
+      `Týdenní délkovou třídu má ${analysis.candidates.weeklyRestCandidates.length} odpočinků.`,
+    ],
+    variants: [],
+    blockedBy: 'Bez kotvy se findDailyRestOptions ani denní návaznost nevolají. Konkrétní sporná okna proto ve výstupu nejsou.',
+    nextStep: 'Zadat UTC konec předchozího denního nebo týdenního odpočinku a export opakovat.',
+    module: 'dailyRestChain',
+  })
+}
+
+function pushMissingWeeklyPeriods(analysis: ActivityAnalysis, periods: PeriodDiagnostic[]): void {
+  if (analysis.assessed.weekly.status !== 'requires_input') return
+  const regular = analysis.candidates.weeklyRestCandidates.filter((item) => item.lengthClass === 'regular').length
+  const reduced = analysis.candidates.weeklyRestCandidates.filter((item) => item.lengthClass === 'reduced').length
+  periods.push({
+    id: 'period:missing-weekly-selection',
+    blocker: 'missing_input',
+    startUtc: null,
+    endUtc: null,
+    sourceActivityIds: [],
+    established: [
+      `Délková třída regular: ${regular}. Délková třída reduced: ${reduced}.`,
+      'Třída popisuje jen délku. Právní použití jako týdenní odpočinek z ní nevzniká.',
+    ],
+    variants: [],
+    blockedBy: `Chybí ${analysis.assessed.weekly.missing.join(', ')}. Konkrétní týdenní přiřazení se nevymýšlí.`,
+    nextStep: 'Vybrat kandidáty z této karty, zadat weekId a WeekClock.',
+    module: 'weeklyRest',
+  })
+}
+
+function pushConcreteDailyPeriods(analysis: ActivityAnalysis, periods: PeriodDiagnostic[]): void {
+  if (analysis.assessed.daily.status !== 'assessed') return
+  const nodes = analysis.assessed.daily.chain.nodes
+  const branches = nodes.filter((node) => node.interpretations.length > 1)
+  pushLimited(branches, LIST_LIMIT, periods, dailyBranchPeriod, (omitted) => ({
+    id: 'period:daily-branches-summary',
+    blocker: 'multiple_interpretations',
+    startUtc: null,
+    endUtc: null,
+    sourceActivityIds: [],
+    established: [`Dalších oken s více variantami: ${omitted}. Jejich varianty nejsou v tomto výpisu vypsané.`],
+    variants: [],
+    blockedBy: 'Výpis je omezený, aby zůstal použitelný u dlouhé karty.',
+    nextStep: 'Po vyřešení vypsaných oken export opakovat se stejnou kotvou.',
+    module: 'dailyRestChain',
+  }))
+  const blocked = nodes.filter((node) => isBlockedWindow(node, nodes[0]?.anchorUtc))
+  pushLimited(blocked, LIST_LIMIT, periods, blockedWindowPeriod, (omitted) => ({
+    id: 'period:daily-blocked-summary',
+    blocker: 'missing_input',
+    startUtc: null,
+    endUtc: null,
+    sourceActivityIds: [],
+    established: [`Dalších neuzavřených oken: ${omitted}.`],
+    variants: [],
+    blockedBy: 'Okna bez splněného minima nebo s neznámým úsekem nejsou všechna vypsaná.',
+    nextStep: 'Doplnit záznam nebo kotvu a export opakovat.',
+    module: 'dailyRestChain',
+  }))
+}
+
+function dailyBranchPeriod(node: DailyChainNode): PeriodDiagnostic {
+  return {
+    id: `period:daily:${node.anchorUtc}`,
+    blocker: 'multiple_interpretations',
+    startUtc: node.windowStartUtc,
+    endUtc: node.windowEndUtc,
+    sourceActivityIds: uniqueIds(node.interpretations.flatMap((item) => item.parts.flatMap((part) => part.sourceActivityIds))),
+    established: [
+      `Okno ${node.windowStartUtc} až ${node.windowEndUtc}.`,
+      'Časy částí jsou původní intervaly. Minuty před lomítkem jsou jen průnik s oknem.',
+    ],
+    variants: node.interpretations.map(describeInterpretation),
+    blockedBy: 'dailyRestOptions vrátil více variant a žádnou nevybral.',
+    nextStep: 'Pro toto okno zvolit jednu vrácenou variantu a z jejího skutečného konce pokračovat.',
+    module: 'dailyRestOptions',
+  }
+}
+
+function blockedWindowPeriod(node: DailyChainNode): PeriodDiagnostic {
+  return {
+    id: `period:daily-blocked:${node.anchorUtc}`,
+    blocker: node.status === 'insufficient_data' ? 'source_uncertainty' : 'missing_implementation',
+    startUtc: node.windowStartUtc,
+    endUtc: node.windowEndUtc,
+    sourceActivityIds: uniqueIds(node.interpretations.flatMap((item) => item.parts.flatMap((part) => part.sourceActivityIds))),
+    established: [`Stav okna vrácený dailyRestChain: ${node.status}.`],
+    variants: node.interpretations.map(describeInterpretation),
+    blockedBy:
+      node.status === 'insufficient_data'
+        ? 'Okno protíná neznámý úsek, takže varianta denního odpočinku nevznikla.'
+        : 'Minimum v okně splněno není. Právní nález z toho jádro nevytváří.',
+    nextStep:
+      node.interpretations[0]?.nextAnchorUtc == null
+        ? 'Doplnit data nebo kotvu. Výsledek okna se nemá doplňovat odhadem.'
+        : `Skutečný konec pokračujícího odpočinku je ${node.interpretations[0].nextAnchorUtc}. Původní okno tím není splněné.`,
+    module: 'dailyRestChain',
+  }
+}
+
+function describeInterpretation(item: DailyChainNode['interpretations'][number]): string {
+  const minutes = item.parts.map((part) => `${part.restMinutesInsideWindow}/${part.candidateMinutes}`).join(', ')
+  const sources = item.parts.flatMap((part) => part.sourceActivityIds).join('+')
+  return `${item.kind}; qualifiesWindow=${item.qualifiesWindow}; nextAnchorUtc=${item.nextAnchorUtc ?? 'null'}; minutesInside/total=${minutes || 'none'}; sources=${sources || 'none'}`
+}
+
+function pushConcreteWeeklyPeriods(analysis: ActivityAnalysis, periods: PeriodDiagnostic[]): void {
+  if (analysis.assessed.weekly.status !== 'assessed') return
+  const result = analysis.assessed.weekly.result
+  const notable = result.selections.filter((item) => item.assignment.status !== 'assigned' || item.timing.status !== 'on_time')
+  pushLimited(notable, LIST_LIMIT, periods, weeklySelectionPeriod, (omitted) => ({
+    id: 'period:weekly-selections-summary',
+    blocker: 'missing_input',
+    startUtc: null,
+    endUtc: null,
+    sourceActivityIds: [],
+    established: [`Dalších nevyřízených týdenních výběrů: ${omitted}.`],
+    variants: [],
+    blockedBy: 'Výpis neobsahuje všechny vrácené výběry.',
+    nextStep: 'Po vyřešení vypsaných výběrů export opakovat.',
+    module: 'weeklyRest',
+  }))
+  if (result.dailyReduced.status === 'undecided') {
+    periods.push({
+      id: 'period:daily-reduced-undecided',
+      blocker: 'missing_input',
+      startUtc: null,
+      endUtc: null,
+      sourceActivityIds: [],
+      established: [`Použitelné konce týdenních odpočinků: ${result.boundaryEndsUtc.join(', ') || 'žádné'}.`],
+      variants: [],
+      blockedBy: 'Součet zkrácených denních odpočinků mezi předěly se neuzavřel.',
+      nextStep: 'Doplnit dva předěly a úplnou denní návaznost mezi nimi. Limit tří se neposuzuje.',
+      module: 'weeklyRest',
+    })
+  }
+}
+
+function weeklySelectionPeriod(item: WeeklySelectionReport): PeriodDiagnostic {
+  const timing = item.timing.status === 'undetermined' ? 'undetermined' : item.timing.status
+  return {
+    id: `period:weekly:${item.startUtc}:${item.sourceActivityIds.join('+')}`,
+    blocker: item.assignment.status !== 'assigned' ? 'missing_input' : item.timing.status === 'undetermined' ? 'source_uncertainty' : 'missing_implementation',
+    startUtc: item.startUtc,
+    endUtc: item.endUtc,
+    sourceActivityIds: [...item.sourceActivityIds],
+    established: [
+      `Délková třída ${item.lengthClass}, manualEntry=${item.manualEntry}, established=${item.established}.`,
+      `Přiřazení: ${item.assignment.status}. Časování vůči šesti 24hodinovým obdobím: ${timing}.`,
+    ],
+    variants: [],
+    blockedBy:
+      item.assignment.status === 'rejected'
+        ? `Výběr týdne odmítnut: ${item.assignment.reason}.`
+        : item.timing.status === 'late'
+          ? 'Začátek je později než konec předchozího týdenního odpočinku plus šestkrát 24 hodin. Přestupek se nevytváří.'
+          : 'Návaznost od předchozího týdenního konce nelze potvrdit.',
+    nextStep: 'Opravit výběr týdne nebo doplnit chybějící záznam a export opakovat.',
+    module: 'weeklyRest',
+  }
+}
+
+function pushUnknownPeriods(analysis: ActivityAnalysis, periods: PeriodDiagnostic[]): void {
+  const unknowns = analysis.recorded.unknownIntervals
+  pushLimited(
+    unknowns,
+    LIST_LIMIT,
+    periods,
+    (interval) => ({
+      id: `period:unknown:${interval.sourceActivityIds.join('+')}:${interval.startUtc}`,
+      blocker: 'source_uncertainty',
+      startUtc: interval.startUtc,
+      endUtc: interval.endUtc,
+      sourceActivityIds: [...interval.sourceActivityIds],
+      established: ['V původních aktivitách je druh unknown. Odpočinek z něj nevznikl.'],
+      variants: [],
+      blockedBy: 'Neznámý úsek přerušuje možnost spolehlivé návaznosti.',
+      nextStep: 'Doplnit činnost v tomto intervalu, nebo ho ponechat jako neznámý.',
+      module: 'restIntervals',
+    }),
+    (omitted) => ({
+      id: 'period:unknown-summary',
+      blocker: 'source_uncertainty',
+      startUtc: Math.min(...unknowns.map((item) => item.startUtc)),
+      endUtc: Math.max(...unknowns.map((item) => item.endUtc)),
+      sourceActivityIds: uniqueIds(
+        [...unknowns]
+          .sort((a, b) => b.endUtc - b.startUtc - (a.endUtc - a.startUtc))
+          .slice(0, LIST_LIMIT)
+          .flatMap((item) => item.sourceActivityIds),
+      ),
+      established: [`Počet neznámých úseků: ${unknowns.length}.`],
+      variants: [],
+      blockedBy: `Ve výpisu je nejvýše ${LIST_LIMIT} jednotlivých úseků. Dalších ${omitted} má stejný význam.`,
+      nextStep: 'Prověřit nejdřív nejdelší mezery. Žádnou nedoplňovat odpočinkem.',
+      module: 'restIntervals',
+    }),
+  )
+}
+
+function pushAmbiguousPeriods(analysis: ActivityAnalysis, periods: PeriodDiagnostic[]): void {
+  const ambiguous = analysis.candidates.restIntervals.filter((interval) => interval.ambiguous)
+  pushLimited(
+    ambiguous,
+    LIST_LIMIT,
+    periods,
+    (interval) => ({
+      id: `period:ambiguous:${interval.sourceActivityIds.join('+')}:${interval.startUtc}`,
+      blocker: 'source_uncertainty',
+      startUtc: interval.startUtc,
+      endUtc: interval.endUtc,
+      sourceActivityIds: [...interval.sourceActivityIds],
+      established: [`Délka intervalu je ${interval.durationMinutes} minut. Souvislost odpočinku prokázaná není.`],
+      variants: [],
+      blockedBy: interval.uncertainties.join(', ') || 'Překryv s jinou činností.',
+      nextStep: 'Vyjasnit pořadí překrytých činností. Délkové role se nemají brát jako právní varianty.',
+      module: 'restIntervals',
+    }),
+    (omitted) => ({
+      id: 'period:ambiguous-summary',
+      blocker: 'source_uncertainty',
+      startUtc: Math.min(...ambiguous.map((item) => item.startUtc)),
+      endUtc: Math.max(...ambiguous.map((item) => item.endUtc)),
+      sourceActivityIds: [],
+      established: [`Nejednoznačných odpočinků: ${ambiguous.length}.`],
+      variants: [],
+      blockedBy: `Dalších ${omitted} překryvů není vypsáno jednotlivě.`,
+      nextStep: 'Řešit vypsané překryvy. Ostatní mají stejný typ nejistoty.',
+      module: 'restIntervals',
+    }),
+  )
 }
 
 function pushRecordedFacts(analysis: ActivityAnalysis, cases: DiagnosticCase[]): void {
