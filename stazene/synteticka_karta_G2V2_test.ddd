@@ -1,0 +1,82 @@
+{
+  "fixture_format": "SYNTHETIC_TACHOGRAPH_CARD_FIXTURE",
+  "fixture_format_version": "1.0",
+  "generation": "G2V2",
+  "card_type": "DRIVER_CARD",
+  "synthetic": true,
+  "not_a_real_card_download": true,
+  "signature": null,
+  "signature_status": "UNSIGNED_SYNTHETIC_DATA",
+  "notice": "JSON-based logical fixture with .DDD extension. It is NOT an authentic Annex 1C binary DDD download and cannot test a low-level binary DDD decoder, cryptographic signature verification, or card authenticity. Use a fixture adapter to load these records into your normalized internal model.",
+  "card": {
+    "holder_surname": "NOVAK",
+    "holder_first_names": "JAN",
+    "birth_date": "1984-03-12",
+    "preferred_language": "cs",
+    "issuing_member_state": "CZE",
+    "card_number": "CZ000000000000001",
+    "card_generation": "G2V2",
+    "valid_from": "2025-01-01",
+    "valid_until": "2030-12-31"
+  },
+  "vehicle": {
+    "registration_country": "CZE",
+    "registration_number": "8T0 1234",
+    "vin": "TMB00000000000001",
+    "vehicle_type": "N3",
+    "initial_odometer_km": 482150
+  },
+  "time_basis": {
+    "timestamps": "ISO-8601 with explicit Europe/Prague offset",
+    "display_timezone": "Europe/Prague"
+  },
+  "activity_records": [
+    {"start":"2026-10-27T05:30:00+01:00","end":"2026-10-27T07:30:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":482150,"odometer_end_km":482270},
+    {"start":"2026-10-27T07:30:00+01:00","end":"2026-10-27T08:15:00+01:00","activity":"OTHER_WORK","label":"Nakládka","load_unload_ref":"LU001"},
+    {"start":"2026-10-27T08:15:00+01:00","end":"2026-10-27T10:45:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":482270,"odometer_end_km":482420},
+    {"start":"2026-10-27T10:45:00+01:00","end":"2026-10-27T11:00:00+01:00","activity":"AVAILABILITY"},
+    {"start":"2026-10-27T11:00:00+01:00","end":"2026-10-27T11:15:00+01:00","activity":"BREAK"},
+    {"start":"2026-10-27T11:15:00+01:00","end":"2026-10-27T12:45:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":482420,"odometer_end_km":482510},
+    {"start":"2026-10-27T12:45:00+01:00","end":"2026-10-27T13:30:00+01:00","activity":"OTHER_WORK","label":"Vykládka","load_unload_ref":"LU002"},
+    {"start":"2026-10-27T13:30:00+01:00","end":"2026-10-27T14:00:00+01:00","activity":"BREAK"},
+    {"start":"2026-10-27T14:00:00+01:00","end":"2026-10-27T15:00:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":482510,"odometer_end_km":482570},
+    {"start":"2026-10-27T15:00:00+01:00","end":"2026-10-28T03:00:00+01:00","activity":"REST"},
+
+    {"start":"2026-10-28T03:00:00+01:00","end":"2026-10-28T07:30:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":482570,"odometer_end_km":482840},
+    {"start":"2026-10-28T07:30:00+01:00","end":"2026-10-28T07:45:00+01:00","activity":"BREAK"},
+    {"start":"2026-10-28T07:45:00+01:00","end":"2026-10-28T09:15:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":482840,"odometer_end_km":482930},
+    {"start":"2026-10-28T09:15:00+01:00","end":"2026-10-28T10:00:00+01:00","activity":"OTHER_WORK","label":"Nakládka","load_unload_ref":"LU003"},
+    {"start":"2026-10-28T10:00:00+01:00","end":"2026-10-28T12:00:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":482930,"odometer_end_km":483050},
+    {"start":"2026-10-28T12:00:00+01:00","end":"2026-10-28T12:30:00+01:00","activity":"BREAK"},
+    {"start":"2026-10-28T12:30:00+01:00","end":"2026-10-28T14:00:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":483050,"odometer_end_km":483140},
+    {"start":"2026-10-28T14:00:00+01:00","end":"2026-10-28T14:45:00+01:00","activity":"OTHER_WORK","label":"Vykládka","load_unload_ref":"LU004"},
+    {"start":"2026-10-28T14:45:00+01:00","end":"2026-10-28T15:15:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":483140,"odometer_end_km":483170},
+    {"start":"2026-10-28T15:15:00+01:00","end":"2026-10-29T02:15:00+01:00","activity":"REST"},
+
+    {"start":"2026-10-29T02:15:00+01:00","end":"2026-10-29T06:45:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":483170,"odometer_end_km":483440},
+    {"start":"2026-10-29T06:45:00+01:00","end":"2026-10-29T07:00:00+01:00","activity":"BREAK"},
+    {"start":"2026-10-29T07:00:00+01:00","end":"2026-10-29T08:30:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":483440,"odometer_end_km":483530},
+    {"start":"2026-10-29T08:30:00+01:00","end":"2026-10-29T09:15:00+01:00","activity":"OTHER_WORK","label":"Vykládka","load_unload_ref":"LU005"},
+    {"start":"2026-10-29T09:15:00+01:00","end":"2026-10-29T10:45:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":483530,"odometer_end_km":483620},
+    {"start":"2026-10-29T10:45:00+01:00","end":"2026-10-29T11:30:00+01:00","activity":"BREAK"},
+    {"start":"2026-10-29T11:30:00+01:00","end":"2026-10-29T13:30:00+01:00","activity":"DRIVING","vehicle":"8T0 1234","odometer_start_km":483620,"odometer_end_km":483740},
+    {"start":"2026-10-29T13:30:00+01:00","end":"2026-10-29T14:15:00+01:00","activity":"OTHER_WORK","label":"Nakládka","load_unload_ref":"LU006"},
+    {"start":"2026-10-29T14:15:00+01:00","end":"2026-10-30T01:15:00+01:00","activity":"REST"}
+  ],
+  "load_unload_operations": [
+    {"id":"LU001","timestamp":"2026-10-27T07:30:00+01:00","operation_type":"LOAD","gnss":{"latitude":49.1951,"longitude":16.6068,"accuracy_m":20},"vehicle_odometer_km":482270},
+    {"id":"LU002","timestamp":"2026-10-27T12:45:00+01:00","operation_type":"UNLOAD","gnss":{"latitude":50.0755,"longitude":14.4378,"accuracy_m":20},"vehicle_odometer_km":482510},
+    {"id":"LU003","timestamp":"2026-10-28T09:15:00+01:00","operation_type":"LOAD","gnss":{"latitude":50.0755,"longitude":14.4378,"accuracy_m":20},"vehicle_odometer_km":482930},
+    {"id":"LU004","timestamp":"2026-10-28T14:00:00+01:00","operation_type":"UNLOAD","gnss":{"latitude":51.0504,"longitude":13.7373,"accuracy_m":25},"vehicle_odometer_km":483140},
+    {"id":"LU005","timestamp":"2026-10-29T08:30:00+01:00","operation_type":"UNLOAD","gnss":{"latitude":52.5200,"longitude":13.4050,"accuracy_m":25},"vehicle_odometer_km":483530},
+    {"id":"LU006","timestamp":"2026-10-29T13:30:00+01:00","operation_type":"LOAD","gnss":{"latitude":52.5200,"longitude":13.4050,"accuracy_m":25},"vehicle_odometer_km":483740}
+  ],
+  "test_notes": [
+    "T01: On 2026-10-27, driving time before the first 15-minute break reaches 4 h 30 min; the later 30-minute break is deliberately too late to cure the missed break deadline. Expected break infringement at 11:00.",
+    "T02: On 2026-10-28, driving totals exactly 10 h (4 h 30 + 1 h 30 + 2 h + 1 h 30 + 0 h 30); this tests the extended daily driving limit. It is permissible only if one of the two weekly 10-hour extensions remains available.",
+    "T03: Daily rest 2026-10-27 15:00 to 2026-10-28 03:00 is 12 h, a regular daily rest.",
+    "T04: Daily rest 2026-10-28 15:15 to 2026-10-29 02:15 is 11 h, a regular daily rest.",
+    "T05: Six G2V2 load/unload events are linked to work intervals by load_unload_ref and timestamp.",
+    "T06: This short fixture is not sufficient to assess weekly/fortnightly driving, weekly rest compensation, or the full 56-day card retention window."
+  ]
+}

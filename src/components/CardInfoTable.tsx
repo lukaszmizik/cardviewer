@@ -49,18 +49,52 @@ function instant(ms: number | null | undefined, mode: ClockMode): string {
   return formatClockDateTime(ms, mode)
 }
 
+function DriverCardFace({ card }: { card: DriverCardData }) {
+  const country = cell(card.issuingCountry)
+  return (
+    <div className="driver-card-visual" aria-label="Karta řidiče">
+      <div className="driver-card-visual__eu">
+        <div className="driver-card-visual__eu-stars" aria-hidden="true">
+          {Array.from({ length: 12 }, (_, i) => (
+            <span
+              key={i}
+              className="driver-card-visual__eu-star"
+              style={{ transform: `rotate(${i * 30}deg) translateY(-1.2em)` }}
+            />
+          ))}
+        </div>
+        <span className="driver-card-visual__eu-cz">{country}</span>
+      </div>
+      <span className="driver-card-visual__cz-corner">{country}</span>
+      <h2 className="driver-card-visual__title">KARTA ŘIDIČE</h2>
+      <div className="driver-card-visual__photo">
+        <span className="driver-card-visual__person-icon" aria-hidden="true">
+          <span className="driver-card-visual__person-head" />
+          <span className="driver-card-visual__person-body" />
+        </span>
+      </div>
+      <div className="driver-card-visual__body">
+        <div className="driver-card-visual__field">{cell(driverDisplayName(card))}</div>
+        <div className="driver-card-visual__field">{cell(card.dateOfBirth)}</div>
+        <div className="driver-card-visual__field driver-card-visual__field--dates">
+          <span>{cell(card.validityBegin)}</span>
+          <span>{cell(card.dateOfExpiry)}</span>
+        </div>
+        <div className="driver-card-visual__field">{cell(card.issuingAuthority)}</div>
+        <div className="driver-card-visual__field driver-card-visual__field--mono">{cell(card.drivingLicenseNumber)}</div>
+        <div className="driver-card-visual__field driver-card-visual__field--mono">{cell(card.cardNumber)}</div>
+      </div>
+      <div className="driver-card-visual__decoration" aria-hidden="true" />
+      <div className="driver-card-visual__signature">Podpis</div>
+      <span className="driver-card-visual__g2">G2</span>
+    </div>
+  )
+}
+
 export function CardInfoTable({ card, clockMode }: CardInfoTableProps) {
   const rows: Array<[string, string]> = [
-    ['Držitel', cell(driverDisplayName(card))],
-    ['Datum narození', cell(card.dateOfBirth)],
     ['Preferovaný jazyk', languageCell(card.preferredLanguage)],
-    ['Číslo karty', cell(card.cardNumber)],
-    ['Vydávající stát', cell(card.issuingCountry)],
-    ['Vydávající úřad', cell(card.issuingAuthority)],
     ['Datum vydání', cell(card.dateOfIssue)],
-    ['Platnost od', cell(card.validityBegin)],
-    ['Platnost do', cell(card.dateOfExpiry)],
-    ['Řidičský průkaz', cell(card.drivingLicenseNumber)],
     ['Průkaz vydal', cell(card.licenceIssuingAuthority)],
     ['Stát průkazu', cell(card.licenceIssuingCountry ?? card.nationality)],
     ['Poslední stažení', instant(card.lastCardDownloadUtc, clockMode)],
@@ -68,17 +102,10 @@ export function CardInfoTable({ card, clockMode }: CardInfoTableProps) {
   ]
 
   return (
-    <details className="work-week-graph-table-wrapper card-info-table-wrapper">
-      <summary className="card-info-summary">
-        <span className="card-info-summary-chevron" aria-hidden="true" />
-        <span className="card-info-summary-text">
-          <span className="card-info-summary-title">Karta řidiče</span>
-          <span className="card-info-summary-meta">
-            {driverDisplayName(card)}
-            {card.cardNumber ? ` · ${card.cardNumber}` : ''}
-          </span>
-        </span>
-      </summary>
+    <section className="work-week-graph-table-wrapper card-info-table-wrapper">
+      <div className="card-info-face">
+        <DriverCardFace card={card} />
+      </div>
       <table className="work-week-graph-table card-info-table">
         <tbody>
           {rows.map(([label, value]) => (
@@ -89,6 +116,6 @@ export function CardInfoTable({ card, clockMode }: CardInfoTableProps) {
           ))}
         </tbody>
       </table>
-    </details>
+    </section>
   )
 }

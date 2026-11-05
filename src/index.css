@@ -1214,79 +1214,181 @@ body {
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 
-.card-info-summary {
+.card-info-face {
+  display: flex;
+  justify-content: center;
+  padding: 16px 16px 8px;
+  background: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.driver-card-visual {
+  position: relative;
+  width: min(100%, 360px);
+  min-height: 214px;
+  background: #f5f5f0;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  padding: 12px 14px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 11px;
+  color: #1a1a1a;
+  overflow: hidden;
+}
+
+.driver-card-visual__eu {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  width: 52px;
+  height: 40px;
+  background: #003399;
+  border-radius: 4px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  min-height: 3.25rem;
-  font-weight: 600;
-  color: #0f172a;
-  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-  transition: background 0.15s, border-color 0.15s;
+  justify-content: center;
 }
 
-.card-info-summary:hover {
-  background: #e2e8f0;
+.driver-card-visual__eu-stars {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.card-info-summary:focus {
-  outline: none;
+.driver-card-visual__eu-star {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: #ffcc00;
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  margin-left: -1px;
+  margin-top: -1px;
+  transform-origin: 50% 50%;
 }
 
-.card-info-summary:focus-visible {
-  outline: 2px solid #6366f1;
-  outline-offset: -2px;
+.driver-card-visual__eu-cz {
+  position: relative;
+  z-index: 1;
+  font-size: 11px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: 0.12em;
+  text-shadow:
+    0 0 1px rgba(0, 0, 0, 0.6),
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 2px 4px rgba(0, 0, 0, 0.35);
 }
 
-.card-info-table-wrapper[open] .card-info-summary {
-  border-bottom: 1px solid #e2e8f0;
-  background: #f1f5f9;
+.driver-card-visual__cz-corner {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  font-size: 16px;
+  font-weight: 800;
+  color: #8b0000;
+  letter-spacing: 0.1em;
 }
 
-.card-info-summary::-webkit-details-marker {
-  display: none;
+.driver-card-visual__title {
+  margin: 0 0 8px 70px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e3a5f;
+  letter-spacing: 0.02em;
 }
 
-.card-info-summary-chevron {
-  flex-shrink: 0;
-  width: 10px;
-  height: 10px;
-  border-right: 2px solid #475569;
-  border-bottom: 2px solid #475569;
-  transform: rotate(-45deg);
-  transition: transform 0.2s ease;
-  margin-top: -2px;
+.driver-card-visual__photo {
+  position: absolute;
+  left: 12px;
+  top: 56px;
+  width: 52px;
+  height: 64px;
+  background: #e8e8e0;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.card-info-table-wrapper[open] .card-info-summary-chevron {
-  transform: rotate(45deg);
+.driver-card-visual__person-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.driver-card-visual__person-head {
+  width: 20px;
+  height: 20px;
+  background: #c0c0c0;
+  border-radius: 50%;
+}
+
+.driver-card-visual__person-body {
+  width: 28px;
+  height: 28px;
+  background: #c0c0c0;
+  border-radius: 50% 50% 0 0;
+  margin-top: -6px;
+}
+
+.driver-card-visual__body {
+  margin-left: 72px;
+  padding-right: 8px;
+  min-height: 108px;
   margin-top: 2px;
 }
 
-.card-info-summary-text {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  min-width: 0;
-}
-
-.card-info-summary-title {
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  color: #0f172a;
-}
-
-.card-info-summary-meta {
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: #64748b;
+.driver-card-visual__field {
   line-height: 1.35;
+  margin-bottom: 2px;
+  overflow-wrap: anywhere;
+}
+
+.driver-card-visual__field--dates {
+  display: flex;
+  gap: 16px;
+}
+
+.driver-card-visual__field--mono {
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.driver-card-visual__decoration {
+  position: absolute;
+  right: -20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, rgba(200, 220, 255, 0.5), rgba(255, 220, 220, 0.3) 40%, rgba(220, 255, 220, 0.2) 70%);
+  pointer-events: none;
+}
+
+.driver-card-visual__signature {
+  margin-top: 6px;
+  margin-left: 72px;
+  font-size: 10px;
+  font-style: italic;
+  color: #444;
+}
+
+.driver-card-visual__g2 {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1e3a5f;
 }
 
 .card-info-table-wrapper .card-info-table {
@@ -1686,11 +1788,6 @@ body {
     width: 100%;
   }
 
-  .card-info-summary {
-    align-items: flex-start;
-  }
-
-  .card-info-summary-meta,
   .recent-file-name,
   .recorded-location-text {
     overflow-wrap: anywhere;
