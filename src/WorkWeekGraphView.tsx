@@ -143,6 +143,7 @@ const ACTIVITY_LABELS: Record<string, string> = {
   REST: 'odpočinek',
   WORK: 'práce',
   AVAILABILITY: 'pohotovost',
+  DRIVING: 'řízení',
   UNKNOWN: 'neznámá činnost',
   START_COUNTRY: 'výchozí země',
   END_COUNTRY: 'cílová země',

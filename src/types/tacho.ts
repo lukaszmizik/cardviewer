@@ -78,7 +78,7 @@ export interface CardIncident {
 
 export type LoadUnloadKind = 'load' | 'unload' | 'both'
 
-export type SpecificConditionKind = 'ferry' | 'ferry_end'
+export type SpecificConditionKind = 'out' | 'out_end' | 'ferry' | 'ferry_end'
 
 export interface SpecificConditionEntry {
   atUtc: number

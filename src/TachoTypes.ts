@@ -1,4 +1,4 @@
-export type EditorActivityId = 'REST' | 'WORK' | 'AVAILABILITY' | 'UNKNOWN' | 'START_COUNTRY' | 'END_COUNTRY'
+export type EditorActivityId = 'REST' | 'WORK' | 'AVAILABILITY' | 'DRIVING' | 'UNKNOWN' | 'START_COUNTRY' | 'END_COUNTRY'
 
 export type ManualEntrySegment = {
   activityId: EditorActivityId

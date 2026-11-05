@@ -6,6 +6,7 @@ import { clockParts } from '../lib/clock'
 import type {
   FaultOrEvent,
   ManualEntrySegment,
+  OutModeEvent,
   RecordedGpsLocation,
   FerryTrainEvent,
   VehicleLoadUnloadEvent,
@@ -20,7 +21,7 @@ const KIND_TO_TYPE: Record<ActivityKind, ActivityType> = {
 }
 
 const KIND_TO_EDITOR: Record<ActivityKind, ManualEntrySegment['activityId']> = {
-  driving: 'UNKNOWN',
+  driving: 'DRIVING',
   work: 'WORK',
   availability: 'AVAILABILITY',
   rest: 'REST',
@@ -34,6 +35,7 @@ export type CardGraphModel = {
   lastWithdrawalUtc: number | null
   loadUnloadEvents: VehicleLoadUnloadEvent[]
   ferryTrainEvents: FerryTrainEvent[]
+  outModeEvents: OutModeEvent[]
   recordedGpsLocations: RecordedGpsLocation[]
   faultsAndEvents: FaultOrEvent[]
 }
@@ -105,7 +107,7 @@ function chainExclusive(list: ParsedActivity[]): ParsedActivity[] {
   return out
 }
 
-/** Jedna osa řidiče: 1 minuta = 1 činnost; záznam z vozidla rozdělí roztaženou výplň. */
+/** Prezentační osa: 1 minuta = 1 čára. Původní DriverCardData.activities se nemění. */
 function exclusiveParsedTimeline(activities: ParsedActivity[]): ParsedActivity[] {
   const vehicleExclusive = chainExclusive(activities.filter((act) => isVehicleUnitParsed(act)))
   const others = activities.filter((act) => !isVehicleUnitParsed(act))
@@ -190,10 +192,21 @@ function toManualBuffer(card: DriverCardData, mode: ClockMode): ManualEntrySegme
 }
 
 function toFerry(card: DriverCardData): FerryTrainEvent[] {
-  return (card.specificConditions ?? []).map((entry) => ({
-    minuteStartUtc: entry.atUtc,
-    type: entry.kind === 'ferry_end' ? 'deactivation' : 'activation',
-  }))
+  return (card.specificConditions ?? [])
+    .filter((entry) => entry.kind === 'ferry' || entry.kind === 'ferry_end')
+    .map((entry) => ({
+      minuteStartUtc: entry.atUtc,
+      type: entry.kind === 'ferry_end' ? 'deactivation' : 'activation',
+    }))
+}
+
+function toOutMode(card: DriverCardData): OutModeEvent[] {
+  return (card.specificConditions ?? [])
+    .filter((entry) => entry.kind === 'out' || entry.kind === 'out_end')
+    .map((entry) => ({
+      minuteStartUtc: entry.atUtc,
+      type: entry.kind === 'out_end' ? 'deactivation' : 'activation',
+    }))
 }
 
 function toLoadUnload(locations: Location[]): VehicleLoadUnloadEvent[] {
@@ -312,6 +325,7 @@ export function cardToGraph(card: DriverCardData, clockMode: ClockMode = 'local'
     lastWithdrawalUtc: card.lastWithdrawalUtc,
     loadUnloadEvents: toLoadUnload(card.locations),
     ferryTrainEvents: toFerry(card),
+    outModeEvents: toOutMode(card),
     recordedGpsLocations: toGpsLocations(card.locations),
     faultsAndEvents: toFaults(card.violations),
   }

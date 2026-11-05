@@ -448,24 +448,6 @@ function cardIsPresent(change: DddActivityChange): boolean {
   return change.card_present !== false
 }
 
-/** VU záznam (karta ve vozidle) — má přednost před výplní i ručním zadáním. */
-function isVehicleUnitActivity(act: Activity): boolean {
-  return act.isManualEntry !== true && act.kind !== 'unknown'
-}
-
-function clipActivity<T extends { startUtc: number; endUtc: number; durationMinutes: number }>(
-  act: T,
-  startUtc: number,
-  endUtc: number,
-): T {
-  return {
-    ...act,
-    startUtc,
-    endUtc,
-    durationMinutes: Math.round((endUtc - startUtc) / 60_000),
-  }
-}
-
 /**
  * Ruční záznam je činnost bez vložené karty, která má na kartě konkrétní konec.
  * Otevřený úsek bez další změny ruční záznam není.
@@ -496,103 +478,6 @@ function nextLocalMidnight(ms: number): number {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime()
 }
 
-function cardPresentIntervals(collected: SlotChange[]): Array<{ start: number; end: number }> {
-  const dayMs = 24 * 60 * 60_000
-  const intervals: Array<{ start: number; end: number }> = []
-  for (let i = 0; i < collected.length; i += 1) {
-    const current = collected[i]!
-    if (!cardIsPresent(current.change)) continue
-    const start = changeTime(current)
-    const next = collected[i + 1]
-    const end = next ? changeTime(next) : current.dayStart + dayMs
-    if (end > start) intervals.push({ start, end })
-  }
-  return intervals
-}
-
-function overlapsCardPresent(
-  startUtc: number,
-  endUtc: number,
-  intervals: Array<{ start: number; end: number }>,
-): boolean {
-  return intervals.some((interval) => startUtc < interval.end && endUtc > interval.start)
-}
-
-/** Slot 2 bez karty přes aktivní jízdu/práci ve vozidle = prázdný spolujezdec, ne [M]. */
-function isInactiveCoDriverStatus(
-  item: SlotChange,
-  startUtc: number,
-  endUtc: number,
-  presentIntervals: Array<{ start: number; end: number }>,
-): boolean {
-  if (item.change.driver !== false) return false
-  if (cardIsPresent(item.change)) return false
-  return overlapsCardPresent(startUtc, endUtc, presentIntervals)
-}
-
-function subtractIntervals(base: Activity, cuts: Activity[]): Activity[] {
-  let pieces = [base]
-  for (const cut of cuts) {
-    const next: Activity[] = []
-    for (const piece of pieces) {
-      if (cut.endUtc <= piece.startUtc || cut.startUtc >= piece.endUtc) {
-        next.push(piece)
-        continue
-      }
-      if (cut.startUtc > piece.startUtc) next.push(clipActivity(piece, piece.startUtc, cut.startUtc))
-      if (cut.endUtc < piece.endUtc) next.push(clipActivity(piece, cut.endUtc, piece.endUtc))
-    }
-    pieces = next.filter((item) => item.durationMinutes > 0)
-  }
-  return pieces
-}
-
-/** 1 minuta = 1 činnost; záznam z vozidla rozdělí jakýkoliv roztažený blok. */
-function exclusiveByPriority(activities: Activity[]): Activity[] {
-  const vehicle = activities
-    .filter((act) => isVehicleUnitActivity(act))
-    .sort((a, b) => a.startUtc - b.startUtc || a.endUtc - b.endUtc)
-  const vehicleExclusive: Activity[] = []
-  for (const act of vehicle) {
-    const copy = { ...act }
-    if (vehicleExclusive.length > 0) {
-      const prev = vehicleExclusive[vehicleExclusive.length - 1]!
-      if (copy.startUtc < prev.endUtc) {
-        prev.endUtc = copy.startUtc
-        prev.durationMinutes = Math.round((prev.endUtc - prev.startUtc) / 60_000)
-        if (prev.durationMinutes <= 0) vehicleExclusive.pop()
-      }
-    }
-    if (copy.endUtc > copy.startUtc) vehicleExclusive.push(copy)
-  }
-
-  const others = activities
-    .filter((act) => !isVehicleUnitActivity(act))
-    .sort((a, b) => a.startUtc - b.startUtc || a.endUtc - b.endUtc)
-  const splitOthers: Activity[] = []
-  for (const act of others) {
-    splitOthers.push(...subtractIntervals(act, vehicleExclusive))
-  }
-  const othersExclusive: Activity[] = []
-  for (const act of splitOthers.sort((a, b) => a.startUtc - b.startUtc || a.endUtc - b.endUtc)) {
-    const copy = { ...act }
-    if (othersExclusive.length > 0) {
-      const prev = othersExclusive[othersExclusive.length - 1]!
-      if (copy.startUtc < prev.endUtc) {
-        prev.endUtc = copy.startUtc
-        prev.durationMinutes = Math.round((prev.endUtc - prev.startUtc) / 60_000)
-        if (prev.durationMinutes <= 0) othersExclusive.pop()
-      }
-    }
-    if (copy.endUtc > copy.startUtc) othersExclusive.push(copy)
-  }
-
-  return [...vehicleExclusive, ...othersExclusive]
-    .filter((act) => act.durationMinutes > 0 && act.endUtc > act.startUtc)
-    .sort((a, b) => a.startUtc - b.startUtc)
-    .map((act, index) => ({ ...act, id: `act-${index}` }))
-}
-
 function mapActivities(card: DddParserCardJson): Activity[] {
   const days = mergeActivityDays(card)
   const collected: SlotChange[] = []
@@ -615,11 +500,11 @@ function mapActivities(card: DddParserCardJson): Activity[] {
   collected.sort((a, b) => changeTime(a) - changeTime(b))
 
   const dayMs = 24 * 60 * 60_000
-  const presentIntervals = cardPresentIntervals(collected)
+  const sameSlot = (a: SlotChange, b: SlotChange) => (a.change.driver === false) === (b.change.driver === false)
   const activities: Activity[] = []
   for (let i = 0; i < collected.length; i += 1) {
     const current = collected[i]!
-    const next = collected[i + 1]
+    const next = collected.slice(i + 1).find((item) => sameSlot(item, current))
     const startUtc = changeTime(current)
     let endUtc = next ? changeTime(next) : current.dayStart + dayMs
     let unknownUntil: number | null = null
@@ -633,8 +518,6 @@ function mapActivities(card: DddParserCardJson): Activity[] {
     }
     const durationMinutes = Math.round((endUtc - startUtc) / 60_000)
     if (durationMinutes <= 0) continue
-
-    if (isInactiveCoDriverStatus(current, startUtc, endUtc, presentIntervals)) continue
 
     const inVehicle = cardIsPresent(current.change)
     const explicitManual = isExplicitManualEntry(current, next)
@@ -663,7 +546,7 @@ function mapActivities(card: DddParserCardJson): Activity[] {
     }
   }
 
-  return assignVehicleRegistrations(exclusiveByPriority(activities), card)
+  return assignVehicleRegistrations(activities, card)
 }
 
 function registrationPlate(value: string | null | undefined): string | null {
@@ -954,6 +837,8 @@ function loadUnloadKind(operation: number | undefined): LoadUnloadKind {
 
 /** 1 začátek OUT, 2 konec OUT, 3 začátek trajektu, 4 konec trajektu. */
 function specificConditionKind(type: number | undefined): SpecificConditionKind | null {
+  if (type === 1) return 'out'
+  if (type === 2) return 'out_end'
   if (type === 3) return 'ferry'
   if (type === 4) return 'ferry_end'
   return null
