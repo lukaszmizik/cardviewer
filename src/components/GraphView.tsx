@@ -8,10 +8,11 @@ import { TACHO_SYMBOLS } from '../TachoTypes'
 type GraphViewProps = {
   data: DriverCardData | null
   onUploadCard: () => void
+  focusedDayUtc?: number | null
 }
 
-export function GraphView({ data, onUploadCard }: GraphViewProps) {
-  const [clockMode, setClockMode] = useState<ClockMode>('local')
+export function GraphView({ data, onUploadCard, focusedDayUtc = null }: GraphViewProps) {
+  const [clockMode, setClockMode] = useState<ClockMode>(focusedDayUtc != null ? 'utc' : 'local')
 
   if (!data) {
     return (
@@ -45,6 +46,7 @@ export function GraphView({ data, onUploadCard }: GraphViewProps) {
         clockMode={clockMode}
         onClockModeChange={setClockMode}
         card={data}
+        initialFocusedDayUtc={focusedDayUtc}
       />
     </div>
   )

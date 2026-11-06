@@ -20,6 +20,8 @@ export type OverviewDetail = {
 export type DailyRestOverviewRow = {
   id: string
   dateUtc: string
+  /** Okamžik, ze kterého je odvozené datum v UTC. */
+  atUtc: number
   restSummary: string
   result: string
   tone: RestTone
@@ -92,6 +94,7 @@ function appendSegment(
     rows.push({
       id: `gap:${segment.startUtc}:${segment.endUtc}`,
       dateUtc: dateLabel(segment.startUtc),
+      atUtc: segment.startUtc,
       restSummary: lengthLabel(segment.endUtc - segment.startUtc),
       result: 'Úsek nebyl vyhodnocen',
       tone: 'neutral',
@@ -118,6 +121,7 @@ function windowRow(node: DailyChainNode, candidates: readonly RestCandidate[], s
     return {
       id: `window:${node.anchorUtc}`,
       dateUtc: dateLabel(node.windowStartUtc),
+      atUtc: node.windowStartUtc,
       restSummary: summaryOfRests(rests),
       result: node.status === 'history_incomplete' ? 'Neúplná historie' : 'Nedostatečná data',
       tone: toneOfRests(rests),
@@ -140,6 +144,7 @@ function windowRow(node: DailyChainNode, candidates: readonly RestCandidate[], s
     return {
       id: `window:${node.anchorUtc}`,
       dateUtc: dateLabel(node.windowStartUtc),
+      atUtc: node.windowStartUtc,
       restSummary: summaryOfRests(rests),
       result: 'Nesplněné 24hodinové období',
       tone: toneOfRests(rests),
@@ -165,6 +170,7 @@ function windowRow(node: DailyChainNode, candidates: readonly RestCandidate[], s
     return {
       id: `window:${node.anchorUtc}`,
       dateUtc: dateLabel(node.windowStartUtc),
+      atUtc: node.windowStartUtc,
       restSummary: 'Více možností',
       result: 'Více možných interpretací',
       tone: 'neutral',
@@ -184,6 +190,7 @@ function windowRow(node: DailyChainNode, candidates: readonly RestCandidate[], s
     return {
       id: `window:${node.anchorUtc}`,
       dateUtc: dateLabel(node.windowStartUtc),
+      atUtc: node.windowStartUtc,
       restSummary: '—',
       result: 'Nedostatečná data',
       tone: 'neutral',
@@ -281,6 +288,7 @@ function presentRest(input: {
   return {
     id: input.id,
     dateUtc: dateLabel(input.startUtc),
+    atUtc: input.startUtc,
     restSummary: input.summary,
     result: input.result,
     tone: input.tone,

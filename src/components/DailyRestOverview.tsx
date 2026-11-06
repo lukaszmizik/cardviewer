@@ -4,9 +4,10 @@ import { buildDailyRestOverview, restOverviewColor } from './dailyRestOverview.t
 
 type DailyRestOverviewProps = {
   analysis: ActivityAnalysis
+  onOpenDay?: (atUtc: number) => void
 }
 
-export function DailyRestOverview({ analysis }: DailyRestOverviewProps) {
+export function DailyRestOverview({ analysis, onOpenDay }: DailyRestOverviewProps) {
   const overview = buildDailyRestOverview(analysis)
   const [openIds, setOpenIds] = useState<ReadonlySet<string>>(() => new Set())
   const toggle = (id: string) => {
@@ -41,7 +42,17 @@ export function DailyRestOverview({ analysis }: DailyRestOverviewProps) {
                 return (
                   <Fragment key={row.id}>
                     <tr>
-                      <td>{row.dateUtc}</td>
+                      <td>
+                        {onOpenDay != null ? (
+                          <button
+                            type="button"
+                            className="diagnostic-day-link"
+                            onClick={() => onOpenDay(row.atUtc)}
+                          >
+                            {row.dateUtc}
+                          </button>
+                        ) : row.dateUtc}
+                      </td>
                       <td>
                         {color != null ? <span className="diagnostic-rest-mark" style={{ background: color }} aria-hidden="true" /> : null}
                         {row.restSummary}

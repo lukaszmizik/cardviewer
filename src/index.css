@@ -658,6 +658,16 @@ body {
   color: #d97706;
 }
 
+.diagnostic-day-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #1d4ed8;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .diagnostic-detail-toggle {
   padding: 0;
   border: 0;

@@ -6,15 +6,18 @@ import { GraphPage } from './pages/GraphPage'
 import type { DriverCardData } from './types/tacho'
 import type { AppTab } from './types/navigation'
 import { forgetStoredCards, type LoadedCardFile } from './lib/recentFiles'
+import { dayStartMs } from './lib/clock'
 
 function App() {
   const [currentTab, setCurrentTab] = useState<AppTab>('dashboard')
+  const [graphDayUtc, setGraphDayUtc] = useState<number | null>(null)
   const [card, setCard] = useState<DriverCardData | null>(null)
   const [loadedFile, setLoadedFile] = useState<LoadedCardFile | null>(null)
   const loadEpoch = useRef(0)
 
   function openCard(next: DriverCardData) {
     setCard(next)
+    setGraphDayUtc(null)
     setCurrentTab('graph')
   }
 
@@ -43,8 +46,18 @@ function App() {
     })
   }
 
+  function openGraphOnDay(atUtc: number) {
+    setGraphDayUtc(dayStartMs(atUtc, 'utc'))
+    setCurrentTab('graph')
+  }
+
+  function changeTab(tab: AppTab) {
+    if (tab === 'graph') setGraphDayUtc(null)
+    setCurrentTab(tab)
+  }
+
   return (
-    <Layout currentTab={currentTab} onTabChange={setCurrentTab} card={card}>
+    <Layout currentTab={currentTab} onTabChange={changeTab} card={card}>
       <div hidden={currentTab !== 'dashboard'}>
         <Dashboard
           card={card}
@@ -60,9 +73,9 @@ function App() {
         />
       </div>
       {currentTab === 'graph' && (
-        <GraphPage data={card} onUploadCard={() => setCurrentTab('dashboard')} />
+        <GraphPage data={card} onUploadCard={() => setCurrentTab('dashboard')} focusedDayUtc={graphDayUtc} />
       )}
-      {currentTab === 'compliance' && <CompliancePage card={card} />}
+      {currentTab === 'compliance' && <CompliancePage card={card} onOpenDay={openGraphOnDay} />}
     </Layout>
   )
 }

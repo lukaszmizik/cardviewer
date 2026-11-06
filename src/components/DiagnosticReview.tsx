@@ -30,9 +30,10 @@ const BLOCKER_LABEL: Record<PeriodBlocker, string> = {
 
 type DiagnosticReviewProps = {
   card: DriverCardData | null
+  onOpenDay?: (atUtc: number) => void
 }
 
-export function DiagnosticReview({ card }: DiagnosticReviewProps) {
+export function DiagnosticReview({ card, onOpenDay }: DiagnosticReviewProps) {
   const [anchorText, setAnchorText] = useState('')
   const [notes, setNotes] = useState<Record<string, string>>({})
 
@@ -81,7 +82,7 @@ export function DiagnosticReview({ card }: DiagnosticReviewProps) {
       <p className="diagnostic-hint">
         Délka odpočinku není právně potvrzený odpočinek. Přestupky se zde nevytvářejí.
       </p>
-      {analysis != null ? <DailyRestOverview analysis={analysis} /> : null}
+      {analysis != null ? <DailyRestOverview analysis={analysis} onOpenDay={onOpenDay} /> : null}
       {analysis != null ? <WeeklyOverview assignment={analysis.weeklyAssignment} consecutive={analysis.consecutiveWeeks} /> : null}
       <h3>Konkrétní odpočinky a období</h3>
       <ol className="diagnostic-list">

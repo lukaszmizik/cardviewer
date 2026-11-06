@@ -21,6 +21,7 @@ import type { ClockMode } from './lib/clock'
 import {
   addDays,
   clockParts,
+  dayStartMs,
   formatClockDate,
   formatClockDateTime,
   formatWeekRange,
@@ -190,6 +191,7 @@ export type WorkWeekGraphViewProps = {
   clockMode?: ClockMode
   onClockModeChange?: (mode: ClockMode) => void
   card?: DriverCardData | null
+  initialFocusedDayUtc?: number | null
 }
 
 /**
@@ -994,7 +996,7 @@ function formatFaultTime(ms: number, mode: ClockMode): string {
   return formatClockDateTime(ms, mode)
 }
 
-export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc, card2Data, loadUnloadEvents = [], ferryTrainEvents = [], outModeEvents = [], recordedGpsLocations = [], faultsAndEvents = [], symbolMap, onResetLoadUnload, embedded = false, onClose, clockMode = 'local', onClockModeChange, card }: WorkWeekGraphViewProps) {
+export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc, card2Data, loadUnloadEvents = [], ferryTrainEvents = [], outModeEvents = [], recordedGpsLocations = [], faultsAndEvents = [], symbolMap, onResetLoadUnload, embedded = false, onClose, clockMode = 'local', onClockModeChange, card, initialFocusedDayUtc = null }: WorkWeekGraphViewProps) {
   const { t } = useLanguage()
   const narrowViewport = useNarrowViewport()
   const dayNames = t.workWeek.dayNames
@@ -1002,9 +1004,11 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
     if (days.length > 0) return weekStartMs(days[days.length - 1]!.dateUtc, clockMode)
     return weekStartMs(Date.now(), clockMode)
   }
-  const [displayWeekStartMs, setDisplayWeekStartMs] = useState(getInitialWeekStart)
+  const [displayWeekStartMs, setDisplayWeekStartMs] = useState(() =>
+    initialFocusedDayUtc != null ? weekStartMs(initialFocusedDayUtc, clockMode) : getInitialWeekStart(),
+  )
   const [detailActive, setDetailActive] = useState(false)
-  const [focusedDayUtc, setFocusedDayUtc] = useState<number | null>(null)
+  const [focusedDayUtc, setFocusedDayUtc] = useState<number | null>(initialFocusedDayUtc)
   const [dayPanStart, setDayPanStart] = useState(0)
   const [cardOverviewOpen, setCardOverviewOpen] = useState(false)
   const inspectActive = detailActive && !narrowViewport
@@ -1013,7 +1017,17 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
     [card, displayWeekStartMs, clockMode],
   )
 
+  const focusedDayRef = useRef(focusedDayUtc)
+  focusedDayRef.current = focusedDayUtc
+
   useEffect(() => {
+    const current = focusedDayRef.current
+    if (current != null) {
+      const day = dayStartMs(current, clockMode)
+      if (day !== current) setFocusedDayUtc(day)
+      setDisplayWeekStartMs(weekStartMs(day, clockMode))
+      return
+    }
     setDisplayWeekStartMs(getInitialWeekStart())
   }, [days, clockMode])
 
