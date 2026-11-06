@@ -1374,9 +1374,79 @@ body {
   background: transparent;
 }
 
+.weekly-driving-panel {
+  margin: 8px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.weekly-driving-title,
+.weekly-driving-range,
+.weekly-driving-value,
+.weekly-driving-limit,
+.weekly-driving-note,
+.weekly-driving-warning {
+  margin: 0;
+}
+
+.weekly-driving-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.weekly-driving-range,
+.weekly-driving-limit,
+.weekly-driving-note {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #64748b;
+}
+
+.weekly-driving-value {
+  margin-top: 6px;
+  font-size: 20px;
+  line-height: 1.2;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+
+.weekly-driving-track {
+  margin-top: 8px;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.weekly-driving-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 280ms ease, background-color 280ms ease;
+}
+
+.weekly-driving-fill-fill {
+  background: #15803d;
+}
+
+.weekly-driving-fill-over {
+  background: #b91c1c;
+}
+
+.weekly-driving-warning {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+  color: #991b1b;
+}
+
 .day-driving-row {
   display: grid;
-  grid-template-columns: minmax(10rem, 16.5rem) minmax(0, 1fr);
+  grid-template-columns: minmax(11rem, 18rem) minmax(0, 1fr);
   gap: 4px 16px;
   align-items: center;
   padding: 9px 14px;
@@ -1402,6 +1472,13 @@ body {
 .day-driving-detail,
 .day-driving-status {
   margin: 0;
+}
+
+.day-driving-headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .day-driving-primary {
@@ -1467,30 +1544,6 @@ body {
   color: #475569;
   background: #f8fafc;
   border-color: #e2e8f0;
-}
-
-.day-driving-status-neutral {
-  color: #1e293b;
-  background: transparent;
-  border-color: #cbd5e1;
-}
-
-.day-driving-clocks {
-  display: inline-flex;
-  gap: 3px;
-}
-
-.day-driving-clock {
-  width: 16px;
-  height: 16px;
-}
-
-.day-driving-clock-available {
-  opacity: 0.4;
-}
-
-.day-driving-clock-unknown {
-  opacity: 0.55;
 }
 
 .work-week-graph-table-wrapper {

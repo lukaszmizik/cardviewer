@@ -1,4 +1,4 @@
-import { assessDailyDrivingTime, assessWeeklyDrivingExtensions, utcWeekStart, type DailyDrivingPeriod } from '../analysis/dailyDrivingTime.ts'
+import { assessDailyDrivingTime, type DailyDrivingPeriod } from '../analysis/dailyDrivingTime.ts'
 import { buildDailyRestChain } from '../analysis/dailyRestChain.ts'
 import { assessDrivingBreaks, type BreakActivity, type DrivingBreakPeriod, type QualifyingDrivingBreak } from '../analysis/drivingBreaks.ts'
 import { classifyRestCandidates } from '../analysis/restCandidates.ts'
@@ -11,9 +11,10 @@ export type DayDrivingActivity = BreakActivity & {
 }
 
 /** Vizuální stav podle výsledku analýzy. Není to závěr o přestupku. */
-export type DayDrivingTone = 'clear' | 'caution' | 'exceeded' | 'undecided' | 'neutral'
+export type DayDrivingTone = 'clear' | 'caution' | 'exceeded' | 'undecided'
 
-export type ExtensionSlot = 'available' | 'used' | 'unknown'
+/** Razítko doby řízení podle délky. Neznamená soulad se všemi ustanoveními nařízení. */
+export type DayDrivingMark = 'check' | 'alarm' | 'alert' | 'unknown' | 'progress'
 
 export type DayDrivingRow = {
   label: string
@@ -26,21 +27,22 @@ export type DayDrivingRow = {
   tone: DayDrivingTone | null
   /** Text stavového indikátoru. U metriky bez indikátoru zůstává null. */
   statusText: string | null
+  /** Ikona razítka doby řízení. Ostatní řádky ji nemají. */
+  mark: DayDrivingMark | null
   rule: 'article_6' | 'article_7' | null
-  presentation: 'metric' | 'note' | 'status' | 'extensions'
-  extensionSlots: ExtensionSlot[] | null
+  presentation: 'metric' | 'note' | 'status'
 }
 
 const UNRELIABLE = 'Nelze spolehlivě vyhodnotit.'
-const EXTENSION_UNKNOWN = 'Nelze určit'
+const PERIOD_LABEL = 'Doba řízení v pracovním období'
+const TEN_HOURS = 10 * 60 * 60 * 1000
 /** Delší odpočinek se v tabulce nevypisuje jako přestávka. Není to denní ani týdenní kategorie. */
 const CYCLE_REST_MS = 24 * 60 * 60 * 1000
 const ELEVEN_HOURS = 11 * 60 * 60 * 1000
-const CYCLE_ENDED = 'Cyklus řízení ukončen odpočinkem.'
 
 /**
  * Řádky pod denní graf. Kalendářní den jen vybírá, která už spočítaná období se ukážou.
- * Denní doba řízení se nepočítá od půlnoci do půlnoci.
+ * Doba řízení se počítá mezi kvalifikovanými odpočinky, ne od půlnoci do půlnoci.
  */
 export function buildDayDrivingRows(input: {
   activities: readonly DayDrivingActivity[]
@@ -55,7 +57,6 @@ export function buildDayDrivingRows(input: {
   const daily = dailyDrivingPeriods(input.activities)
   const rows: DayDrivingRow[] = [
     ...dailyRows(daily, input.activities, input.dayStartUtc, input.dayEndUtc, clockMode),
-    extensionRow(daily, input.activities, input.dayStartUtc),
     {
       label: 'Bezpečnostní přestávky',
       primary: shownBreaks.lengths.length > 0 ? shownBreaks.lengths.join(', ') : '—',
@@ -63,24 +64,11 @@ export function buildDayDrivingRows(input: {
       value: shownBreaks.breaks.length > 0 ? shownBreaks.breaks.join(', ') : '—',
       tone: null,
       statusText: null,
+      mark: null,
       rule: null,
       presentation: 'metric',
-      extensionSlots: null,
     },
   ]
-  if (shownBreaks.cycleEndedByRest) {
-    rows.push({
-      label: 'Ukončení cyklu řízení',
-      primary: CYCLE_ENDED,
-      detail: null,
-      value: CYCLE_ENDED,
-      tone: null,
-      statusText: null,
-      rule: null,
-      presentation: 'note',
-      extensionSlots: null,
-    })
-  }
   const tone = resultTone(relevant, input.activities)
   const result = resultText(relevant, input.activities)
   rows.push({
@@ -90,9 +78,9 @@ export function buildDayDrivingRows(input: {
     value: result,
     tone,
     statusText: result,
+    mark: null,
     rule: 'article_7',
     presentation: 'status',
-    extensionSlots: null,
   })
   const closed = evaluated(relevant)
   if (closed.length > 0) {
@@ -104,9 +92,9 @@ export function buildDayDrivingRows(input: {
       value: longest,
       tone: null,
       statusText: null,
+      mark: null,
       rule: null,
       presentation: 'metric',
-      extensionSlots: null,
     })
   }
   return rows
@@ -135,18 +123,14 @@ function breakLines(
   periods: readonly DrivingBreakPeriod[],
   activities: readonly DayDrivingActivity[],
   clockMode: ClockMode,
-): { breaks: string[]; lengths: string[]; ranges: string[]; cycleEndedByRest: boolean } {
+): { breaks: string[]; lengths: string[]; ranges: string[] } {
   const breaks: string[] = []
   const lengths: string[] = []
   const ranges: string[] = []
-  let cycleEndedByRest = false
   for (const period of periods) {
     if (period.qualifyingBreak == null) continue
     for (const [startUtc, endUtc] of breakSpans(period.qualifyingBreak, activities)) {
-      if (endUtc - startUtc > CYCLE_REST_MS) {
-        cycleEndedByRest = true
-        continue
-      }
+      if (endUtc - startUtc > CYCLE_REST_MS) continue
       const length = lengthText(endUtc - startUtc)
       const range = rangeText(startUtc, endUtc, clockMode)
       lengths.push(length)
@@ -154,7 +138,7 @@ function breakLines(
       breaks.push(`${length} (${range})`)
     }
   }
-  return { breaks, lengths, ranges, cycleEndedByRest }
+  return { breaks, lengths, ranges }
 }
 
 function breakSpans(item: QualifyingDrivingBreak, activities: readonly DayDrivingActivity[]): Array<[number, number]> {
@@ -197,14 +181,14 @@ function dailyRows(
   )
   if (overlapping.length === 0) {
     if (!dayHasDriving) return []
-    return [undecidedDailyRow('Denní doba řízení')]
+    return [undecidedDailyRow(PERIOD_LABEL)]
   }
   return overlapping.map((period, index) => {
-    const label = overlapping.length === 1 ? 'Denní doba řízení' : `Denní doba řízení ${index + 1}`
+    const label = overlapping.length === 1 ? PERIOD_LABEL : `${PERIOD_LABEL} ${index + 1}`
     const status = dailyStatus(period)
     const duration = period.drivingMs == null ? '—' : lengthText(period.drivingMs)
     const endUtc = period.endUtc
-    const detail = endUtc == null ? null : rangeText(period.startUtc, endUtc, clockMode)
+    const detail = endUtc == null ? `od ${formatClockDateTime(period.startUtc, clockMode)}` : rangeText(period.startUtc, endUtc, clockMode)
     return {
       label,
       primary: duration,
@@ -212,77 +196,43 @@ function dailyRows(
       value: `${duration}. ${status.text}`,
       tone: status.tone,
       statusText: status.text,
+      mark: status.mark,
       rule: 'article_6' as const,
       presentation: 'status' as const,
-      extensionSlots: null,
     }
   })
 }
 
+const UNKNOWN_PERIOD = 'Nelze určit'
+
 function undecidedDailyRow(label: string): DayDrivingRow {
   return {
     label,
-    primary: UNRELIABLE,
+    primary: '—',
     detail: null,
-    value: UNRELIABLE,
+    value: `—. ${UNKNOWN_PERIOD}`,
     tone: 'undecided',
-    statusText: UNRELIABLE,
+    statusText: UNKNOWN_PERIOD,
+    mark: 'unknown',
     rule: 'article_6',
     presentation: 'status',
-    extensionSlots: null,
   }
 }
 
-function dailyStatus(period: DailyDrivingPeriod): { text: string; tone: DayDrivingTone } {
-  if (period.result === 'up_to_9h') return { text: 'Do 9 hodin.', tone: 'clear' }
-  if (period.result === 'over_9h_up_to_10h') return { text: 'Mezi 9 a 10 hodinami.', tone: 'caution' }
-  if (period.result === 'over_10h') return { text: 'Nad 10 hodin.', tone: 'exceeded' }
-  return { text: UNRELIABLE, tone: 'undecided' }
-}
-
-function extensionRow(periods: readonly DailyDrivingPeriod[], activities: readonly DayDrivingActivity[], dayStartUtc: number): DayDrivingRow {
-  const record = recordSpan(activities)
-  const count = assessWeeklyDrivingExtensions({
-    periods,
-    weekStartUtc: utcWeekStart(dayStartUtc),
-    recordStartUtc: record?.startUtc ?? null,
-    recordEndUtc: record?.endUtc ?? null,
-  })
-  const text =
-    count.status === 'undecided' || count.used == null || count.remaining == null
-      ? EXTENSION_UNKNOWN
-      : count.used > count.limit
-        ? `Využito ${count.used} ze ${count.limit}`
-        : remainingText(count.remaining)
-  const tone: DayDrivingTone =
-    count.status === 'undecided' || count.used == null
-      ? 'undecided'
-      : count.used > count.limit
-        ? 'exceeded'
-        : count.remaining === 0
-          ? 'neutral'
-          : 'clear'
-  const slots: ExtensionSlot[] =
-    tone === 'undecided'
-      ? ['unknown', 'unknown']
-      : [0, 1].map((index) => (index < Math.min(count.used ?? 0, 2) ? 'used' : 'available'))
-  const week = `${formatClockDateTime(count.weekStartUtc, 'utc')}–${formatClockDateTime(count.weekEndUtc, 'utc')} UTC`
-  return {
-    label: 'Prodloužení denní doby řízení',
-    primary: text,
-    detail: week,
-    value: text,
-    tone,
-    statusText: text,
-    rule: 'article_6',
-    presentation: 'extensions',
-    extensionSlots: slots,
+function dailyStatus(period: DailyDrivingPeriod): { text: string; tone: DayDrivingTone; mark: DayDrivingMark } {
+  if (!period.closed) {
+    if (period.drivingMs != null && period.drivingMs > TEN_HOURS && period.result === 'over_10h') {
+      return { text: 'Průběžně · Nad 10 h', tone: 'exceeded', mark: 'alert' }
+    }
+    if (period.drivingMs != null && period.result !== 'insufficient_data' && period.result !== 'ambiguous_boundaries') {
+      return { text: 'Průběžně', tone: 'caution', mark: 'progress' }
+    }
+    return { text: UNKNOWN_PERIOD, tone: 'undecided', mark: 'unknown' }
   }
-}
-
-function remainingText(remaining: number): string {
-  if (remaining === 0 || remaining === 1) return `Zbývá ${remaining} ze 2`
-  return `Zbývají ${remaining} ze 2`
+  if (period.result === 'up_to_9h') return { text: 'Běžná', tone: 'clear', mark: 'check' }
+  if (period.result === 'over_9h_up_to_10h') return { text: 'Prodloužená', tone: 'caution', mark: 'alarm' }
+  if (period.result === 'over_10h') return { text: 'Nad 10 h', tone: 'exceeded', mark: 'alert' }
+  return { text: UNKNOWN_PERIOD, tone: 'undecided', mark: 'unknown' }
 }
 
 function dailyDrivingPeriods(activities: readonly DayDrivingActivity[]): DailyDrivingPeriod[] {

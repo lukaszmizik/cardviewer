@@ -58,7 +58,8 @@ import {
 } from './lib/graphGeometry'
 import { TimeScaleSelect } from './components/TimeScaleSelect'
 import { CardInfoTable } from './components/CardInfoTable'
-import { buildDayDrivingRows, type DayDrivingActivity, type DayDrivingTone, type ExtensionSlot } from './components/dayDrivingTable'
+import { buildDayDrivingRows, type DayDrivingActivity, type DayDrivingMark, type DayDrivingTone } from './components/dayDrivingTable'
+import { buildWeeklyDrivingPanel } from './components/weeklyDrivingPanel'
 import { CardHistoryTables } from './components/CardHistoryTables'
 import { bestDailyDistance, type DailyDistanceRecord } from './utils/weekDistance'
 import { GraphStage } from './components/GraphStage'
@@ -184,23 +185,21 @@ function DayDrivingTable({ days, dayStartUtc, dayEndUtc, clockMode }: { days: Da
         <div className="day-driving-row" key={`${row.label}:${index}`} data-rule={row.rule ?? undefined}>
           <div className="day-driving-label">{row.label}</div>
           <div className="day-driving-body">
-            {row.presentation === 'extensions' && row.tone != null ? (
-              <p className={`day-driving-status day-driving-status-${row.tone}`}>
-                <span className="day-driving-clocks">
-                  {(row.extensionSlots ?? []).map((slot, slotIndex) => (
-                    <ClockIcon key={slotIndex} slot={slot} />
-                  ))}
-                </span>
-                <span>{row.primary}</span>
-              </p>
-            ) : row.presentation === 'status' && row.tone != null ? (
-              <>
-                {row.statusText != null && row.statusText !== row.primary ? <p className="day-driving-primary">{row.primary}</p> : null}
+            {row.presentation === 'status' && row.tone != null ? (
+              row.mark != null ? (
+                <div className="day-driving-headline">
+                  <p className="day-driving-primary">{row.primary}</p>
+                  <p className={`day-driving-status day-driving-status-${row.tone}`}>
+                    <StatusIcon tone={row.tone} mark={row.mark} />
+                    <span>{row.statusText}</span>
+                  </p>
+                </div>
+              ) : (
                 <p className={`day-driving-status day-driving-status-${row.tone}`}>
-                  <StatusIcon tone={row.tone} />
+                  <StatusIcon tone={row.tone} mark={null} />
                   <span>{row.statusText ?? row.primary}</span>
                 </p>
-              </>
+              )
             ) : (
               <p className={row.presentation === 'note' ? 'day-driving-note' : 'day-driving-primary'}>{row.primary}</p>
             )}
@@ -212,16 +211,62 @@ function DayDrivingTable({ days, dayStartUtc, dayEndUtc, clockMode }: { days: Da
   )
 }
 
-function ClockIcon({ slot }: { slot: ExtensionSlot }) {
+function WeeklyDrivingPanel({ days, dayEndUtc }: { days: DayData[]; dayEndUtc: number }) {
+  const activities = days.flatMap((day) =>
+    day.activities.map((activity, index) => ({
+      id: `${day.dateUtc}:${activity.startMs}:${activity.endMs}:${index}`,
+      kind: graphActivityKind(activity.type),
+      startUtc: activity.startMs,
+      endUtc: activity.endMs,
+      durationMinutes: Math.round((activity.endMs - activity.startMs) / 60_000),
+      slot: 1 as const,
+    })),
+  )
+  const panel = buildWeeklyDrivingPanel({ activities, dayEndUtc })
+  const width = `${Math.round(panel.fill * 1000) / 10}%`
   return (
-    <svg className={`day-driving-clock day-driving-clock-${slot}`} viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeDasharray={slot === 'unknown' ? '2 2' : undefined} />
-      <path d="M8 4.7V8.1L10.3 9.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
+    <section className="weekly-driving-panel" aria-label={panel.title}>
+      <h3 className="weekly-driving-title">{panel.title}</h3>
+      <p className="weekly-driving-range">{panel.rangeText}</p>
+      <p className="weekly-driving-value">{panel.valueText}</p>
+      <div
+        className="weekly-driving-track"
+        role="meter"
+        aria-valuemin={0}
+        aria-valuemax={56}
+        aria-valuenow={Math.round((panel.result.drivingMs / 3_600_000) * 100) / 100}
+        aria-valuetext={panel.valueText}
+      >
+        <div className={`weekly-driving-fill weekly-driving-fill-${panel.tone}`} style={{ width }} />
+      </div>
+      <p className="weekly-driving-limit">Limit 56 h</p>
+      {panel.notes.map((note) => (
+        <p className={note.startsWith('Překročení') ? 'weekly-driving-warning' : 'weekly-driving-note'} key={note}>
+          {note}
+        </p>
+      ))}
+    </section>
   )
 }
 
-function StatusIcon({ tone }: { tone: DayDrivingTone }) {
+function StatusIcon({ tone, mark }: { tone: DayDrivingTone; mark: DayDrivingMark | null }) {
+  if (mark === 'alarm') {
+    return (
+      <svg className="day-driving-status-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M3.6 5.1 5.5 6.8M12.4 5.1 10.5 6.8" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        <circle cx="8" cy="9.2" r="4.1" fill="none" stroke="currentColor" strokeWidth="1.4" />
+        <path d="M8 7.3v2.1l1.4.9" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )
+  }
+  if (mark === 'progress') {
+    return (
+      <svg className="day-driving-status-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" />
+        <path d="M8 4.8V8.2L10.2 9.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )
+  }
   if (tone === 'clear') {
     return (
       <svg className="day-driving-status-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -244,14 +289,6 @@ function StatusIcon({ tone }: { tone: DayDrivingTone }) {
         <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" />
         <path d="M8 4.8v3.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         <circle cx="8" cy="10.8" r="0.7" fill="currentColor" />
-      </svg>
-    )
-  }
-  if (tone === 'neutral') {
-    return (
-      <svg className="day-driving-status-icon" viewBox="0 0 16 16" aria-hidden="true">
-        <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" />
-        <circle cx="8" cy="8" r="1.2" fill="currentColor" />
       </svg>
     )
   }
@@ -925,6 +962,7 @@ function GraphBlock({
       </svg>
       </GraphStage>
       {isDayDetail && <DayDrivingTable days={days} dayStartUtc={visibleFirstDate} dayEndUtc={visibleLastEnd} clockMode={clockMode} />}
+      {isDayDetail && <WeeklyDrivingPanel days={days} dayEndUtc={visibleLastEnd} />}
       {showFooter && card && <CardInfoTable card={card} clockMode={clockMode} />}
       {showFooter &&
       (visibleDays.some((d) => d.activities.some((a) => !a.isManualEntry)) ||

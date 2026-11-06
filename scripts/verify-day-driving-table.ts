@@ -26,7 +26,8 @@ test('den s řízením a platnou přestávkou', () => {
     ],
   })
   assert.equal(rows.some((row) => row.label === 'Celková zaznamenaná doba řízení'), false)
-  assert.equal(rows.find((row) => row.label === 'Denní doba řízení')?.value, 'Nelze spolehlivě vyhodnotit.')
+  assert.equal(rows.find((row) => row.label === 'Doba řízení v pracovním období')?.statusText, 'Nelze určit')
+  assert.equal(rows.find((row) => row.label === 'Doba řízení v pracovním období')?.primary, '—')
   assert.equal(value(rows, 'Bezpečnostní přestávky'), '50 min (10:00–10:50)')
   assert.equal(value(rows, 'Výsledek přestávek v řízení'), 'V limitu 4 h 30 min.')
   assert.equal(value(rows, 'Nejdelší úsek řízení mezi přestávkami'), '2 h')
@@ -67,8 +68,8 @@ test('cyklus řízení pokračuje přes půlnoc', () => {
   const second = buildDayDrivingRows({ activities, dayStartUtc: START + DAY, dayEndUtc: START + 2 * DAY })
   assert.equal(first.some((row) => row.label === 'Celková zaznamenaná doba řízení'), false)
   assert.equal(second.some((row) => row.label === 'Celková zaznamenaná doba řízení'), false)
-  assert.equal(first.find((row) => row.rule === 'article_6' && row.presentation === 'status')?.primary, 'Nelze spolehlivě vyhodnotit.')
-  assert.equal(second.find((row) => row.rule === 'article_6' && row.presentation === 'status')?.primary, 'Nelze spolehlivě vyhodnotit.')
+  assert.equal(first.find((row) => row.rule === 'article_6' && row.presentation === 'status')?.statusText, 'Nelze určit')
+  assert.equal(second.find((row) => row.rule === 'article_6' && row.presentation === 'status')?.statusText, 'Nelze určit')
   assert.equal(value(first, 'Výsledek přestávek v řízení'), 'Limit 4 h 30 min překročen.')
   assert.equal(value(second, 'Výsledek přestávek v řízení'), 'Limit 4 h 30 min překročen.')
   assert.equal(value(first, 'Nejdelší úsek řízení mezi přestávkami'), '5 h')
@@ -123,7 +124,7 @@ test('odpočinek 824 h 51 min resetuje řízení a není přestávka', () => {
 
   const shown = buildDayDrivingRows({ activities, dayStartUtc: day, dayEndUtc: day + DAY })
   assert.equal(value(shown, 'Bezpečnostní přestávky'), '45 min (10:00–10:45)')
-  assert.equal(value(shown, 'Ukončení cyklu řízení'), 'Cyklus řízení ukončen odpočinkem.')
+  assert.equal(value(shown, 'Ukončení cyklu řízení'), undefined)
   assert.equal(JSON.stringify(shown).includes('824'), false)
   assert.equal(JSON.stringify(shown).includes('29.09.2024'), false)
   assert.equal(JSON.stringify(shown).includes('týdenní'), false)
@@ -131,7 +132,7 @@ test('odpočinek 824 h 51 min resetuje řízení a není přestávka', () => {
 
   const middle = buildDayDrivingRows({ activities, dayStartUtc: later, dayEndUtc: later + DAY })
   assert.equal(value(middle, 'Bezpečnostní přestávky'), '—')
-  assert.equal(value(middle, 'Ukončení cyklu řízení'), undefined)
+  assert.equal(middle.some((row) => row.label === 'Ukončení cyklu řízení'), false)
   assert.equal(JSON.stringify(middle).includes('824'), false)
   assert.equal(JSON.stringify(middle).includes('10:00'), false)
 
@@ -215,7 +216,8 @@ test('kalendářní součet řízení není součástí vyhodnocení', () => {
   })
   assert.equal(rows.some((row) => row.label === 'Celková zaznamenaná doba řízení'), false)
   assert.equal(JSON.stringify(rows).includes('není vyhodnocení podle čl. 6'), false)
-  assert.equal(rows.find((row) => row.label === 'Denní doba řízení')?.tone, 'undecided')
+  assert.equal(rows.find((row) => row.label === 'Doba řízení v pracovním období')?.statusText, 'Nelze určit')
+  assert.equal(rows.find((row) => row.label === 'Doba řízení v pracovním období')?.tone, 'undecided')
 })
 
 const WEEK = Date.parse('2026-06-01T00:00:00.000Z')
@@ -243,37 +245,28 @@ function weekDrives(driveHours: number[]): DayDrivingActivity[] {
   return activities
 }
 
-function extension(rows: ReturnType<typeof buildDayDrivingRows>) {
-  return rows.find((row) => row.label === 'Prodloužení denní doby řízení')
+function daily(rows: ReturnType<typeof buildDayDrivingRows>) {
+  return rows.find((row) => row.label.startsWith('Doba řízení v pracovním období'))
 }
 
-test('týden bez prodloužení má zbývající dvě', () => {
-  assert.equal(new Date(WEEK).getUTCDay(), 1)
-  const rows = weekRows([8, 8, 8])
-  const row = extension(rows)
-  assert.equal(row?.value, 'Zbývají 2 ze 2')
-  assert.equal(row?.tone, 'clear')
-  assert.deepEqual(row?.extensionSlots, ['available', 'available'])
-  assert.equal(rows.find((item) => item.label === 'Denní doba řízení')?.primary, '8 h')
-  assert.equal(rows.find((item) => item.label === 'Denní doba řízení')?.statusText, 'Do 9 hodin.')
-})
-
-test('jedno a dvě prodloužení ubírají zbývající počet', () => {
-  const one = extension(weekRows([9.5, 8, 8]))
-  assert.equal(one?.value, 'Zbývá 1 ze 2')
-  assert.equal(one?.tone, 'clear')
-  assert.deepEqual(one?.extensionSlots, ['used', 'available'])
-  const two = extension(weekRows([9.5, 9.5, 8]))
-  assert.equal(two?.value, 'Zbývá 0 ze 2')
-  assert.equal(two?.tone, 'neutral')
-  assert.deepEqual(two?.extensionSlots, ['used', 'used'])
-})
-
-test('tři prodloužení jsou doložené překročení počtu', () => {
-  const row = extension(weekRows([9.5, 9.5, 9.5]))
-  assert.equal(row?.value, 'Využito 3 ze 2')
-  assert.equal(row?.tone, 'exceeded')
-  assert.equal(JSON.stringify(row).includes('přestupek'), false)
+test('uzavřená doba řízení rozliší běžnou, prodlouženou a nad 10 hodin', () => {
+  const within = daily(weekRows([8, 8, 8]))
+  assert.equal(within?.primary, '8 h')
+  assert.equal(within?.statusText, 'Běžná')
+  assert.equal(within?.mark, 'check')
+  assert.equal(within?.tone, 'clear')
+  const extended = daily(weekRows([9.5, 8, 8]))
+  assert.equal(extended?.statusText, 'Prodloužená')
+  assert.equal(extended?.mark, 'alarm')
+  assert.equal(extended?.tone, 'caution')
+  const exactTen = daily(weekRows([10, 8, 8]))
+  assert.equal(exactTen?.statusText, 'Prodloužená')
+  const over = daily(weekRows([10 + 1 / 60, 8, 8]))
+  assert.equal(over?.statusText, 'Nad 10 h')
+  assert.equal(over?.mark, 'alert')
+  assert.equal(over?.tone, 'exceeded')
+  assert.equal(weekRows([8]).some((row) => row.label === 'Prodloužení denní doby řízení'), false)
+  assert.equal(JSON.stringify(over).includes('přestupek'), false)
 })
 
 test('směna přes půlnoc zůstane jedna denní doba řízení', () => {
@@ -285,14 +278,13 @@ test('směna přes půlnoc zůstane jedna denní doba řízení', () => {
   ]
   const first = buildDayDrivingRows({ activities, dayStartUtc: tuesday, dayEndUtc: tuesday + DAY })
   const second = buildDayDrivingRows({ activities, dayStartUtc: tuesday + DAY, dayEndUtc: tuesday + 2 * DAY })
-  assert.equal(first.find((row) => row.label === 'Denní doba řízení')?.primary, '10 h')
-  assert.equal(second.find((row) => row.label === 'Denní doba řízení')?.primary, '10 h')
-  assert.equal(first.filter((row) => row.label.startsWith('Denní doba řízení')).length, 1)
-  assert.equal(extension(first)?.value, 'Zbývá 1 ze 2')
-  assert.equal(second.find((row) => row.label === 'Denní doba řízení')?.primary === '2 h', false)
+  assert.equal(first.find((row) => row.label === 'Doba řízení v pracovním období')?.primary, '10 h')
+  assert.equal(second.find((row) => row.label === 'Doba řízení v pracovním období')?.primary, '10 h')
+  assert.equal(first.filter((row) => row.label.startsWith('Doba řízení v pracovním období')).length, 1)
+  assert.equal(second.find((row) => row.label === 'Doba řízení v pracovním období')?.primary === '2 h', false)
 })
 
-test('období přes pondělní půlnoc patří jen týdnu svého začátku', () => {
+test('období přes pondělní půlnoc zůstane jedna denní doba řízení', () => {
   const sunday = WEEK - DAY
   const activities = [
     activity('open', 'rest', WEEK - 8 * DAY, sunday + 20 * HOUR),
@@ -301,26 +293,8 @@ test('období přes pondělní půlnoc patří jen týdnu svého začátku', () 
   ]
   const before = buildDayDrivingRows({ activities, dayStartUtc: sunday, dayEndUtc: WEEK })
   const after = buildDayDrivingRows({ activities, dayStartUtc: WEEK, dayEndUtc: WEEK + DAY })
-  assert.equal(before.find((row) => row.label === 'Denní doba řízení')?.primary, '10 h')
-  assert.equal(after.find((row) => row.label === 'Denní doba řízení')?.primary, '10 h')
-  assert.equal(extension(before)?.value, 'Zbývá 1 ze 2')
-  assert.equal(extension(after)?.value, 'Zbývají 2 ze 2')
-})
-
-test('neúplný týden není nulový počet prodloužení', () => {
-  const wednesday = WEEK + 2 * DAY
-  const rows = buildDayDrivingRows({
-    activities: [
-      activity('open', 'rest', wednesday, wednesday + 11 * HOUR),
-      activity('drive', 'driving', wednesday + 11 * HOUR, wednesday + 19 * HOUR),
-      activity('close', 'rest', wednesday + 19 * HOUR, WEEK + 8 * DAY),
-    ],
-    dayStartUtc: wednesday,
-    dayEndUtc: wednesday + DAY,
-  })
-  assert.equal(extension(rows)?.value, 'Nelze určit')
-  assert.equal(extension(rows)?.tone, 'undecided')
-  assert.deepEqual(extension(rows)?.extensionSlots, ['unknown', 'unknown'])
+  assert.equal(before.find((row) => row.label === 'Doba řízení v pracovním období')?.primary, '10 h')
+  assert.equal(after.find((row) => row.label === 'Doba řízení v pracovním období')?.primary, '10 h')
 })
 
 test('dvě denní doby řízení v jednom dni se zobrazí odděleně', () => {
@@ -331,20 +305,110 @@ test('dvě denní doby řízení v jednom dni se zobrazí odděleně', () => {
     activity('drive-2', 'driving', WEEK + 16 * HOUR, WEEK + 18 * HOUR),
     activity('close', 'rest', WEEK + 18 * HOUR, WEEK + 29 * HOUR),
   ]
-  const daily = buildDayDrivingRows({ activities, dayStartUtc: WEEK, dayEndUtc: WEEK + DAY }).filter((row) =>
-    row.label.startsWith('Denní doba řízení'),
+  const rows = buildDayDrivingRows({ activities, dayStartUtc: WEEK, dayEndUtc: WEEK + DAY }).filter((row) =>
+    row.label.startsWith('Doba řízení v pracovním období'),
   )
   assert.deepEqual(
-    daily.map((row) => row.primary),
+    rows.map((row) => row.label),
+    ['Doba řízení v pracovním období 1', 'Doba řízení v pracovním období 2'],
+  )
+  assert.deepEqual(
+    rows.map((row) => row.primary),
     ['2 h', '2 h'],
   )
+  assert.equal(rows.every((row) => row.statusText === 'Běžná' && row.detail != null), true)
 })
 
-test('překročení 10 hodin zůstane samostatné a prodloužení se započte', () => {
-  const rows = weekRows([10 + 1 / 60, 8, 8])
-  const daily = rows.find((row) => row.label === 'Denní doba řízení')
-  assert.equal(daily?.statusText, 'Nad 10 hodin.')
-  assert.equal(daily?.tone, 'exceeded')
-  assert.equal(extension(rows)?.value, 'Zbývá 1 ze 2')
-  assert.equal(JSON.stringify(rows).includes('přestupek'), false)
+test('známý začátek bez uzavírajícího odpočinku je průběžná denní doba řízení', () => {
+  const anchor = WEEK + 6 * HOUR
+  const rows = buildDayDrivingRows({
+    activities: [
+      activity('open', 'rest', WEEK - 12 * HOUR, anchor),
+      activity('drive', 'driving', anchor, anchor + 2 * HOUR),
+    ],
+    dayStartUtc: WEEK,
+    dayEndUtc: WEEK + DAY,
+  })
+  const row = daily(rows)
+  assert.equal(row?.primary, '2 h')
+  assert.equal(row?.statusText, 'Průběžně')
+  assert.equal(row?.mark, 'progress')
+  assert.equal(row?.tone, 'caution')
+  assert.equal(row?.statusText === 'Běžná', false)
+  assert.equal(row?.detail != null, true)
+})
+
+test('průběžný součet nad 10 hodin není zelený', () => {
+  const anchor = WEEK + 6 * HOUR
+  const row = daily(buildDayDrivingRows({
+    activities: [
+      activity('open', 'rest', WEEK - 12 * HOUR, anchor),
+      activity('drive', 'driving', anchor, anchor + 10 * HOUR + MINUTE),
+    ],
+    dayStartUtc: WEEK,
+    dayEndUtc: WEEK + DAY,
+  }))
+  assert.equal(row?.statusText, 'Průběžně · Nad 10 h')
+  assert.equal(row?.tone, 'exceeded')
+  assert.equal(row?.mark, 'alert')
+  assert.equal(row?.tone === 'clear', false)
+})
+
+test('uzavřené období do 9 hodin není označené jako průběžné', () => {
+  const row = daily(weekRows([8]))
+  assert.equal(row?.statusText, 'Běžná')
+  assert.equal(row?.mark, 'check')
+  assert.equal(JSON.stringify(row).includes('Průběžně'), false)
+})
+
+test('dřívější nejednoznačná hranice nezakryje pozdější den se stejným řízením', () => {
+  const earlyAnchor = Date.parse('2024-10-25T09:36:00.000Z')
+  const forkRest = earlyAnchor + HOUR
+  const secondDrive = forkRest + 9 * HOUR
+  const secondRest = secondDrive + HOUR
+  const laterAnchor = Date.parse('2025-09-26T09:14:00.000Z')
+  const splitStart = laterAnchor + 101 * MINUTE
+  const splitEnd = splitStart + 4 * HOUR
+  const longStart = splitEnd + HOUR
+  const day = Date.parse('2025-09-26T00:00:00.000Z')
+  const rows = buildDayDrivingRows({
+    activities: [
+      activity('early-open', 'rest', earlyAnchor - 12 * HOUR, earlyAnchor),
+      activity('early-drive', 'driving', earlyAnchor, forkRest),
+      activity('early-short', 'rest', forkRest, secondDrive),
+      activity('early-drive-2', 'driving', secondDrive, secondRest),
+      activity('bridge', 'rest', secondRest, laterAnchor),
+      activity('later-drive', 'driving', laterAnchor, splitStart),
+      activity('later-split', 'rest', splitStart, splitEnd),
+      activity('later-gap', 'work', splitEnd, longStart),
+      activity('later-long', 'rest', longStart, longStart + 20 * HOUR),
+    ],
+    dayStartUtc: day,
+    dayEndUtc: day + DAY,
+  })
+  const row = daily(rows)
+  assert.equal(row?.primary, '1 h 41 min')
+  assert.equal(row?.statusText, 'Průběžně')
+  assert.equal(row?.mark, 'progress')
+  assert.equal(row?.tone, 'caution')
+  assert.equal(row?.detail != null, true)
+  assert.equal(row?.statusText === 'Běžná', false)
+})
+
+test('neznámý úsek po známém začátku zůstane nerozhodnutý', () => {
+  const anchor = WEEK + 6 * HOUR
+  const rows = buildDayDrivingRows({
+    activities: [
+      activity('open', 'rest', WEEK - 12 * HOUR, anchor),
+      activity('drive', 'driving', anchor, anchor + HOUR),
+      activity('gap', 'unknown', anchor + HOUR, anchor + 2 * HOUR),
+      activity('drive-2', 'driving', anchor + 2 * HOUR, anchor + 3 * HOUR),
+    ],
+    dayStartUtc: WEEK,
+    dayEndUtc: WEEK + DAY,
+  })
+  const row = daily(rows)
+  assert.equal(row?.statusText, 'Nelze určit')
+  assert.equal(row?.mark, 'unknown')
+  assert.equal(JSON.stringify(row).includes('Průběžně'), false)
 })

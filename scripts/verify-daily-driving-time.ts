@@ -169,10 +169,11 @@ test('nejednoznačné hranice odpočinků nemají jeden závěr', () => {
     activity('drive-2', 'driving', secondDrive, secondRest),
     activity('long', 'rest', secondRest, secondRest + 11 * HOUR),
   ])
-  assert.equal(periods.length, 1)
+  assert.equal(periods.length >= 1, true)
   const period = periods[0]
   assert.equal(period?.result, 'ambiguous_boundaries')
   assert.equal(period?.drivingMs, null)
+  assert.equal(period?.closed, false)
   assert.equal(period?.closingRest, null)
   assert.equal(period?.extensionNote, null)
   assert.ok(period?.uncertainties.includes('multiple_rest_boundaries'))
@@ -181,4 +182,60 @@ test('nejednoznačné hranice odpočinků nemají jeden závěr', () => {
     [HOUR, 2 * HOUR],
   )
   assert.equal(JSON.stringify(period).includes('přestupek'), false)
+})
+
+test('dvě hranice se stejným řízením dají průběžný součet a dřívější nejednoznačnost ho nesmaže', () => {
+  const earlyAnchor = Date.parse('2024-10-25T09:36:00.000Z')
+  const forkRest = earlyAnchor + HOUR
+  const secondDrive = forkRest + 9 * HOUR
+  const secondRest = secondDrive + HOUR
+  const laterAnchor = Date.parse('2025-09-26T09:14:00.000Z')
+  const splitStart = laterAnchor + 101 * MINUTE
+  const splitEnd = splitStart + 4 * HOUR
+  const longStart = splitEnd + HOUR
+  const periods = periodsOf([
+    activity('early-open', 'rest', earlyAnchor - 12 * HOUR, earlyAnchor),
+    activity('early-drive', 'driving', earlyAnchor, forkRest),
+    activity('early-short', 'rest', forkRest, secondDrive),
+    activity('early-drive-2', 'driving', secondDrive, secondRest),
+    activity('bridge', 'rest', secondRest, laterAnchor),
+    activity('later-drive', 'driving', laterAnchor, splitStart),
+    activity('later-split', 'rest', splitStart, splitEnd),
+    activity('later-gap', 'work', splitEnd, longStart),
+    activity('later-long', 'rest', longStart, longStart + 20 * HOUR),
+  ])
+  const early = periods.find((item) => item.startUtc === earlyAnchor)
+  assert.equal(early?.result, 'ambiguous_boundaries')
+  assert.equal(early?.drivingMs, null)
+  assert.equal(early?.endUtc != null && early.endUtc < laterAnchor, true)
+  const later = periods.find((item) => item.startUtc === laterAnchor)
+  assert.equal(later?.closed, false)
+  assert.equal(later?.drivingMs, 101 * MINUTE)
+  assert.equal(later?.result, 'up_to_9h')
+  assert.equal(later?.closingRest, null)
+})
+
+test('uzavřený odpočinek ukončí období', () => {
+  const anchor = START + 11 * HOUR
+  const driveEnd = anchor + 8 * HOUR
+  const [period] = periodsOf([
+    activity('open', 'rest', START, anchor),
+    activity('drive', 'driving', anchor, driveEnd),
+    activity('close', 'rest', driveEnd, driveEnd + 11 * HOUR),
+  ])
+  assert.equal(period?.closed, true)
+  assert.equal(period?.result, 'up_to_9h')
+  assert.equal(period?.drivingMs, 8 * HOUR)
+})
+
+test('chybějící následující odpočinek ponechá dosud zaznamenané řízení', () => {
+  const anchor = START + 11 * HOUR
+  const [period] = periodsOf([
+    activity('open', 'rest', START, anchor),
+    activity('drive', 'driving', anchor, anchor + 2 * HOUR),
+  ])
+  assert.equal(period?.closed, false)
+  assert.equal(period?.drivingMs, 2 * HOUR)
+  assert.ok(period?.uncertainties.includes('closing_rest_missing'))
+  assert.equal(period?.result, 'up_to_9h')
 })

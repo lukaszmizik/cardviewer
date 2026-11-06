@@ -49,11 +49,8 @@ export type DailyDrivingPeriod = {
   drivingSourceActivityIds: string[]
   /** Vyplněno, když řetězec má víc hranic. Žádná z nich není vybraný závěr. */
   boundaryAlternatives: DailyDrivingBoundaryAlternative[]
-}
-
-type StepUse = {
-  anchorUtc: number
-  interpretation: DailyChainInterpretation | null
+  /** false, dokud období neuzavře jedna dohodnutá hranice odpočinku. */
+  closed: boolean
 }
 
 /**
@@ -83,39 +80,23 @@ function periodsFromChain(
   activities: readonly Activity[],
   candidates: readonly RestCandidate[],
 ): DailyDrivingPeriod[] {
-  const nodes = new Map(chain.nodes.map((node) => [node.anchorUtc, node]))
-  const paths: StepUse[][] = chain.paths.map((path) =>
-    path.steps.map((step) => ({
-      anchorUtc: step.anchorUtc,
-      interpretation:
-        nodes.get(step.anchorUtc)?.interpretations.find((item) => item.id === step.interpretationId) ?? null,
-    })),
-  )
-  if (paths.length === 0) return []
-
+  const ordered = [...chain.nodes].sort((left, right) => left.anchorUtc - right.anchorUtc)
   const periods: DailyDrivingPeriod[] = []
-  const max = Math.max(...paths.map((path) => path.length))
-  for (let index = 0; index < max; index += 1) {
-    const steps = paths.map((path) => path[index] ?? null)
-    if (steps.some((step) => step == null)) break
-    const present = steps as StepUse[]
-    const anchorUtc = present[0]!.anchorUtc
-    if (present.some((step) => step.anchorUtc !== anchorUtc)) break
-
-    const interpretations = present.map((step) => step.interpretation)
-    if (interpretations.every((item) => item == null)) {
-      const open = openPeriod(anchorUtc, activities, candidates)
+  for (let index = 0; index < ordered.length; index += 1) {
+    const node = ordered[index]!
+    const interpretations = node.interpretations.filter((item) => item.parts.length > 0)
+    if (interpretations.length === 0) {
+      if (index !== ordered.length - 1) continue
+      const open = openPeriod(node.anchorUtc, activities, candidates)
       if (open) periods.push(open)
-      break
+      continue
     }
     const starts = unique(interpretations.map(closingStart))
-    if (starts.length !== 1 || interpretations.some((item) => item == null)) {
-      periods.push(ambiguousPeriod(anchorUtc, nodes.get(anchorUtc)?.interpretations ?? [], activities, candidates))
-      break
+    if (starts.length !== 1) {
+      periods.push(ambiguousPeriod(node.anchorUtc, interpretations, activities, candidates))
+      continue
     }
-
-    const group = interpretations.filter((item): item is DailyChainInterpretation => item != null)
-    periods.push(closedPeriod(anchorUtc, group, activities, candidates))
+    periods.push(closedPeriod(node.anchorUtc, interpretations, activities, candidates))
   }
   return periods
 }
@@ -157,6 +138,7 @@ function closedPeriod(
     uncertainties,
     drivingSourceActivityIds: driven.ids,
     boundaryAlternatives: [],
+    closed: result === 'up_to_9h' || result === 'over_9h_up_to_10h' || result === 'over_10h',
   }
 }
 
@@ -176,17 +158,31 @@ function ambiguousPeriod(
       sourceActivityIds: closing.sourceActivityIds,
     }
   })
+  const earliest = alternatives.reduce<number | null>(
+    (min, item) => (min == null || item.closingStartUtc < min ? item.closingStartUtc : min),
+    null,
+  )
+  const latest = alternatives.reduce<number | null>(
+    (max, item) => (max == null || item.closingStartUtc > max ? item.closingStartUtc : max),
+    null,
+  )
+  const sameDriving = alternatives.length > 0 && alternatives.every((item) => item.drivingMs === alternatives[0]!.drivingMs)
+  const unknown = latest != null && hasUnknown(activities, anchorUtc, latest)
+  const startKnown = !uncertainties.includes('unestablished_rest') && !uncertainties.includes('opening_rest_unmatched')
+  const provisional = sameDriving && !unknown && startKnown
+  const provisionalDriving = provisional ? drivingBetween(activities, anchorUtc, alternatives[0]!.closingStartUtc) : null
   return {
     startUtc: anchorUtc,
-    endUtc: null,
-    drivingMs: null,
+    endUtc: earliest,
+    drivingMs: provisionalDriving?.ms ?? null,
     openingRest: opening,
     closingRest: null,
-    result: 'ambiguous_boundaries',
+    result: provisionalDriving != null ? classify(provisionalDriving.ms) : unknown ? 'insufficient_data' : 'ambiguous_boundaries',
     extensionNote: null,
     uncertainties,
-    drivingSourceActivityIds: [],
-    boundaryAlternatives: alternatives.sort((a, b) => a.closingStartUtc - b.closingStartUtc),
+    drivingSourceActivityIds: provisionalDriving?.ids ?? [],
+    boundaryAlternatives: alternatives.sort((left, right) => left.closingStartUtc - right.closingStartUtc),
+    closed: false,
   }
 }
 
@@ -199,18 +195,21 @@ function openPeriod(
   const unknown = hasUnknown(activities, anchorUtc, Number.POSITIVE_INFINITY)
   if (driven.ms === 0 && !unknown) return null
   const uncertainties: DailyDrivingUncertainty[] = ['closing_rest_missing']
+  const opening = openingBoundary(anchorUtc, candidates, uncertainties)
   if (unknown) uncertainties.push('unknown_interval')
+  const startKnown = !unknown && !uncertainties.includes('unestablished_rest') && !uncertainties.includes('opening_rest_unmatched')
   return {
     startUtc: anchorUtc,
     endUtc: null,
-    drivingMs: driven.ms,
-    openingRest: openingBoundary(anchorUtc, candidates, uncertainties),
+    drivingMs: startKnown ? driven.ms : null,
+    openingRest: opening,
     closingRest: null,
-    result: 'insufficient_data',
+    result: startKnown ? classify(driven.ms) : 'insufficient_data',
     extensionNote: null,
     uncertainties,
-    drivingSourceActivityIds: driven.ids,
+    drivingSourceActivityIds: startKnown ? driven.ids : [],
     boundaryAlternatives: [],
+    closed: false,
   }
 }
 
