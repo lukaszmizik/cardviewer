@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { analyzeDriverActivities } from '../analysis/analyzeDriverActivities.ts'
+import { DailyRestOverview } from './DailyRestOverview.tsx'
 import {
   buildDiagnosticExport,
   deriveDiagnosticCases,
@@ -80,6 +81,7 @@ export function DiagnosticReview({ card }: DiagnosticReviewProps) {
       <p className="diagnostic-hint">
         Délka odpočinku není právně potvrzený odpočinek. Přestupky se zde nevytvářejí.
       </p>
+      {analysis != null ? <DailyRestOverview analysis={analysis} /> : null}
       {analysis != null ? <WeeklyOverview assignment={analysis.weeklyAssignment} consecutive={analysis.consecutiveWeeks} /> : null}
       <h3>Konkrétní odpočinky a období</h3>
       <ol className="diagnostic-list">

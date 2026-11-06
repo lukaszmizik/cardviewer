@@ -372,7 +372,11 @@ function legacyDailyReduced(
   return { status: 'summed', fromUtc: interval.fromUtc, toUtc: interval.toUtc, reducedCount: interval.reducedCount }
 }
 
-function countReducedInterval(
+/**
+ * Počet zkrácených denních odpočinků mezi dvěma předěly.
+ * Právní kontrolu limitu neprovádí. Volá ji i diagnostika technického návrhu.
+ */
+export function countReducedInterval(
   fromUtc: number,
   toUtc: number,
   chain: DailyRestChain | null,
@@ -402,6 +406,26 @@ function countReducedInterval(
   const same = tallies.every((tally) => tally.key === first.key)
   if (!same) return { ...open, status: 'undecided', reason: 'paths_disagree' }
   return { ...open, status: 'summed', reducedCount: first.rests.length, rests: first.rests }
+}
+
+/**
+ * Diagnostický počet nad řetězcem technického návrhu.
+ * Uzavře ho jen když všechny cesty od počátečního předělu dorazí na koncový
+ * a shodnou se na prokázaných zkrácených odpočincích.
+ */
+export function diagnoseProposedReducedCount(
+  fromUtc: number,
+  toUtc: number,
+  chain: DailyRestChain,
+  unknowns: readonly TimeInterval[],
+  boundarySourceIds: readonly string[],
+): ReducedDailyInterval {
+  const counted = countReducedInterval(fromUtc, toUtc, chain, unknowns, [], boundarySourceIds)
+  if (counted.status !== 'summed') return counted
+  const relevant = chain.paths.filter((path) => path.steps.some((step) => step.anchorUtc === fromUtc))
+  const everyPathCovers = relevant.length > 0 && relevant.every((path) => path.steps.some((step) => step.anchorUtc === toUtc))
+  if (!everyPathCovers) return { status: 'undecided', fromUtc, toUtc, reason: 'uncovered', limitEvaluated: false }
+  return counted
 }
 
 function segmentIntersects(segment: DailySegmentView, fromUtc: number, toUtc: number): boolean {

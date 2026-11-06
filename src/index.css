@@ -607,6 +607,44 @@ body {
   color: #475569;
 }
 
+.diagnostic-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.diagnostic-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.diagnostic-table caption {
+  caption-side: bottom;
+  padding: 8px 10px 10px;
+  text-align: left;
+}
+
+.diagnostic-table th,
+.diagnostic-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+  vertical-align: top;
+  color: #334155;
+  line-height: 1.4;
+}
+
+.diagnostic-table th {
+  color: #475569;
+  font-weight: 650;
+  background: #f8fafc;
+}
+
+.diagnostic-table tr:last-child td {
+  border-bottom: none;
+}
+
 .graph-empty {
   display: flex;
   flex-direction: column;

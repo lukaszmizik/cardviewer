@@ -12,6 +12,8 @@ import { buildWeeklyRestAssignment, type WeeklyAutomaticAssignment } from './wee
 import {
   assessWeeklyRests,
   classifyWeeklyRestCandidates,
+  diagnoseProposedReducedCount,
+  type ReducedDailyInterval,
   type WeekClock,
   type WeeklyRestCandidate,
   type WeeklyRestMvp,
@@ -94,7 +96,22 @@ export type ActivityAnalysis = {
    * a nevstupuje do kontroly zkrácených denních odpočinků.
    */
   boundaryPairDaily: BoundaryPairDailyDiagnostic
+  /**
+   * Diagnostický počet zkrácených denních odpočinků mezi navrženými předěly.
+   * Právní kontrola čl. 8 odst. 4 to není a do jejích polí se nezapisuje.
+   */
+  boundaryPairReducedCount: BoundaryPairReducedDiagnostic
 }
+
+/** Diagnostický počet. Právně určené týdenní odpočinky to nejsou. */
+export type BoundaryPairReducedDiagnostic =
+  | { status: 'not_run'; reason: 'boundary_pair_undecided' }
+  | {
+      status: 'diagnostic'
+      basis: 'technical_boundary_proposal'
+      legalDetermination: false
+      count: ReducedDailyInterval
+    }
 
 /** Diagnostika od navržených předělů. Právně určené týdenní odpočinky to nejsou. */
 export type BoundaryPairDailyDiagnostic =
@@ -157,6 +174,12 @@ export function analyzeDriverActivities(request: ActivityAnalysisRequest): Activ
     anchorUtc == null
       ? { status: 'requires_input', missing: ['daily_anchor'] }
       : assessedDaily(anchorUtc, explicitAnchor, restCandidates, unknownIntervals, recordEndUtc)
+  const boundaryPairDaily = diagnoseBoundaryPairDaily(
+    weeklyAssignment,
+    restCandidates,
+    unknownIntervals,
+    recordEndUtc,
+  )
 
   return {
     recorded: {
@@ -177,11 +200,31 @@ export function analyzeDriverActivities(request: ActivityAnalysisRequest): Activ
     notEvaluated: NOT_EVALUATED.map((item) => ({ ...item })),
     weeklyAssignment,
     consecutiveWeeks,
-    boundaryPairDaily: diagnoseBoundaryPairDaily(
-      weeklyAssignment,
-      restCandidates,
+    boundaryPairDaily,
+    boundaryPairReducedCount: diagnoseBoundaryPairReducedCount(boundaryPairDaily, weeklyAssignment, unknownIntervals),
+  }
+}
+
+function diagnoseBoundaryPairReducedCount(
+  daily: BoundaryPairDailyDiagnostic,
+  assignment: WeeklyAutomaticAssignment,
+  unknownIntervals: readonly UnrecordedInterval[],
+): BoundaryPairReducedDiagnostic {
+  const pair = assignment.boundaryPair
+  if (daily.status !== 'diagnostic' || pair.status !== 'pair') {
+    return { status: 'not_run', reason: 'boundary_pair_undecided' }
+  }
+  const second = assignment.nodes.find((node) => node.id === pair.nodeIds[1])
+  return {
+    status: 'diagnostic',
+    basis: 'technical_boundary_proposal',
+    legalDetermination: false,
+    count: diagnoseProposedReducedCount(
+      daily.firstBoundaryEndUtc,
+      daily.secondBoundaryEndUtc,
+      daily.chain,
       unknownIntervals,
-      recordEndUtc,
+      second?.sourceActivityIds ?? [],
     ),
   }
 }

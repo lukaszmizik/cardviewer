@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { analyzeDriverActivities } from '../src/analysis/analyzeDriverActivities.ts'
+import type { DailyRestChain } from '../src/analysis/dailyRestChain.ts'
+import { diagnoseProposedReducedCount } from '../src/analysis/weeklyRest.ts'
 import type { Activity, DriverCardData } from '../src/types/tacho.ts'
 import type { WeekClock, WeeklyRestCandidate } from '../src/analysis/weeklyRest.ts'
 
@@ -918,4 +920,242 @@ test('diagnostický řetězec nemění kontrolu tří zkrácených denních odpo
   })
   assert.equal(analysis.assessed.weekly.result.reducedDailyLimitChecks[0]?.status, 'within_limit')
   assert.equal(analysis.assessed.weekly.result.reducedDailyIntervals[0]?.status, 'summed')
+  assert.equal(analysis.boundaryPairReducedCount.status, 'not_run')
+})
+
+function opened(endUtc: number): Activity {
+  return activity('after', 'driving', endUtc, endUtc + 26 * HOUR)
+}
+
+test('jedna úplná diagnostická cesta uzavře počet zkrácených odpočinků', () => {
+  const seedEnd = Date.parse('2026-03-02T17:00:00.000Z')
+  const firstEnd = Date.parse('2026-03-04T06:00:00.000Z')
+  const reducedEnd = Date.parse('2026-03-04T18:00:00.000Z')
+  const secondEnd = Date.parse('2026-03-06T06:00:00.000Z')
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('seed', 'rest', Date.parse('2026-03-02T06:00:00.000Z'), seedEnd),
+      activity('drive-seed', 'driving', seedEnd, Date.parse('2026-03-03T06:00:00.000Z')),
+      activity('weekly-a', 'rest', Date.parse('2026-03-03T06:00:00.000Z'), firstEnd),
+      activity('drive-1', 'driving', firstEnd, firstEnd + 2 * HOUR),
+      activity('reduced', 'rest', firstEnd + 2 * HOUR, reducedEnd),
+      activity('drive-2', 'driving', reducedEnd, Date.parse('2026-03-05T06:00:00.000Z')),
+      activity('weekly-b', 'rest', Date.parse('2026-03-05T06:00:00.000Z'), secondEnd),
+      opened(secondEnd),
+    ]),
+  })
+  assert.equal(analysis.assessed.daily.status, 'assessed')
+  if (analysis.assessed.daily.status !== 'assessed' || analysis.boundaryPairReducedCount.status !== 'diagnostic') return
+  assert.equal(analysis.boundaryPairReducedCount.basis, 'technical_boundary_proposal')
+  assert.equal(analysis.boundaryPairReducedCount.legalDetermination, false)
+  assert.equal(analysis.boundaryPairReducedCount.count.status, 'summed')
+  if (analysis.boundaryPairReducedCount.count.status !== 'summed') return
+  assert.equal(analysis.boundaryPairReducedCount.count.reducedCount, 1)
+  assert.equal(analysis.boundaryPairReducedCount.count.limitEvaluated, false)
+  assert.deepEqual(analysis.boundaryPairReducedCount.count.rests, [
+    { startUtc: firstEnd + 2 * HOUR, endUtc: reducedEnd, sourceActivityIds: ['reduced'] },
+  ])
+  assert.equal(analysis.assessed.daily.chain.startAnchorUtc, seedEnd)
+  assert.notEqual(analysis.assessed.daily.chain, analysis.boundaryPairDaily.status === 'diagnostic' ? analysis.boundaryPairDaily.chain : null)
+  assert.deepEqual(analysis.assessed.daily.segments, [])
+  assert.equal(analysis.assessed.weekly.status, 'requires_input')
+})
+
+test('více úplných cest se stejným počtem uzavře diagnostický počet', () => {
+  const firstEnd = Date.parse('2026-03-04T06:00:00.000Z')
+  const reducedEnd = Date.parse('2026-03-04T17:00:00.000Z')
+  const secondEnd = Date.parse('2026-03-06T12:00:00.000Z')
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('weekly-a', 'rest', Date.parse('2026-03-03T06:00:00.000Z'), firstEnd),
+      activity('drive-1', 'driving', firstEnd, firstEnd + HOUR),
+      activity('reduced', 'rest', firstEnd + HOUR, reducedEnd),
+      activity('drive-2', 'driving', reducedEnd, reducedEnd + HOUR),
+      activity('part-3', 'rest', reducedEnd + HOUR, reducedEnd + 4 * HOUR),
+      activity('between', 'work', reducedEnd + 4 * HOUR, reducedEnd + 5 * HOUR),
+      activity('part-11', 'rest', reducedEnd + 5 * HOUR, reducedEnd + 16 * HOUR),
+      activity('drive-3', 'driving', reducedEnd + 16 * HOUR, Date.parse('2026-03-05T12:00:00.000Z')),
+      activity('weekly-b', 'rest', Date.parse('2026-03-05T12:00:00.000Z'), secondEnd),
+      opened(secondEnd),
+    ]),
+  })
+  assert.equal(analysis.boundaryPairDaily.status, 'diagnostic')
+  if (analysis.boundaryPairDaily.status !== 'diagnostic' || analysis.boundaryPairReducedCount.status !== 'diagnostic') return
+  assert.ok(analysis.boundaryPairDaily.chain.paths.length >= 2)
+  assert.equal(analysis.boundaryPairReducedCount.count.status, 'summed')
+  if (analysis.boundaryPairReducedCount.count.status !== 'summed') return
+  assert.equal(analysis.boundaryPairReducedCount.count.reducedCount, 1)
+  assert.deepEqual(analysis.boundaryPairReducedCount.count.rests[0]?.sourceActivityIds, ['reduced'])
+})
+
+test('rozdílné počty alternativních cest zůstanou nerozhodnuté', () => {
+  const firstEnd = Date.parse('2026-03-04T06:00:00.000Z')
+  const secondEnd = Date.parse('2026-03-06T08:00:00.000Z')
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('weekly-a', 'rest', Date.parse('2026-03-03T06:00:00.000Z'), firstEnd),
+      activity('drive-1', 'driving', firstEnd, firstEnd + 2 * HOUR),
+      activity('reduced', 'rest', firstEnd + 2 * HOUR, firstEnd + 12 * HOUR),
+      activity('drive-2', 'driving', firstEnd + 12 * HOUR, firstEnd + 13 * HOUR),
+      activity('regular', 'rest', firstEnd + 13 * HOUR, firstEnd + 24 * HOUR),
+      activity('drive-3', 'driving', firstEnd + 24 * HOUR, firstEnd + 26 * HOUR),
+      activity('weekly-b', 'rest', firstEnd + 26 * HOUR, secondEnd),
+      opened(secondEnd),
+    ]),
+  })
+  assert.equal(analysis.boundaryPairReducedCount.status, 'diagnostic')
+  if (analysis.boundaryPairReducedCount.status !== 'diagnostic') return
+  assert.equal(analysis.boundaryPairReducedCount.count.status, 'undecided')
+  if (analysis.boundaryPairReducedCount.count.status !== 'undecided') return
+  assert.equal(analysis.boundaryPairReducedCount.count.reason, 'paths_disagree')
+})
+
+test('odpočinek koncového předělu se do diagnostického počtu nezahrne', () => {
+  const firstEnd = Date.parse('2026-03-03T06:00:00.000Z')
+  const secondEnd = Date.parse('2026-03-04T20:00:00.000Z')
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('weekly-a', 'rest', Date.parse('2026-03-02T06:00:00.000Z'), firstEnd),
+      activity('drive', 'driving', firstEnd, Date.parse('2026-03-03T20:00:00.000Z')),
+      activity('weekly-b', 'rest', Date.parse('2026-03-03T20:00:00.000Z'), secondEnd),
+      opened(secondEnd),
+    ]),
+  })
+  assert.equal(analysis.boundaryPairReducedCount.status, 'diagnostic')
+  if (analysis.boundaryPairReducedCount.status !== 'diagnostic' || analysis.boundaryPairDaily.status !== 'diagnostic') return
+  const boundaryInterpretation = analysis.boundaryPairDaily.chain.nodes
+    .flatMap((node) => node.interpretations)
+    .find((item) => item.parts.some((part) => part.sourceActivityIds.includes('weekly-b')))
+  assert.equal(boundaryInterpretation?.reducedDelta, 1)
+  assert.equal(analysis.boundaryPairReducedCount.count.status, 'summed')
+  if (analysis.boundaryPairReducedCount.count.status !== 'summed') return
+  assert.equal(analysis.boundaryPairReducedCount.count.reducedCount, 0)
+  assert.deepEqual(analysis.boundaryPairReducedCount.count.rests, [])
+})
+
+test('neprokázaný zkrácený odpočinek diagnostický počet neuzavře', () => {
+  const firstEnd = Date.parse('2026-03-04T06:00:00.000Z')
+  const reducedStart = firstEnd + 2 * HOUR
+  const reducedEnd = firstEnd + 12 * HOUR
+  const secondEnd = Date.parse('2026-03-06T06:00:00.000Z')
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('weekly-a', 'rest', Date.parse('2026-03-03T06:00:00.000Z'), firstEnd),
+      activity('drive-1', 'driving', firstEnd, reducedStart),
+      activity('reduced', 'rest', reducedStart, reducedEnd),
+      activity('overlap', 'driving', reducedStart + HOUR, reducedStart + 2 * HOUR, { slot: 2 }),
+      activity('drive-2', 'driving', reducedEnd, Date.parse('2026-03-05T06:00:00.000Z')),
+      activity('weekly-b', 'rest', Date.parse('2026-03-05T06:00:00.000Z'), secondEnd),
+      opened(secondEnd),
+    ]),
+  })
+  assert.equal(analysis.boundaryPairReducedCount.status, 'diagnostic')
+  if (analysis.boundaryPairReducedCount.status !== 'diagnostic') return
+  assert.equal(analysis.boundaryPairReducedCount.count.status, 'undecided')
+  if (analysis.boundaryPairReducedCount.count.status !== 'undecided') return
+  assert.equal(analysis.boundaryPairReducedCount.count.reason, 'unproven_rest')
+})
+
+test('nesplněné okno mezi předěly diagnostický počet neuzavře', () => {
+  const firstEnd = Date.parse('2026-03-04T06:00:00.000Z')
+  const secondEnd = Date.parse('2026-03-06T18:00:00.000Z')
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('weekly-a', 'rest', Date.parse('2026-03-03T06:00:00.000Z'), firstEnd),
+      activity('drive-1', 'driving', firstEnd, firstEnd + 14 * HOUR),
+      activity('short', 'rest', firstEnd + 14 * HOUR, firstEnd + 22 * HOUR),
+      activity('work', 'work', firstEnd + 22 * HOUR, Date.parse('2026-03-05T18:00:00.000Z')),
+      activity('weekly-b', 'rest', Date.parse('2026-03-05T18:00:00.000Z'), secondEnd),
+      opened(secondEnd),
+    ]),
+  })
+  assert.equal(analysis.boundaryPairReducedCount.status, 'diagnostic')
+  if (analysis.boundaryPairReducedCount.status !== 'diagnostic') return
+  assert.equal(analysis.boundaryPairReducedCount.count.status, 'undecided')
+  if (analysis.boundaryPairReducedCount.count.status !== 'undecided') return
+  assert.equal(analysis.boundaryPairReducedCount.count.reason, 'window_unsatisfied')
+})
+
+test('neúplná cesta a blokující stavy diagnostický počet neuzavřou', () => {
+  const fromUtc = Date.parse('2026-03-04T06:00:00.000Z')
+  const midUtc = Date.parse('2026-03-04T18:00:00.000Z')
+  const toUtc = Date.parse('2026-03-06T06:00:00.000Z')
+  const regular = {
+    id: 'regular',
+    kind: 'continuous_regular' as const,
+    qualifiesWindow: true,
+    established: true,
+    nextAnchorUtc: toUtc,
+    reducedDelta: 0,
+    weeklyRolePossible: false,
+    parts: [],
+  }
+  const reduced = { ...regular, id: 'reduced', kind: 'continuous_reduced' as const, nextAnchorUtc: midUtc, reducedDelta: 1 }
+  const open: DailyRestChain = {
+    startAnchorUtc: fromUtc,
+    nodes: [
+      {
+        anchorUtc: fromUtc,
+        windowStartUtc: fromUtc,
+        windowEndUtc: fromUtc + 24 * HOUR,
+        status: 'evaluated',
+        interpretations: [reduced, regular],
+      },
+      {
+        anchorUtc: midUtc,
+        windowStartUtc: midUtc,
+        windowEndUtc: midUtc + 24 * HOUR,
+        status: 'evaluated',
+        interpretations: [],
+      },
+      {
+        anchorUtc: toUtc,
+        windowStartUtc: toUtc,
+        windowEndUtc: toUtc + 24 * HOUR,
+        status: 'evaluated',
+        interpretations: [],
+      },
+    ],
+    paths: [
+      { steps: [{ anchorUtc: fromUtc, interpretationId: 'reduced' }, { anchorUtc: midUtc, interpretationId: null }], reducedCount: 1, weeklyBoundariesDetermined: false },
+      { steps: [{ anchorUtc: fromUtc, interpretationId: 'regular' }, { anchorUtc: toUtc, interpretationId: null }], reducedCount: 0, weeklyBoundariesDetermined: false },
+    ],
+  }
+  const partial = diagnoseProposedReducedCount(fromUtc, toUtc, open, [], ['weekly-b'])
+  assert.equal(partial.status, 'undecided')
+  if (partial.status !== 'undecided') return
+  assert.equal(partial.reason, 'uncovered')
+
+  for (const status of ['history_incomplete', 'insufficient_data'] as const) {
+    const blocked: DailyRestChain = {
+      startAnchorUtc: fromUtc,
+      nodes: [
+        {
+          anchorUtc: fromUtc,
+          windowStartUtc: fromUtc,
+          windowEndUtc: fromUtc + 24 * HOUR,
+          status,
+          interpretations: [],
+        },
+      ],
+      paths: [
+        { steps: [{ anchorUtc: fromUtc, interpretationId: null }], reducedCount: 0, weeklyBoundariesDetermined: false },
+      ],
+    }
+    const result = diagnoseProposedReducedCount(fromUtc, toUtc, blocked, [], [])
+    assert.equal(result.status, 'undecided')
+    if (result.status !== 'undecided') return
+    assert.equal(result.reason, status)
+  }
+})
+
+test('nerozhodnutý návrh dvojice diagnostický počet nespustí', () => {
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('only', 'rest', Date.parse('2026-03-02T06:00:00.000Z'), Date.parse('2026-03-03T06:00:00.000Z')),
+      opened(Date.parse('2026-03-03T06:00:00.000Z')),
+    ]),
+  })
+  assert.equal(analysis.weeklyAssignment.boundaryPair.status, 'undecided')
+  assert.deepEqual(analysis.boundaryPairReducedCount, { status: 'not_run', reason: 'boundary_pair_undecided' })
 })
