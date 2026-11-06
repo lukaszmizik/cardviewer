@@ -169,7 +169,7 @@ function graphActivityKind(type: ActivityType): DayDrivingActivity['kind'] {
   return 'rest'
 }
 
-function DayDrivingTable({ days, dayStartUtc, dayEndUtc }: { days: DayData[]; dayStartUtc: number; dayEndUtc: number }) {
+function DayDrivingTable({ days, dayStartUtc, dayEndUtc, clockMode }: { days: DayData[]; dayStartUtc: number; dayEndUtc: number; clockMode: ClockMode }) {
   const activities: DayDrivingActivity[] = days.flatMap((day) => day.activities.map((activity, index) => ({
     id: `${day.dateUtc}:${activity.startMs}:${activity.endMs}:${index}`,
     kind: graphActivityKind(activity.type),
@@ -177,7 +177,7 @@ function DayDrivingTable({ days, dayStartUtc, dayEndUtc }: { days: DayData[]; da
     endUtc: activity.endMs,
     isCrew: activity.isCrew === true,
   })))
-  const rows = buildDayDrivingRows({ activities, dayStartUtc, dayEndUtc })
+  const rows = buildDayDrivingRows({ activities, dayStartUtc, dayEndUtc, clockMode })
   return (
     <div className="work-week-graph-table-wrapper">
       <table className="work-week-graph-table">
@@ -855,7 +855,7 @@ function GraphBlock({
         </g>
       </svg>
       </GraphStage>
-      {isDayDetail && <DayDrivingTable days={days} dayStartUtc={visibleFirstDate} dayEndUtc={visibleLastEnd} />}
+      {isDayDetail && <DayDrivingTable days={days} dayStartUtc={visibleFirstDate} dayEndUtc={visibleLastEnd} clockMode={clockMode} />}
       {showFooter && card && <CardInfoTable card={card} clockMode={clockMode} />}
       {showFooter &&
       (visibleDays.some((d) => d.activities.some((a) => !a.isManualEntry)) ||

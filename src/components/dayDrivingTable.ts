@@ -1,4 +1,5 @@
-import { assessDrivingBreaks, type BreakActivity, type DrivingBreakPeriod } from '../analysis/drivingBreaks.ts'
+import { assessDrivingBreaks, type BreakActivity, type DrivingBreakPeriod, type QualifyingDrivingBreak } from '../analysis/drivingBreaks.ts'
+import { clockParts, formatClockDateTime, formatClockTime, type ClockMode } from '../lib/clock.ts'
 
 export type DayDrivingActivity = BreakActivity & {
   isCrew?: boolean
@@ -10,6 +11,9 @@ export type DayDrivingRow = {
 }
 
 const UNRELIABLE = 'Nelze spolehlivě vyhodnotit.'
+/** Delší odpočinek se v tabulce nevypisuje jako přestávka. Není to denní ani týdenní kategorie. */
+const CYCLE_REST_MS = 24 * 60 * 60 * 1000
+const CYCLE_ENDED = 'Cyklus řízení ukončen odpočinkem.'
 
 /**
  * Řádky pod denní graf. Přestávky počítá z celé předané osy, ne jen z jednoho dne.
@@ -19,9 +23,12 @@ export function buildDayDrivingRows(input: {
   activities: readonly DayDrivingActivity[]
   dayStartUtc: number
   dayEndUtc: number
+  clockMode?: ClockMode
 }): DayDrivingRow[] {
+  const clockMode = input.clockMode ?? 'utc'
   const periods = assessDrivingBreaks(input.activities)
   const relevant = periods.filter((period) => overlaps(period.startUtc, period.endUtc, input.dayStartUtc, input.dayEndUtc))
+  const shownBreaks = breakLines(relevant, input.activities, clockMode)
   const rows: DayDrivingRow[] = [
     {
       label: 'Celková zaznamenaná doba řízení',
@@ -29,13 +36,16 @@ export function buildDayDrivingRows(input: {
     },
     {
       label: 'Bezpečnostní přestávky',
-      value: breakText(relevant),
-    },
-    {
-      label: 'Kontrola čl. 7',
-      value: resultText(relevant, input.activities),
+      value: shownBreaks.breaks.length > 0 ? shownBreaks.breaks.join(', ') : '—',
     },
   ]
+  if (shownBreaks.cycleEndedByRest) {
+    rows.push({ label: 'Ukončení cyklu řízení', value: CYCLE_ENDED })
+  }
+  rows.push({
+    label: 'Výsledek přestávek v řízení',
+    value: resultText(relevant, input.activities),
+  })
   const longest = evaluated(relevant).reduce((max, period) => Math.max(max, period.drivingMs), 0)
   if (evaluated(relevant).length > 0) {
     rows.push({ label: 'Nejdelší úsek řízení mezi přestávkami', value: lengthText(longest) })
@@ -50,12 +60,47 @@ function resultText(periods: readonly DrivingBreakPeriod[], activities: readonly
   return 'V limitu 4 h 30 min.'
 }
 
-function breakText(periods: readonly DrivingBreakPeriod[]): string {
-  const labels = periods.flatMap((period) => {
-    if (period.qualifyingBreak == null) return []
-    return [period.qualifyingBreak.kind === 'split_15_30' ? '15 + 30 min' : '45 min']
-  })
-  return labels.length > 0 ? labels.join(', ') : '—'
+function breakLines(
+  periods: readonly DrivingBreakPeriod[],
+  activities: readonly DayDrivingActivity[],
+  clockMode: ClockMode,
+): { breaks: string[]; cycleEndedByRest: boolean } {
+  const breaks: string[] = []
+  let cycleEndedByRest = false
+  for (const period of periods) {
+    if (period.qualifyingBreak == null) continue
+    for (const [startUtc, endUtc] of breakSpans(period.qualifyingBreak, activities)) {
+      if (endUtc - startUtc > CYCLE_REST_MS) {
+        cycleEndedByRest = true
+        continue
+      }
+      breaks.push(`${lengthText(endUtc - startUtc)} (${rangeText(startUtc, endUtc, clockMode)})`)
+    }
+  }
+  return { breaks, cycleEndedByRest }
+}
+
+function breakSpans(item: QualifyingDrivingBreak, activities: readonly DayDrivingActivity[]): Array<[number, number]> {
+  const ids = new Set(item.sourceActivityIds)
+  const rests = activities
+    .filter((activity) => ids.has(activity.id) && activity.kind === 'rest' && activity.endUtc > activity.startUtc)
+    .map((activity) => [activity.startUtc, activity.endUtc] as [number, number])
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1])
+  const merged: Array<[number, number]> = []
+  for (const [startUtc, endUtc] of rests) {
+    const last = merged[merged.length - 1]
+    if (last != null && startUtc <= last[1]) last[1] = Math.max(last[1], endUtc)
+    else merged.push([startUtc, endUtc])
+  }
+  return merged.length > 0 ? merged : [[item.startUtc, item.completedAtUtc]]
+}
+
+function rangeText(startUtc: number, endUtc: number, clockMode: ClockMode): string {
+  const start = clockParts(startUtc, clockMode)
+  const end = clockParts(endUtc, clockMode)
+  const sameDay = start.day === end.day && start.month === end.month && start.year === end.year
+  if (sameDay) return `${formatClockTime(startUtc, clockMode)}–${formatClockTime(endUtc, clockMode)}`
+  return `${formatClockDateTime(startUtc, clockMode)}–${formatClockDateTime(endUtc, clockMode)}`
 }
 
 function evaluated(periods: readonly DrivingBreakPeriod[]): DrivingBreakPeriod[] {
