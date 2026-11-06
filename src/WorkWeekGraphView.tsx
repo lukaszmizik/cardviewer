@@ -58,6 +58,7 @@ import {
 } from './lib/graphGeometry'
 import { TimeScaleSelect } from './components/TimeScaleSelect'
 import { CardInfoTable } from './components/CardInfoTable'
+import { buildDayDrivingRows, type DayDrivingActivity } from './components/dayDrivingTable'
 import { CardHistoryTables } from './components/CardHistoryTables'
 import { bestDailyDistance, type DailyDistanceRecord } from './utils/weekDistance'
 import { GraphStage } from './components/GraphStage'
@@ -158,6 +159,39 @@ const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
   'odpočinek>24h': 'odpoč. 24h–45h',
   'odpočinek>45h': 'odpoč. ≥45h',
   neznámá: 'neznámá',
+}
+
+function graphActivityKind(type: ActivityType): DayDrivingActivity['kind'] {
+  if (type === 'řízení') return 'driving'
+  if (type === 'práce') return 'work'
+  if (type === 'pohotovost') return 'availability'
+  if (type === 'neznámá') return 'unknown'
+  return 'rest'
+}
+
+function DayDrivingTable({ days, dayStartUtc, dayEndUtc }: { days: DayData[]; dayStartUtc: number; dayEndUtc: number }) {
+  const activities: DayDrivingActivity[] = days.flatMap((day) => day.activities.map((activity, index) => ({
+    id: `${day.dateUtc}:${activity.startMs}:${activity.endMs}:${index}`,
+    kind: graphActivityKind(activity.type),
+    startUtc: activity.startMs,
+    endUtc: activity.endMs,
+    isCrew: activity.isCrew === true,
+  })))
+  const rows = buildDayDrivingRows({ activities, dayStartUtc, dayEndUtc })
+  return (
+    <div className="work-week-graph-table-wrapper">
+      <table className="work-week-graph-table">
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label}>
+              <th scope="row">{row.label}</th>
+              <td>{row.value}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 function formatDuration(minutes: number): string {
@@ -821,6 +855,7 @@ function GraphBlock({
         </g>
       </svg>
       </GraphStage>
+      {isDayDetail && <DayDrivingTable days={days} dayStartUtc={visibleFirstDate} dayEndUtc={visibleLastEnd} />}
       {showFooter && card && <CardInfoTable card={card} clockMode={clockMode} />}
       {showFooter &&
       (visibleDays.some((d) => d.activities.some((a) => !a.isManualEntry)) ||
