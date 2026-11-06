@@ -30,7 +30,12 @@ export type RecordedUnknownInterval = UnrecordedInterval & {
 export type AnalysisInputGap = 'daily_anchor' | 'weekly_selection' | 'week_clock' | 'weekly_selection_not_on_card'
 
 export type DailyAnalysis =
-  | { status: 'assessed'; anchorUtc: number; chain: DailyRestChain }
+  | {
+      status: 'assessed'
+      anchorUtc: number
+      anchorOrigin: 'explicit' | 'proven_rest_end'
+      chain: DailyRestChain
+    }
   | { status: 'requires_input'; missing: ['daily_anchor'] }
 
 export type WeeklyAnalysis =
@@ -50,7 +55,7 @@ export type ActivityAnalysis = {
     weeklyRestCandidates: WeeklyRestCandidate[]
   }
   assessed: {
-    /** Návaznost od explicitní kotvy. První uzel je vyhodnocení denních variant v jejím okně. */
+    /** Návaznost od ruční kotvy, nebo od konce prvního prokázaného odpočinku. Stav assessed nepokryje sám o sobě celou historii. */
     daily: DailyAnalysis
     weekly: WeeklyAnalysis
   }
@@ -63,7 +68,10 @@ export type ActivityAnalysis = {
 
 export type ActivityAnalysisRequest = {
   card: DriverCardData
-  /** Skutečný konec předchozího denního nebo týdenního odpočinku. Bez něj se denní návaznost nepočítá. */
+  /**
+   * Skutečný konec předchozího denního nebo týdenního odpočinku.
+   * Bez něj se použije konec prvního prokázaného odpočinku dlouhého alespoň 11 hodin.
+   */
   dailyAnchorUtc?: number | null
   weekly?: {
     previousWeeklyEndUtc: number | null
@@ -80,7 +88,7 @@ const NOT_EVALUATED: ActivityAnalysis['notEvaluated'] = [
 
 /**
  * Jednorázový průchod původních aktivit karty.
- * Kotvu ani týdenní výběr nedoplňuje. Přestupky nevytváří.
+ * Týdenní výběr nedoplňuje. Přestupky nevytváří.
  */
 export function analyzeDriverActivities(request: ActivityAnalysisRequest): ActivityAnalysis {
   const activities = request.card.activities
@@ -94,15 +102,17 @@ export function analyzeDriverActivities(request: ActivityAnalysisRequest): Activ
     unknownIntervals,
     recordSpan: recordSpan(activities),
   })
-  const anchorUtc = request.dailyAnchorUtc
+  const explicitAnchor = typeof request.dailyAnchorUtc === 'number' && Number.isFinite(request.dailyAnchorUtc)
+  const anchorUtc = explicitAnchor ? request.dailyAnchorUtc! : firstProvenRestEnd(restCandidates, unknownIntervals)
   const daily: DailyAnalysis =
-    typeof anchorUtc === 'number' && Number.isFinite(anchorUtc)
-      ? {
+    anchorUtc == null
+      ? { status: 'requires_input', missing: ['daily_anchor'] }
+      : {
           status: 'assessed',
           anchorUtc,
+          anchorOrigin: explicitAnchor ? 'explicit' : 'proven_rest_end',
           chain: buildDailyRestChain(anchorUtc, restCandidates, unknownIntervals),
         }
-      : { status: 'requires_input', missing: ['daily_anchor'] }
 
   return {
     recorded: {
@@ -154,6 +164,26 @@ function assessWeekly(
       unknownIntervals,
     }),
   }
+}
+
+const ELEVEN_HOURS_MS = 11 * 60 * 60 * 1000
+
+/** Konec prvního nejednoznačností nezatíženého odpočinku dlouhého alespoň 11 hodin. */
+function firstProvenRestEnd(
+  candidates: readonly RestCandidate[],
+  unknownIntervals: readonly UnrecordedInterval[],
+): number | null {
+  const proven = candidates
+    .filter((candidate) => candidate.established && candidate.durationMs >= ELEVEN_HOURS_MS)
+    .filter((candidate) => !intersectsUnknown(candidate, unknownIntervals))
+    .sort((left, right) => left.startUtc - right.startUtc || left.endUtc - right.endUtc)
+  return proven[0]?.endUtc ?? null
+}
+
+function intersectsUnknown(candidate: RestCandidate, unknownIntervals: readonly UnrecordedInterval[]): boolean {
+  return unknownIntervals.some((interval) =>
+    candidate.startUtc < interval.endUtc && interval.startUtc < candidate.endUtc,
+  )
 }
 
 function recordSpan(activities: readonly Activity[]): { startUtc: number; endUtc: number } | null {

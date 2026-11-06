@@ -87,6 +87,7 @@ test('průchod původních aktivit zachová zdroje a neznámý úsek nepovažuje
   assert.equal(analysis.assessed.daily.status, 'assessed')
   if (analysis.assessed.daily.status === 'assessed') {
     assert.equal(analysis.assessed.daily.anchorUtc, ANCHOR)
+    assert.equal(analysis.assessed.daily.anchorOrigin, 'explicit')
     assert.equal(analysis.assessed.daily.chain.nodes[0]?.interpretations[0]?.kind, 'continuous_regular')
     assert.deepEqual(analysis.assessed.daily.chain.nodes[0]?.interpretations[0]?.parts[0]?.sourceActivityIds, ['rest-11'])
   }
@@ -104,8 +105,19 @@ test('chybějící kotva není prázdné denní vyhodnocení', () => {
   const analysis = analyzeDriverActivities({ card: card(sampleActivities()) })
   assert.ok(analysis.candidates.restIntervals.length > 0)
   assert.ok(analysis.candidates.weeklyRestCandidates.length > 0)
-  assert.deepEqual(analysis.assessed.daily, { status: 'requires_input', missing: ['daily_anchor'] })
+  assert.equal(analysis.assessed.daily.status, 'assessed')
+  if (analysis.assessed.daily.status === 'assessed') {
+    assert.equal(analysis.assessed.daily.anchorOrigin, 'proven_rest_end')
+    assert.equal(analysis.assessed.daily.anchorUtc, Date.parse('2026-03-02T19:00:00.000Z'))
+  }
   assert.deepEqual(analysis.assessed.weekly, { status: 'requires_input', missing: ['weekly_selection'] })
+})
+
+test('bez odpočinku dlouhého 11 hodin zůstane denní řetězec bez kotvy', () => {
+  const analysis = analyzeDriverActivities({
+    card: card([activity('short', 'rest', ANCHOR, ANCHOR + 10 * HOUR)]),
+  })
+  assert.deepEqual(analysis.assessed.daily, { status: 'requires_input', missing: ['daily_anchor'] })
 })
 
 test('chybějící výběr týdenních odpočinků ponechá jen délkové kandidáty', () => {
@@ -157,4 +169,111 @@ test('stejná kotva propojí denní návaznost se součtem zkrácených odpočin
       reducedCount: 1,
     })
   }
+})
+
+test('automatická kotva je konec prvního odpočinku dlouhého 11 hodin', () => {
+  const firstEnd = Date.parse('2026-03-02T18:00:00.000Z')
+  const secondEnd = Date.parse('2026-03-03T08:00:00.000Z')
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('drive', 'driving', Date.parse('2026-03-02T05:00:00.000Z'), Date.parse('2026-03-02T07:00:00.000Z')),
+      activity('first', 'rest', Date.parse('2026-03-02T07:00:00.000Z'), firstEnd),
+      activity('second', 'rest', Date.parse('2026-03-02T20:00:00.000Z'), secondEnd),
+    ]),
+  })
+  assert.equal(analysis.assessed.daily.status, 'assessed')
+  if (analysis.assessed.daily.status !== 'assessed') return
+  assert.equal(analysis.assessed.daily.anchorOrigin, 'proven_rest_end')
+  assert.equal(analysis.assessed.daily.anchorUtc, firstEnd)
+  assert.notEqual(analysis.assessed.daily.anchorUtc, Date.parse('2026-03-02T05:00:00.000Z'))
+  assert.equal(analysis.assessed.daily.chain.startAnchorUtc, firstEnd)
+  assert.equal(analysis.assessed.daily.chain.nodes.some((node) => node.anchorUtc === secondEnd), true)
+  assert.equal(Object.hasOwn(analysis.assessed.daily, 'uncoveredTail'), false)
+})
+
+test('ruční kotva má přednost před automatickým koncem odpočinku', () => {
+  const restEnd = Date.parse('2026-03-02T19:00:00.000Z')
+  const activities = [activity('rest-11', 'rest', Date.parse('2026-03-02T08:00:00.000Z'), restEnd)]
+  const manual = analyzeDriverActivities({ card: card(activities), dailyAnchorUtc: ANCHOR })
+  const automatic = analyzeDriverActivities({ card: card(activities) })
+  assert.equal(manual.assessed.daily.status, 'assessed')
+  assert.equal(automatic.assessed.daily.status, 'assessed')
+  if (manual.assessed.daily.status !== 'assessed' || automatic.assessed.daily.status !== 'assessed') return
+  assert.equal(manual.assessed.daily.anchorOrigin, 'explicit')
+  assert.equal(manual.assessed.daily.anchorUtc, ANCHOR)
+  assert.equal(automatic.assessed.daily.anchorOrigin, 'proven_rest_end')
+  assert.equal(automatic.assessed.daily.anchorUtc, restEnd)
+})
+
+test('přesně 11 hodin je kotva a o minutu kratší odpočinek kotvu nedá', () => {
+  const exactEnd = ANCHOR + 11 * HOUR
+  const exact = analyzeDriverActivities({
+    card: card([activity('exact', 'rest', ANCHOR, exactEnd)]),
+  })
+  const short = analyzeDriverActivities({
+    card: card([activity('short', 'rest', ANCHOR, exactEnd - 60_000)]),
+  })
+  assert.equal(exact.assessed.daily.status, 'assessed')
+  if (exact.assessed.daily.status === 'assessed') {
+    assert.equal(exact.assessed.daily.anchorUtc, exactEnd)
+    assert.equal(exact.assessed.daily.anchorOrigin, 'proven_rest_end')
+  }
+  assert.deepEqual(short.assessed.daily, { status: 'requires_input', missing: ['daily_anchor'] })
+})
+
+test('konec neznámého úseku není kotva a odpočinek přes neznámý úsek se přeskočí', () => {
+  const unknownEnd = Date.parse('2026-03-02T10:00:00.000Z')
+  const cleanEnd = Date.parse('2026-03-03T09:00:00.000Z')
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('gap', 'unknown', Date.parse('2026-03-02T00:00:00.000Z'), unknownEnd),
+      activity('crossed', 'rest', Date.parse('2026-03-02T08:00:00.000Z'), Date.parse('2026-03-02T20:00:00.000Z')),
+      activity('clean', 'rest', Date.parse('2026-03-02T22:00:00.000Z'), cleanEnd),
+    ]),
+  })
+  assert.equal(analysis.assessed.daily.status, 'assessed')
+  if (analysis.assessed.daily.status !== 'assessed') return
+  assert.equal(analysis.assessed.daily.anchorUtc, cleanEnd)
+  assert.notEqual(analysis.assessed.daily.anchorUtc, unknownEnd)
+  assert.notEqual(analysis.assessed.daily.anchorUtc, Date.parse('2026-03-02T00:00:00.000Z'))
+})
+
+test('více denních variant zůstane v cestách jednoho řetězce', () => {
+  const anchorEnd = Date.parse('2026-03-02T18:00:00.000Z')
+  const secondEnd = Date.parse('2026-03-03T10:00:00.000Z')
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('lead', 'rest', Date.parse('2026-03-02T07:00:00.000Z'), anchorEnd),
+      activity('part-3', 'rest', Date.parse('2026-03-02T20:00:00.000Z'), Date.parse('2026-03-02T23:00:00.000Z')),
+      activity('work', 'work', Date.parse('2026-03-02T23:00:00.000Z'), Date.parse('2026-03-03T01:00:00.000Z')),
+      activity('part-9', 'rest', Date.parse('2026-03-03T01:00:00.000Z'), secondEnd),
+    ]),
+  })
+  assert.equal(analysis.assessed.daily.status, 'assessed')
+  if (analysis.assessed.daily.status !== 'assessed') return
+  const chain = analysis.assessed.daily.chain
+  assert.equal(chain.startAnchorUtc, anchorEnd)
+  assert.equal(chain.paths.length, 2)
+  assert.deepEqual(chain.paths.map((path) => path.reducedCount).sort(), [0, 1])
+  assert.deepEqual(
+    chain.nodes[0]?.interpretations.map((item) => item.kind).sort(),
+    ['continuous_reduced', 'split_regular'],
+  )
+  assert.ok(chain.paths.every((path) => path.steps.some((step) => step.anchorUtc === secondEnd)))
+})
+
+test('zastavený řetězec si ponechá důvod ukončení', () => {
+  const restEnd = Date.parse('2026-03-02T18:00:00.000Z')
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('lead', 'rest', Date.parse('2026-03-02T07:00:00.000Z'), restEnd),
+      activity('gap', 'unknown', Date.parse('2026-03-02T20:00:00.000Z'), Date.parse('2026-03-03T08:00:00.000Z')),
+    ]),
+  })
+  assert.equal(analysis.assessed.daily.status, 'assessed')
+  if (analysis.assessed.daily.status !== 'assessed') return
+  assert.equal(analysis.assessed.daily.anchorUtc, restEnd)
+  assert.equal(analysis.assessed.daily.chain.nodes[0]?.status, 'insufficient_data')
+  assert.deepEqual(analysis.assessed.daily.chain.nodes[0]?.interpretations, [])
+  assert.equal(analysis.assessed.daily.chain.paths[0]?.steps[0]?.interpretationId, null)
 })

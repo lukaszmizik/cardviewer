@@ -1,9 +1,14 @@
-import type { WeeklyAutomaticAssignment, WeeklyAssignmentNode } from './weeklyRestAssignment.ts'
+import type { WeeklyAutomaticAssignment, WeeklyAssignmentNode, WeeklyWeekOption } from './weeklyRestAssignment.ts'
 import type { WeeklyLengthClass } from './weeklyRest.ts'
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
 const INTERPRETATION_LIMIT = 64
 const INVOLVED_LIMIT = 8
+/**
+ * Konzervativní technická rezerva modelu `resting_throughout` vůči hranicím dvojice
+ * na hodinách pondělí 00:00 UTC. Není to zákonné pravidlo ani řešení časových pásem.
+ */
+const TECHNICAL_EDGE_MARGIN_MS = 3 * 60 * 60 * 1000
 
 export type ConsecutiveWeekStatus =
   | 'satisfied'
@@ -11,6 +16,7 @@ export type ConsecutiveWeekStatus =
   | 'ambiguous'
   | 'insufficient_data'
   | 'not_evaluated'
+  | 'resting_throughout'
 
 export type ConsecutiveWeekRestUse = {
   nodeId: string
@@ -27,13 +33,22 @@ export type ConsecutiveWeekAlternative = {
   reason: string
 }
 
-export type ConsecutiveWeekPeriod = {
+export type RestingThroughoutCover = {
+  nodeId: string
+  startUtc: number
+  endUtc: number
+  sourceActivityIds: string[]
+  /** Původní nesdílené průniky. Nejsou to další fyzické odpočinky. */
+  weekOverlaps: WeeklyWeekOption[]
+  marginBeforeMs: number
+  marginAfterMs: number
+  technicalMarginMs: number
+}
+
+type ConsecutiveWeekPeriodBase = {
   earlierWeek: { id: string; startUtc: number; endUtc: number }
   laterWeek: { id: string; startUtc: number; endUtc: number }
-  status: ConsecutiveWeekStatus
   clockBasis: 'monday_00_00_utc'
-  /** Základní pravidlo není přestupkový nález. */
-  isInfringement: false
   internationalRegime: 'not_evaluated'
   compensation: 'not_evaluated'
   /** Délková třída není právně potvrzené použití odpočinku. */
@@ -44,6 +59,21 @@ export type ConsecutiveWeekPeriod = {
   missing: string[]
   needsController: boolean
 }
+
+export type ConsecutiveWeekPeriod =
+  | (ConsecutiveWeekPeriodBase & {
+      status: Exclude<ConsecutiveWeekStatus, 'resting_throughout'>
+      /** Základní pravidlo není přestupkový nález. */
+      isInfringement: false
+      cover: null
+    })
+  | (ConsecutiveWeekPeriodBase & {
+      status: 'resting_throughout'
+      /** Skladba podle čl. 8 odst. 6 se u tohoto stavu neposuzuje. */
+      compositionEvaluated: false
+      infringementAssessment: 'not_evaluated'
+      cover: RestingThroughoutCover
+    })
 
 export type ConsecutiveWeeksResult = {
   clockBasis: 'monday_00_00_utc'
@@ -79,6 +109,7 @@ export function assessConsecutiveWeeks(input: {
     if (later.startUtc !== earlier.endUtc) continue
     periods.push(assessPair(earlier, later, nodes, roots, unknowns, input.assignment.excludedByUnknown))
   }
+  reconcileAdjacentAssignments(periods)
   return {
     clockBasis: 'monday_00_00_utc',
     lengthEligibilityIsLegalUse: false,
@@ -104,6 +135,7 @@ function assessPair(
     laterWeek: later,
     clockBasis: 'monday_00_00_utc' as const,
     isInfringement: false as const,
+    cover: null,
     internationalRegime: 'not_evaluated' as const,
     compensation: 'not_evaluated' as const,
     lengthEligibilityIsLegalUse: false as const,
@@ -120,18 +152,8 @@ function assessPair(
     }
   }
   const touching = nodes.filter((node) => node.possibleWeeks.some((week) => week.weekId === earlier.id || week.weekId === later.id))
-  if (touching.some((node) => node.weekChoice === 'continuous_cover')) {
-    return {
-      ...base,
-      status: 'not_evaluated',
-      usedRests: restsTouching(touching.filter((node) => node.weekChoice === 'continuous_cover'), earlier, later),
-      alternatives: [],
-      reason:
-        'Období protíná jeden nepřerušený odpočinek delší než dva kalendářní týdny. Z jednoho fyzického intervalu se nedělá několik týdenních odpočinků a průnik s týdnem není splnění pravidla. Právní započtení model zatím neurčuje.',
-      missing: ['jednoznačné právní započtení dlouhého nepřerušeného odpočinku'],
-      needsController: false,
-    }
-  }
+  const longRests = touching.filter((node) => node.weekChoice === 'continuous_cover')
+  if (longRests.length > 0) return assessLongRest(base, earlier, later, longRests, touching)
   if (touching.some((node) => node.ambiguous)) {
     return {
       ...base,
@@ -219,6 +241,112 @@ function assessPair(
   }
 }
 
+function assessLongRest(
+  base: Omit<ConsecutiveWeekPeriod, 'status' | 'usedRests' | 'alternatives' | 'reason' | 'missing' | 'needsController'>,
+  earlier: Week,
+  later: Week,
+  longRests: readonly WeeklyAssignmentNode[],
+  touching: readonly WeeklyAssignmentNode[],
+): ConsecutiveWeekPeriod {
+  const separate = touching.some((node) => node.weekChoice !== 'continuous_cover')
+  const covering = longRests.filter((node) => containsWeek(node, earlier) && containsWeek(node, later))
+  const qualified = covering.filter((node) => marginBefore(node, earlier) >= TECHNICAL_EDGE_MARGIN_MS && marginAfter(node, later) >= TECHNICAL_EDGE_MARGIN_MS)
+  if (qualified.length === 1) {
+    const cover = toCover(qualified[0]!, earlier, later)
+    return {
+      earlierWeek: base.earlierWeek,
+      laterWeek: base.laterWeek,
+      clockBasis: base.clockBasis,
+      internationalRegime: base.internationalRegime,
+      compensation: base.compensation,
+      lengthEligibilityIsLegalUse: base.lengthEligibilityIsLegalUse,
+      status: 'resting_throughout',
+      compositionEvaluated: false,
+      infringementAssessment: 'not_evaluated',
+      cover,
+      usedRests: [],
+      alternatives: [],
+      reason: restingReason(cover),
+      missing: [],
+      needsController: false,
+    }
+  }
+  const usedRests = restsTouching(longRests, earlier, later)
+  if (qualified.length > 1) {
+    return {
+      ...base,
+      status: 'not_evaluated',
+      usedRests,
+      alternatives: [],
+      reason: 'Oba týdny leží ve více nepřerušených odpočincích. Model mezi nimi nevolí a žádný nerozděluje.',
+      missing: ['jeden fyzický odpočinek pokrývající dvojici'],
+      needsController: false,
+    }
+  }
+  if (covering.length === 1) {
+    const node = covering[0]!
+    return {
+      ...base,
+      status: 'not_evaluated',
+      usedRests,
+      alternatives: [],
+      reason: `Oba týdny leží v jednom nepřerušeném odpočinku, ale rezerva je ${formatSpan(marginBefore(node, earlier))} před dvojicí a ${formatSpan(marginAfter(node, later))} po ní. Model vyžaduje alespoň 3 hodiny na obou stranách. Je to technická podmínka hodin pondělí 00:00 UTC, ne zákonné pravidlo ani řešení časových pásem. Skladba podle čl. 8 odst. 6 se neposuzuje.`,
+      missing: ['technická rezerva vůči hranici dvojice'],
+      needsController: false,
+    }
+  }
+  const oneWeek = longRests.some((node) => containsWeek(node, earlier) !== containsWeek(node, later))
+  const separateNote = separate ? ' Ve dvojici je také samostatný odpočinek.' : ''
+  return {
+    ...base,
+    status: 'not_evaluated',
+    usedRests,
+    alternatives: [],
+    reason: oneWeek
+      ? `Jen jeden týden dvojice leží celý v dlouhém nepřerušeném odpočinku. Druhý týden tento odpočinek pouze začíná nebo končí. Jeden fyzický interval se nerozděluje a týden zápočtu u odpočinku přes více než dva týdny nařízení neurčuje.${separateNote}`
+      : `Dlouhý nepřerušený odpočinek zasahuje do dvojice jen okrajem. Průnik s týdnem není samostatný odpočinek.${separateNote}`,
+    missing: ['jednoznačné právní započtení dlouhého nepřerušeného odpočinku'],
+    needsController: false,
+  }
+}
+
+function containsWeek(node: WeeklyAssignmentNode, week: Week): boolean {
+  return node.startUtc <= week.startUtc && node.endUtc >= week.endUtc
+}
+
+function marginBefore(node: WeeklyAssignmentNode, earlier: Week): number {
+  return earlier.startUtc - node.startUtc
+}
+
+function marginAfter(node: WeeklyAssignmentNode, later: Week): number {
+  return node.endUtc - later.endUtc
+}
+
+function toCover(node: WeeklyAssignmentNode, earlier: Week, later: Week): RestingThroughoutCover {
+  return {
+    nodeId: node.id,
+    startUtc: node.startUtc,
+    endUtc: node.endUtc,
+    sourceActivityIds: [...node.sourceActivityIds],
+    weekOverlaps: node.possibleWeeks.map((week) => ({ ...week })),
+    marginBeforeMs: marginBefore(node, earlier),
+    marginAfterMs: marginAfter(node, later),
+    technicalMarginMs: TECHNICAL_EDGE_MARGIN_MS,
+  }
+}
+
+function restingReason(cover: RestingThroughoutCover): string {
+  return `Oba týdny leží celé v jednom nepřerušeném odpočinku od ${new Date(cover.startUtc).toISOString()} do ${new Date(cover.endUtc).toISOString()}. Rezerva před dvojicí je ${formatSpan(cover.marginBeforeMs)} a po dvojici ${formatSpan(cover.marginAfterMs)}. Tříhodinová rezerva je technická podmínka tohoto modelu, ne zákonné pravidlo. Skladba podle čl. 8 odst. 6 se neposuzuje a z průniků se nedělají další odpočinky.`
+}
+
+function formatSpan(ms: number): string {
+  const sign = ms < 0 ? '−' : ''
+  const absolute = Math.abs(ms)
+  const hours = Math.floor(absolute / (60 * 60 * 1000))
+  const minutes = Math.floor((absolute % (60 * 60 * 1000)) / 60_000)
+  return minutes === 0 ? `${sign}${hours} h` : `${sign}${hours} h ${minutes} min`
+}
+
 function emptyReason(): string {
   return 'Žádné přípustné přiřazení nedává dva běžné odpočinky ani jeden běžný a jeden zkrácený. Zvláštní režim mezinárodní nákladní dopravy se neposuzuje. Výsledek není přestupek.'
 }
@@ -265,27 +393,73 @@ function placementIsLegal(involved: readonly WeeklyAssignmentNode[], chosen: Rea
   const placedIds = new Set([...chosen.values()].map((node) => node.id))
   for (const node of involved) {
     if (placedIds.has(node.id)) continue
-    const canPlace = node.possibleWeeks.some((week) => !chosen.has(week.weekId) && !overlapsChosen(node, chosen))
+    const canPlace = node.possibleWeeks.some((week) => !chosen.has(week.weekId) && !overlapsOther(node, chosen))
     if (canPlace) return false
   }
   return true
 }
 
+function reconcileAdjacentAssignments(periods: ConsecutiveWeekPeriod[]): void {
+  const fixed = new Map<string, { weekId: string; periods: ConsecutiveWeekPeriod[] }>()
+  for (const period of periods) {
+    if (period.status !== 'satisfied') continue
+    for (const [nodeId, weekId] of fixedWeeks(period)) {
+      const previous = fixed.get(nodeId)
+      if (previous == null) {
+        fixed.set(nodeId, { weekId, periods: [period] })
+        continue
+      }
+      if (previous.weekId === weekId) {
+        previous.periods.push(period)
+        continue
+      }
+      for (const item of [...previous.periods, period]) markContradictory(item)
+    }
+  }
+}
+
+function fixedWeeks(period: ConsecutiveWeekPeriod): Map<string, string> {
+  const weeks = new Map<string, Set<string>>()
+  for (const alternative of period.alternatives) {
+    for (const rest of alternative.rests) {
+      const set = weeks.get(rest.nodeId) ?? new Set<string>()
+      set.add(rest.weekId)
+      weeks.set(rest.nodeId, set)
+    }
+  }
+  const fixed = new Map<string, string>()
+  for (const [nodeId, set] of weeks) {
+    if (set.size === 1) fixed.set(nodeId, [...set][0]!)
+  }
+  return fixed
+}
+
+function markContradictory(period: ConsecutiveWeekPeriod): void {
+  if (period.status !== 'satisfied') return
+  period.status = 'ambiguous'
+  period.needsController = true
+  period.reason = 'Sousední dvojice by stejný odpočinek započetly k různým týdnům. Takové přiřazení není přípustné.'
+}
+
 function overlapsChosen(node: WeeklyAssignmentNode, chosen: ReadonlyMap<string, WeeklyAssignmentNode>): boolean {
-  return [...chosen.values()].some((holder) => rangesOverlap(holder.startUtc, holder.endUtc, node.startUtc, node.endUtc))
+  return overlapsOther(node, chosen)
+}
+
+function overlapsOther(node: WeeklyAssignmentNode, chosen: ReadonlyMap<string, WeeklyAssignmentNode>): boolean {
+  return [...chosen.values()].some(
+    (holder) => holder.id !== node.id && rangesOverlap(holder.startUtc, holder.endUtc, node.startUtc, node.endUtc),
+  )
 }
 
 function toAlternative(chosen: ReadonlyMap<string, WeeklyAssignmentNode>, weekA: string, weekB: string): ConsecutiveWeekAlternative {
-  const rests = [weekA, weekB]
-    .map((weekId) => {
-      const node = chosen.get(weekId)
-      return node == null ? null : toUse(node, weekId)
-    })
-    .filter((rest): rest is ConsecutiveWeekRestUse => rest != null)
-  const classes = rests.map((rest) => rest.lengthClass)
+  const rests = [...chosen.entries()]
+    .map(([weekId, node]) => toUse(node, weekId))
+    .sort((left, right) => left.startUtc - right.startUtc || left.weekId.localeCompare(right.weekId))
+  const counted = rests.filter((rest) => rest.weekId === weekA || rest.weekId === weekB)
+  const classes = counted.map((rest) => rest.lengthClass)
   const regular = classes.filter((item) => item === 'regular').length
   const reduced = classes.filter((item) => item === 'reduced').length
-  const meetsBasicRule = rests.length === 2 && (regular === 2 || (regular === 1 && reduced === 1))
+  const meetsBasicRule = counted.length === 2 && (regular === 2 || (regular === 1 && reduced === 1))
   return {
     meetsBasicRule,
     rests,
@@ -296,10 +470,12 @@ function toAlternative(chosen: ReadonlyMap<string, WeeklyAssignmentNode>, weekA:
 function describeAlternative(rests: readonly ConsecutiveWeekRestUse[], weekA: string, weekB: string, meets: boolean): string {
   const text = (weekId: string) => {
     const rest = rests.find((item) => item.weekId === weekId)
-    if (rest == null) return 'bez odpočinku'
+    if (rest == null) return 'bez započteného odpočinku'
     return rest.lengthClass === 'regular' ? 'běžný délkový kandidát' : 'zkrácený délkový kandidát'
   }
-  return `Dřívější týden: ${text(weekA)}. Pozdější týden: ${text(weekB)}. ${meets ? 'Základní pravidlo vychází.' : 'Základní pravidlo nevychází.'}`
+  const outside = rests.filter((rest) => rest.weekId !== weekA && rest.weekId !== weekB)
+  const moved = outside.length === 0 ? '' : ` Mimo dvojici je započten ${outside.length === 1 ? 'jeden odpočinek' : `${outside.length} odpočinků`}.`
+  return `Dřívější týden: ${text(weekA)}. Pozdější týden: ${text(weekB)}.${moved} ${meets ? 'Základní pravidlo vychází.' : 'Základní pravidlo nevychází.'}`
 }
 
 function toUse(node: WeeklyAssignmentNode, weekId: string): ConsecutiveWeekRestUse {
@@ -353,6 +529,7 @@ function countStatuses(periods: readonly ConsecutiveWeekPeriod[]): Record<Consec
     ambiguous: 0,
     insufficient_data: 0,
     not_evaluated: 0,
+    resting_throughout: 0,
   }
   for (const period of periods) counts[period.status] += 1
   return counts

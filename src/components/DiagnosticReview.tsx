@@ -69,6 +69,14 @@ export function DiagnosticReview({ card }: DiagnosticReviewProps) {
         </button>
       </div>
       {anchorInvalid ? <p className="diagnostic-hint">Kotva musí být čas v UTC, například 2026-03-02T06:00:00Z.</p> : null}
+      {analysis?.assessed.daily.status === 'assessed' ? (
+        <p className="diagnostic-hint">
+          {analysis.assessed.daily.anchorOrigin === 'explicit'
+            ? `Denní řetězec používá zadanou kotvu ${new Date(analysis.assessed.daily.anchorUtc).toISOString()}.`
+            : `Denní řetězec začíná v ${new Date(analysis.assessed.daily.anchorUtc).toISOString()}, na konci prvního odpočinku dlouhého alespoň 11 hodin.`}{' '}
+          Dosažený stav řetězce neznamená, že je vyhodnocená celá historie.
+        </p>
+      ) : null}
       <p className="diagnostic-hint">
         Délka odpočinku není právně potvrzený odpočinek. Přestupky se zde nevytvářejí.
       </p>
@@ -163,8 +171,18 @@ function WeeklyOverview({
       <p>
         Dva sousední týdny, pondělí 00:00 UTC: splněno {consecutive.counts.satisfied}, základní pravidlo nesplněno{' '}
         {consecutive.counts.not_satisfied_basic_rule}, závisí na výkladu {consecutive.counts.ambiguous}, chybí údaje{' '}
-        {consecutive.counts.insufficient_data}, nevyhodnoceno {consecutive.counts.not_evaluated}. Není to přestupek.
+        {consecutive.counts.insufficient_data}, nevyhodnoceno {consecutive.counts.not_evaluated}, nepřetržitě odpočívá{' '}
+        {consecutive.counts.resting_throughout}. Nepřetržitý odpočinek není splnění čl. 8 odst. 6. Přestupek se neposuzuje.
       </p>
+      {consecutive.periods
+        .filter((period) => period.status === 'resting_throughout')
+        .map((period) => (
+          <p key={`${period.earlierWeek.startUtc}-${period.laterWeek.startUtc}`}>
+            {new Date(period.earlierWeek.startUtc).toISOString()} – {new Date(period.laterWeek.endUtc).toISOString()}: pokrývá{' '}
+            {new Date(period.cover.startUtc).toISOString()} – {new Date(period.cover.endUtc).toISOString()}. Rezerva před{' '}
+            {formatMargin(period.cover.marginBeforeMs)}, po {formatMargin(period.cover.marginAfterMs)}. Skladba se neposuzuje.
+          </p>
+        ))}
       {consecutive.periods
         .filter((period) => period.needsController)
         .slice(0, 3)
@@ -183,6 +201,12 @@ function WeeklyOverview({
       ) : null}
     </section>
   )
+}
+
+function formatMargin(ms: number): string {
+  const hours = Math.floor(ms / 3_600_000)
+  const minutes = Math.floor((ms % 3_600_000) / 60_000)
+  return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`
 }
 
 function downloadCases(

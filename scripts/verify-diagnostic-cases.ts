@@ -33,7 +33,7 @@ function card(activities: Activity[]): DriverCardData {
 
 test('chybějící vstupy a délka nevytvářejí případ pro každý odpočinek', () => {
   const activities = Array.from({ length: 20 }, (_, index) =>
-    activity(`rest-${index}`, 'rest', ANCHOR + index * 12 * HOUR, ANCHOR + index * 12 * HOUR + 11 * HOUR),
+    activity(`rest-${index}`, 'rest', ANCHOR + index * 12 * HOUR, ANCHOR + index * 12 * HOUR + 10 * HOUR),
   )
   const cases = deriveDiagnosticCases(analyzeDriverActivities({ card: card(activities) }))
   assert.equal(cases.filter((item) => item.id === 'recorded:length-classes').length, 1)
@@ -109,7 +109,7 @@ test('export obsahuje poznámku, stav projektu a neobsahuje identitu řidiče', 
 
 test('bez kotvy se konkrétní denní okna nevymýšlejí', () => {
   const activities = Array.from({ length: 12 }, (_, index) =>
-    activity(`rest-${index}`, 'rest', ANCHOR + index * 30 * HOUR, ANCHOR + index * 30 * HOUR + 26 * HOUR),
+    activity(`rest-${index}`, 'rest', ANCHOR + index * 30 * HOUR, ANCHOR + index * 30 * HOUR + 10 * HOUR),
   )
   const periods = derivePeriodDiagnostics(analyzeDriverActivities({ card: card(activities) }))
   const missing = periods.find((item) => item.id === 'period:missing-daily-anchor')

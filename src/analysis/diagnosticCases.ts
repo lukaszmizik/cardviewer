@@ -69,11 +69,11 @@ const MODULES = [
 ]
 
 const LIMITATIONS = [
-  'Denní okna se počítají jen z explicitní kotvy.',
+  'Denní řetězec začíná v ruční kotvě, nebo v konci prvního odpočinku dlouhého alespoň 11 hodin. Stav assessed neznamená vyhodnocení celé historie.',
   'Automatický graf týdenních návazností není právní potvrzení. Ruční větev dál vyžaduje výběr a WeekClock.',
   'Více délkových hranic jednoho odpočinku není více právních interpretací.',
   'Neznámý úsek se nedoplňuje odpočinkem.',
-  'Dlouhý odpočinek přes více než dva týdny nechává dvoutýdenní kontrolu jako not_evaluated.',
+  'Dvojice celá uvnitř jednoho dlouhého odpočinku s tříhodinovou technickou rezervou je doložené volno, ne splnění čl. 8 odst. 6. Ostatní dlouhé odpočinky zůstávají not_evaluated.',
   'Nesplnění základního dvoutýdenního pravidla není přestupek. Mezinárodní režim a kompenzace se neposuzují.',
 ]
 

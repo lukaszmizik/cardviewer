@@ -8,10 +8,10 @@ Dokument popisuje, co umí výpočty v `src/analysis` k datu poslední úpravy d
 - `restCandidates.ts` dává každému souvislému odpočinku délkové role. Role není právní potvrzení.
 - `restWindowIntersection.ts` počítá průnik jednoho odpočinku se zadaným 24hodinovým oknem.
 - `dailyRestOptions.ts` vrací délkové varianty denního odpočinku v jednom okně a žádnou nevolí.
-- `dailyRestChain.ts` navazuje 24hodinová období od explicitní kotvy. Další kotva je skutečný konec odpočinku.
+- `dailyRestChain.ts` navazuje 24hodinová období od kotvy. Další kotva je skutečný konec odpočinku. Bez ruční kotvy je počátkem konec prvního odpočinku dlouhého alespoň 11 hodin.
 - `weeklyRest.ts` klasifikuje týdenní délku a posoudí jen explicitně vybrané odpočinky.
 - `weeklyRestAssignment.ts` z těchto kandidátů staví graf včasných návazností. Dlouhý odpočinek zůstává jeden interval a po lhůtě ukazuje jen nejbližší další záznam. Doporučená větev není právní potvrzení.
-- `consecutiveWeeks.ts` kontroluje každé dva sousední týdny v běžném režimu. Dlouhý odpočinek přes více než dva týdny nechává jako nevyhodnocený.
+- `consecutiveWeeks.ts` kontroluje každé dva sousední týdny v běžném režimu. Dvojice celá uvnitř jednoho dlouhého odpočinku s tříhodinovou technickou rezervou je `resting_throughout`: doložené volno, ne splnění čl. 8 odst. 6. Ostatní dlouhé odpočinky zůstávají nevyhodnocené.
 - `analyzeDriverActivities.ts` složí tyto kroky z původních `DriverCardData.activities`.
 - `diagnosticCases.ts` z výsledku vybere souhrnné případy a konkrétní odpočinky nebo období. Export má schéma verze 2.
 
@@ -28,7 +28,7 @@ Délková třída `regular` a `reduced` není stav `recorded_fact` ve smyslu pr�
 
 ## Známá omezení
 
-- Denní návaznost se spustí jen po zadání kotvy v UTC. První záznam karty kotvou není.
+- Denní návaznost začíná v ruční kotvě UTC, nebo v konci prvního odpočinku dlouhého alespoň 11 hodin. První záznam karty kotvou není a stav řetězce neznamená vyhodnocení celé historie.
 - Automatický graf týdenních návazností se počítá bez ruční kotvy. Týden je pondělí 00:00 UTC, protože místní čas tachografu karta neobsahuje. Ruční posouzení dál vyžaduje výběr a WeekClock.
 - Odpočinek přes dva týdny patří jen jednomu z nich. Výběr týdne dělá volající, ne automat.
 - Čítač zkrácených denních odpočinků se uzavře jen mezi dvěma použitelnými týdenními předěly a úplnou denní návazností.
