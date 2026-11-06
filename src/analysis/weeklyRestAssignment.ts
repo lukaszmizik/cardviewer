@@ -49,6 +49,26 @@ export type WeeklyAssignmentRecommendation =
   | { status: 'suggested'; nodeIds: string[]; reason: string }
   | { status: 'undecided'; reason: string }
 
+export type WeeklyBoundaryPairReason =
+  | 'not_exactly_two'
+  | 'unproven_rest'
+  | 'alternative_on_time'
+  | 'spans_two_weeks'
+  | 'spans_more_than_two_weeks'
+  | 'unknown_between'
+  | 'end_not_documented'
+  | 'not_on_time'
+
+/** Technický návrh právě jedné dvojice. Není to právní určení týdenního odpočinku. */
+export type WeeklyBoundaryPair =
+  | {
+      status: 'pair'
+      nodeIds: [string, string]
+      technicalProposal: true
+      legalDetermination: false
+    }
+  | { status: 'undecided'; reason: WeeklyBoundaryPairReason }
+
 export type WeeklyAutomaticAssignment = {
   clockBasis: WeeklyClockBasis
   consecutiveWeeks: 'not_evaluated'
@@ -62,6 +82,11 @@ export type WeeklyAutomaticAssignment = {
   nodes: WeeklyAssignmentNode[]
   rootIds: string[]
   recommendation: WeeklyAssignmentRecommendation
+  /**
+   * Přísný návrh právě dvou uzlů. Odkazuje na uzly grafu a jejich časy nekopíruje.
+   * Právní určení týdenního odpočinku to není a denní kontrolu limitu nespouští.
+   */
+  boundaryPair: WeeklyBoundaryPair
   /** Konce doporučené větve pro pozdější denní kotvy. Prázdné, když doporučení není. */
   suggestedBoundaryEndsUtc: number[]
   /** Právní závěr to není. */
@@ -78,6 +103,8 @@ type WeekSpan = { id: string; startUtc: number; endUtc: number }
 export function buildWeeklyRestAssignment(input: {
   candidates: readonly WeeklyRestCandidate[]
   unknownIntervals?: readonly { startUtc: number; endUtc: number }[]
+  /** Konec poslední zaznamenané aktivity. Bez něj nelze doložit konec odpočinku. */
+  recordEndUtc?: number | null
 }): WeeklyAutomaticAssignment {
   const unknowns = input.unknownIntervals ?? []
   const excludedByUnknown = input.candidates
@@ -129,6 +156,7 @@ export function buildWeeklyRestAssignment(input: {
     nodes,
     rootIds,
     recommendation,
+    boundaryPair: strictBoundaryPair(nodes, usable, unknowns, input.recordEndUtc ?? null),
     suggestedBoundaryEndsUtc:
       recommendation.status === 'suggested'
         ? recommendation.nodeIds.map((id) => byId.get(id)?.endUtc).filter((value): value is number => value != null)
@@ -213,6 +241,47 @@ function recommend(
     nodeIds: chosen,
     reason: `V každém úseku je jediná včasná návaznost. Úseky oddělené neznámým úsekem se nespojují. Před prvním záznamem historie chybí. Není to právní potvrzení.${deadlineNote}`,
   }
+}
+
+function strictBoundaryPair(
+  nodes: readonly WeeklyAssignmentNode[],
+  candidates: readonly WeeklyRestCandidate[],
+  unknowns: readonly { startUtc: number; endUtc: number }[],
+  recordEndUtc: number | null,
+): WeeklyBoundaryPair {
+  if (nodes.some((node) => node.nextOnTime.length > 1)) return { status: 'undecided', reason: 'alternative_on_time' }
+  if (nodes.length !== 2) return { status: 'undecided', reason: 'not_exactly_two' }
+  const [first, second] = [...nodes].sort((left, right) => left.startUtc - right.startUtc || left.endUtc - right.endUtc)
+  if (first!.weekChoice === 'continuous_cover' || second!.weekChoice === 'continuous_cover') {
+    return { status: 'undecided', reason: 'spans_more_than_two_weeks' }
+  }
+  if (first!.weekChoice === 'needs_controller' || second!.weekChoice === 'needs_controller') {
+    return { status: 'undecided', reason: 'spans_two_weeks' }
+  }
+  if (!liesInOneWeek(first!) || !liesInOneWeek(second!)) return { status: 'undecided', reason: 'not_exactly_two' }
+  const established = new Map(candidates.map((candidate) => [candidateId(candidate), candidate.established]))
+  if (established.get(first!.id) !== true || established.get(second!.id) !== true) {
+    return { status: 'undecided', reason: 'unproven_rest' }
+  }
+  if (first!.durationMs < DAY_MS || second!.durationMs < DAY_MS) return { status: 'undecided', reason: 'not_exactly_two' }
+  if (unknownBetween(first!.endUtc, second!.startUtc, unknowns)) return { status: 'undecided', reason: 'unknown_between' }
+  if (recordEndUtc == null || first!.endUtc >= recordEndUtc || second!.endUtc >= recordEndUtc) {
+    return { status: 'undecided', reason: 'end_not_documented' }
+  }
+  const link = first!.nextOnTime.length === 1 ? first!.nextOnTime[0] : null
+  if (link?.toId !== second!.id || link.timing !== 'on_time' || second!.nextOnTime.length !== 0) {
+    return { status: 'undecided', reason: 'not_on_time' }
+  }
+  return { status: 'pair', nodeIds: [first!.id, second!.id], technicalProposal: true, legalDetermination: false }
+}
+
+function liesInOneWeek(node: WeeklyAssignmentNode): boolean {
+  const week = node.possibleWeeks[0]
+  return node.weekChoice === 'single' && node.possibleWeeks.length === 1 && week != null && week.overlapMs === node.durationMs
+}
+
+function candidateId(candidate: WeeklyRestCandidate): string {
+  return `${candidate.startUtc}:${candidate.sourceActivityIds.join('+')}`
 }
 
 function walkUniqueOnTime(rootId: string, byId: ReadonlyMap<string, WeeklyAssignmentNode>): string[] | null {

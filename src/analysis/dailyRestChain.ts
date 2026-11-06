@@ -38,7 +38,7 @@ export type DailyChainInterpretation = {
   parts: DailyChainPart[]
 }
 
-export type DailyChainNodeStatus = 'evaluated' | 'window_unsatisfied' | 'insufficient_data'
+export type DailyChainNodeStatus = 'evaluated' | 'window_unsatisfied' | 'history_incomplete' | 'insufficient_data'
 
 export type DailyChainNode = {
   anchorUtc: number
@@ -75,6 +75,8 @@ export function buildDailyRestChain(
   anchorUtc: number,
   candidates: readonly RestCandidate[],
   unknownIntervals: readonly UnrecordedInterval[] = [],
+  /** Konec poslední zaznamenané aktivity. Bez něj se neúplné okno nerozliší. */
+  recordEndUtc: number | null = null,
 ): DailyRestChain {
   const nodes = new Map<number, DailyChainNode>()
   const order: number[] = []
@@ -82,7 +84,7 @@ export function buildDailyRestChain(
   const nodeAt = (utc: number): DailyChainNode => {
     const existing = nodes.get(utc)
     if (existing) return existing
-    const node = evaluateWindow(utc, candidates, unknownIntervals)
+    const node = evaluateWindow(utc, candidates, unknownIntervals, recordEndUtc)
     nodes.set(utc, node)
     order.push(utc)
     return node
@@ -135,6 +137,7 @@ function evaluateWindow(
   anchorUtc: number,
   candidates: readonly RestCandidate[],
   unknownIntervals: readonly UnrecordedInterval[],
+  recordEndUtc: number | null,
 ): DailyChainNode {
   const windowStartUtc = anchorUtc
   const windowEndUtc = anchorUtc + DAILY_WINDOW_MS
@@ -163,6 +166,10 @@ function evaluateWindow(
   const continuations = candidates
     .filter((candidate) => continuesPastWindow(candidate, windowEndUtc, unknownIntervals))
     .sort((a, b) => a.startUtc - b.startUtc || a.endUtc - b.endUtc)
+
+  if (continuations.length === 0 && recordEndUtc != null && recordEndUtc < windowEndUtc) {
+    return { ...base, status: 'history_incomplete', interpretations: [] }
+  }
 
   return {
     ...base,

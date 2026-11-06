@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { analyzeDriverActivities } from '../src/analysis/analyzeDriverActivities.ts'
+import { buildWeeklyRestAssignment } from '../src/analysis/weeklyRestAssignment.ts'
+import type { WeeklyRestCandidate } from '../src/analysis/weeklyRest.ts'
 import type { Activity, DriverCardData } from '../src/types/tacho.ts'
 
 const HOUR = 60 * 60 * 1000
@@ -98,6 +100,9 @@ test('více včasných pokračování se nevybírá a žádné se nezahodí', ()
   ])
   assert.equal(result.nodes[0]?.nextOnTime.length, 2)
   assert.equal(result.recommendation.status, 'undecided')
+  assert.deepEqual(result.suggestedBoundaryEndsUtc, [])
+  assert.equal(result.boundaryPair.status, 'undecided')
+  assert.equal(result.boundaryPair.status === 'undecided' ? result.boundaryPair.reason : '', 'alternative_on_time')
   assert.equal(result.searchLimited, false)
   assert.equal(result.nodes.length, 3)
 })
@@ -157,5 +162,189 @@ test('dlouhý odpočinek a odpočinek o několik týdnů později nejsou falešn
   assert.equal(result.nodes[1]?.nextAfterDeadline?.toId, result.nodes[2]?.id)
   assert.equal(result.recommendation.status, 'suggested')
   assert.equal(result.recommendation.status === 'suggested' ? result.recommendation.nodeIds.length : 0, 3)
+  assert.deepEqual(
+    result.suggestedBoundaryEndsUtc,
+    result.recommendation.status === 'suggested'
+      ? result.recommendation.nodeIds.map((id) => result.nodes.find((node) => node.id === id)?.endUtc)
+      : [],
+  )
+  assert.equal(result.boundaryPair.status, 'undecided')
   assert.match(result.recommendation.status === 'suggested' ? result.recommendation.reason : '', /nepřerušeného odpočinku/)
+})
+
+function weeklyCandidate(
+  id: string,
+  startUtc: number,
+  endUtc: number,
+  overrides: Partial<WeeklyRestCandidate> = {},
+): WeeklyRestCandidate {
+  return {
+    startUtc,
+    endUtc,
+    durationMs: endUtc - startUtc,
+    durationMinutes: Math.round((endUtc - startUtc) / 60_000),
+    sourceActivityIds: [id],
+    manualEntry: false,
+    ambiguous: false,
+    established: true,
+    uncertainties: [],
+    lengthClass: endUtc - startUtc >= 45 * HOUR ? 'regular' : 'reduced',
+    ...overrides,
+  }
+}
+
+test('dva prokázané odpočinky s jedinou včasnou návazností navrhnou dvojici uzlů', () => {
+  const first = Date.parse('2026-03-02T06:00:00.000Z')
+  const second = Date.parse('2026-03-05T06:00:00.000Z')
+  const result = buildWeeklyRestAssignment({
+    candidates: [
+      weeklyCandidate('first', first, first + 24 * HOUR),
+      weeklyCandidate('second', second, second + 24 * HOUR),
+    ],
+    recordEndUtc: second + 30 * HOUR,
+  })
+  assert.equal(result.boundaryPair.status, 'pair')
+  if (result.boundaryPair.status !== 'pair') return
+  assert.equal(result.boundaryPair.technicalProposal, true)
+  assert.equal(result.boundaryPair.legalDetermination, false)
+  assert.deepEqual(result.boundaryPair.nodeIds, [result.nodes[0]?.id, result.nodes[1]?.id])
+  assert.equal('endUtc' in result.boundaryPair, false)
+  assert.deepEqual(result.suggestedBoundaryEndsUtc, [first + 24 * HOUR, second + 24 * HOUR])
+  assert.equal(result.recommendation.status, 'suggested')
+})
+
+test('neprokázaný odpočinek dvojici nenavrhne', () => {
+  const first = Date.parse('2026-03-02T06:00:00.000Z')
+  const second = Date.parse('2026-03-05T06:00:00.000Z')
+  const result = buildWeeklyRestAssignment({
+    candidates: [
+      weeklyCandidate('first', first, first + 24 * HOUR, { established: false, ambiguous: true }),
+      weeklyCandidate('second', second, second + 24 * HOUR),
+    ],
+    recordEndUtc: second + 30 * HOUR,
+  })
+  assert.equal(result.boundaryPair.status, 'undecided')
+  assert.equal(result.boundaryPair.status === 'undecided' ? result.boundaryPair.reason : '', 'unproven_rest')
+  assert.deepEqual(result.suggestedBoundaryEndsUtc, [first + 24 * HOUR, second + 24 * HOUR])
+})
+
+test('dva kandidáti v jednom týdnu s alternativní návazností zůstanou nerozhodnutí', () => {
+  const end = Date.parse('2026-03-03T06:00:00.000Z')
+  const result = buildWeeklyRestAssignment({
+    candidates: [
+      weeklyCandidate('first', end - 24 * HOUR, end),
+      weeklyCandidate('early', end + DAY, end + 2 * DAY),
+      weeklyCandidate('also', end + 2 * DAY, end + 3 * DAY),
+    ],
+    recordEndUtc: end + 4 * DAY,
+  })
+  assert.equal(result.boundaryPair.status, 'undecided')
+  assert.equal(result.boundaryPair.status === 'undecided' ? result.boundaryPair.reason : '', 'alternative_on_time')
+  assert.deepEqual(result.suggestedBoundaryEndsUtc, [])
+})
+
+test('odpočinek přes hranici dvou týdnů dvojici nenavrhne', () => {
+  const spanning = Date.parse('2026-03-08T12:00:00.000Z')
+  const next = Date.parse('2026-03-11T06:00:00.000Z')
+  const result = buildWeeklyRestAssignment({
+    candidates: [
+      weeklyCandidate('span', spanning, Date.parse('2026-03-10T12:00:00.000Z')),
+      weeklyCandidate('next', next, next + 24 * HOUR),
+    ],
+    recordEndUtc: next + 30 * HOUR,
+  })
+  assert.equal(result.nodes[0]?.weekChoice, 'needs_controller')
+  assert.equal(result.boundaryPair.status, 'undecided')
+  assert.equal(result.boundaryPair.status === 'undecided' ? result.boundaryPair.reason : '', 'spans_two_weeks')
+})
+
+test('odpočinek přes tři týdny dvojici nenavrhne', () => {
+  const spanning = Date.parse('2026-03-02T12:00:00.000Z')
+  const next = Date.parse('2026-03-20T06:00:00.000Z')
+  const result = buildWeeklyRestAssignment({
+    candidates: [
+      weeklyCandidate('long', spanning, Date.parse('2026-03-18T12:00:00.000Z'), { lengthClass: 'regular' }),
+      weeklyCandidate('next', next, next + 24 * HOUR),
+    ],
+    recordEndUtc: next + 30 * HOUR,
+  })
+  assert.equal(result.nodes[0]?.weekChoice, 'continuous_cover')
+  assert.equal(result.boundaryPair.status, 'undecided')
+  assert.equal(result.boundaryPair.status === 'undecided' ? result.boundaryPair.reason : '', 'spans_more_than_two_weeks')
+})
+
+test('neznámý úsek mezi odpočinky dvojici nenavrhne', () => {
+  const first = Date.parse('2026-03-02T06:00:00.000Z')
+  const second = Date.parse('2026-03-05T06:00:00.000Z')
+  const result = buildWeeklyRestAssignment({
+    candidates: [
+      weeklyCandidate('before', first, first + 24 * HOUR),
+      weeklyCandidate('after', second, second + 24 * HOUR),
+    ],
+    unknownIntervals: [{ startUtc: first + 30 * HOUR, endUtc: first + 40 * HOUR }],
+    recordEndUtc: second + 30 * HOUR,
+  })
+  assert.equal(result.nodes.length, 2)
+  assert.equal(result.boundaryPair.status, 'undecided')
+  assert.equal(result.boundaryPair.status === 'undecided' ? result.boundaryPair.reason : '', 'unknown_between')
+})
+
+test('odpočinek s nedoloženým koncem dvojici nenavrhne', () => {
+  const first = Date.parse('2026-03-02T06:00:00.000Z')
+  const second = Date.parse('2026-03-05T06:00:00.000Z')
+  const secondEnd = second + 24 * HOUR
+  const result = buildWeeklyRestAssignment({
+    candidates: [
+      weeklyCandidate('first', first, first + 24 * HOUR),
+      weeklyCandidate('second', second, secondEnd),
+    ],
+    recordEndUtc: secondEnd,
+  })
+  assert.equal(result.boundaryPair.status, 'undecided')
+  assert.equal(result.boundaryPair.status === 'undecided' ? result.boundaryPair.reason : '', 'end_not_documented')
+  assert.deepEqual(result.suggestedBoundaryEndsUtc, [first + 24 * HOUR, secondEnd])
+})
+
+test('pouze jeden kandidát dvojici nenavrhne', () => {
+  const start = Date.parse('2026-03-02T06:00:00.000Z')
+  const result = buildWeeklyRestAssignment({
+    candidates: [weeklyCandidate('only', start, start + 45 * HOUR, { lengthClass: 'regular' })],
+    recordEndUtc: start + 50 * HOUR,
+  })
+  assert.equal(result.boundaryPair.status, 'undecided')
+  assert.equal(result.boundaryPair.status === 'undecided' ? result.boundaryPair.reason : '', 'not_exactly_two')
+  assert.deepEqual(result.suggestedBoundaryEndsUtc, [start + 45 * HOUR])
+})
+
+test('tři kandidáti v jedné větvi dvojici nenavrhnou a seznam konců zůstane', () => {
+  const first = Date.parse('2026-03-02T06:00:00.000Z')
+  const second = Date.parse('2026-03-07T06:00:00.000Z')
+  const third = Date.parse('2026-03-09T12:00:00.000Z')
+  const result = buildWeeklyRestAssignment({
+    candidates: [
+      weeklyCandidate('first', first, first + 24 * HOUR),
+      weeklyCandidate('second', second, second + 24 * HOUR),
+      weeklyCandidate('third', third, third + 24 * HOUR),
+    ],
+    recordEndUtc: third + 30 * HOUR,
+  })
+  assert.equal(result.boundaryPair.status, 'undecided')
+  assert.equal(result.boundaryPair.status === 'undecided' ? result.boundaryPair.reason : '', 'not_exactly_two')
+  assert.equal(result.recommendation.status, 'suggested')
+  assert.deepEqual(result.suggestedBoundaryEndsUtc, [first + 24 * HOUR, second + 24 * HOUR, third + 24 * HOUR])
+})
+
+test('návrh dvojice nepřejde do kontroly zkrácených denních odpočinků', () => {
+  const first = Date.parse('2026-03-02T06:00:00.000Z')
+  const second = Date.parse('2026-03-05T06:00:00.000Z')
+  const analyzed = analyzeDriverActivities({
+    card: card([
+      activity('first', 'rest', first, first + 24 * HOUR),
+      activity('gap', 'work', first + 24 * HOUR, second),
+      activity('second', 'rest', second, second + 24 * HOUR),
+      activity('after', 'driving', second + 24 * HOUR, second + 26 * HOUR),
+    ]),
+  })
+  assert.equal(analyzed.weeklyAssignment.boundaryPair.status, 'pair')
+  assert.equal(analyzed.assessed.weekly.status, 'requires_input')
 })

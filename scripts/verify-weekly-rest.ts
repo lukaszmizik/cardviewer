@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { DailyRestChain } from '../src/analysis/dailyRestChain.ts'
+import type { DailyChainNode, DailyRestChain } from '../src/analysis/dailyRestChain.ts'
 import type { RestCandidate } from '../src/analysis/restCandidates.ts'
+import { buildWeeklyRestAssignment } from '../src/analysis/weeklyRestAssignment.ts'
 import {
   assessWeeklyRests,
   classifyWeeklyRestCandidates,
@@ -302,4 +303,483 @@ test('dlouhý odpočinek zůstává použitelný a stejný čas se nezapočítá
   for (let index = 1; index < report.assignment.weeks.length; index += 1) {
     assert.ok(report.assignment.weeks[index - 1]!.overlapEndUtc <= report.assignment.weeks[index]!.overlapStartUtc)
   }
+})
+
+function reducedNode(anchorUtc: number, nextAnchorUtc: number, source: string, established = true): DailyChainNode {
+  return {
+    anchorUtc,
+    windowStartUtc: anchorUtc,
+    windowEndUtc: anchorUtc + 24 * HOUR,
+    status: 'evaluated',
+    interpretations: [
+      {
+        id: source,
+        kind: 'continuous_reduced',
+        qualifiesWindow: true,
+        established,
+        nextAnchorUtc,
+        reducedDelta: 1,
+        weeklyRolePossible: false,
+        parts: [
+          {
+            startUtc: nextAnchorUtc - 9 * HOUR,
+            endUtc: nextAnchorUtc,
+            candidateMinutes: 9 * 60,
+            restMinutesInsideWindow: 9 * 60,
+            intersectionEndUtc: nextAnchorUtc,
+            sourceActivityIds: [source],
+          },
+        ],
+      },
+    ],
+  }
+}
+
+function endNode(anchorUtc: number): DailyChainNode {
+  return {
+    anchorUtc,
+    windowStartUtc: anchorUtc,
+    windowEndUtc: anchorUtc + 24 * HOUR,
+    status: 'window_unsatisfied',
+    interpretations: [],
+  }
+}
+
+test('jedno období uzavře počet a týdenní předěl nezapočítá', () => {
+  const fromUtc = Date.parse('2026-03-02T06:00:00.000Z')
+  const reducedEnd = Date.parse('2026-03-02T16:00:00.000Z')
+  const toUtc = Date.parse('2026-03-04T21:00:00.000Z')
+  const weekly = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-03T00:00:00.000Z'), toUtc, { sourceActivityIds: ['weekly'] }),
+  ])[0]!
+  const chain: DailyRestChain = {
+    startAnchorUtc: fromUtc,
+    nodes: [
+      reducedNode(fromUtc, reducedEnd, 'daily-9'),
+      reducedNode(reducedEnd, toUtc, 'weekly'),
+      endNode(toUtc),
+    ],
+    paths: [
+      {
+        steps: [
+          { anchorUtc: fromUtc, interpretationId: 'daily-9' },
+          { anchorUtc: reducedEnd, interpretationId: 'weekly' },
+          { anchorUtc: toUtc, interpretationId: null },
+        ],
+        reducedCount: 2,
+        weeklyBoundariesDetermined: false,
+      },
+    ],
+  }
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: fromUtc,
+    selections: [select(weekly, 'w0')],
+    clock: clock(3),
+    dailyChain: chain,
+  })
+  assert.deepEqual(result.dailyReduced, { status: 'summed', fromUtc, toUtc, reducedCount: 1 })
+  const interval = result.reducedDailyIntervals[0]
+  assert.equal(interval?.status, 'summed')
+  if (interval?.status !== 'summed') return
+  assert.equal(interval.reducedCount, 1)
+  assert.equal(interval.limitEvaluated, false)
+  assert.deepEqual(interval.rests, [
+    { startUtc: reducedEnd - 9 * HOUR, endUtc: reducedEnd, sourceActivityIds: ['daily-9'] },
+  ])
+  assert.equal(Object.hasOwn(interval, 'infringement'), false)
+  assert.equal(Object.hasOwn(result, 'infringement'), false)
+})
+
+test('sousední období mají samostatné počty', () => {
+  const first = Date.parse('2026-03-02T06:00:00.000Z')
+  const middle = Date.parse('2026-03-08T18:00:00.000Z')
+  const last = Date.parse('2026-03-16T12:00:00.000Z')
+  const early = first + 10 * HOUR
+  const laterA = middle + 10 * HOUR
+  const laterB = middle + 20 * HOUR
+  const weekly = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-07T00:00:00.000Z'), middle, { sourceActivityIds: ['weekly-1'] }),
+    candidate(Date.parse('2026-03-14T12:00:00.000Z'), last, { sourceActivityIds: ['weekly-2'] }),
+  ])
+  const chain: DailyRestChain = {
+    startAnchorUtc: first,
+    nodes: [
+      reducedNode(first, early, 'reduced-1'),
+      { ...reducedNode(early, middle, 'bridge-1'), interpretations: [{ ...reducedNode(early, middle, 'bridge-1').interpretations[0]!, reducedDelta: 0, kind: 'continuous_regular' }] },
+      reducedNode(middle, laterA, 'reduced-2'),
+      reducedNode(laterA, laterB, 'reduced-3'),
+      { ...reducedNode(laterB, last, 'bridge-2'), interpretations: [{ ...reducedNode(laterB, last, 'bridge-2').interpretations[0]!, reducedDelta: 0, kind: 'continuous_regular' }] },
+      endNode(last),
+    ],
+    paths: [
+      {
+        steps: [first, early, middle, laterA, laterB, last].map((anchorUtc, index, all) => ({
+          anchorUtc,
+          interpretationId: index === all.length - 1 ? null : ['reduced-1', 'bridge-1', 'reduced-2', 'reduced-3', 'bridge-2'][index]!,
+        })),
+        reducedCount: 3,
+        weeklyBoundariesDetermined: false,
+      },
+    ],
+  }
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: first,
+    selections: [select(weekly[0]!, 'w0'), select(weekly[1]!, 'w1')],
+    clock: clock(4),
+    dailyChain: chain,
+  })
+  assert.equal(result.dailyReduced.status, 'undecided')
+  assert.deepEqual(
+    result.reducedDailyIntervals.map((interval) => interval.status === 'summed' ? interval.reducedCount : interval.reason),
+    [1, 2],
+  )
+  assert.equal(result.reducedDailyIntervals.every((interval) => interval.limitEvaluated === false), true)
+})
+
+test('neshoda alternativních cest počet neuzavře', () => {
+  const fromUtc = Date.parse('2026-03-02T06:00:00.000Z')
+  const toUtc = Date.parse('2026-03-08T18:00:00.000Z')
+  const weekly = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-07T00:00:00.000Z'), toUtc, { sourceActivityIds: ['weekly'] }),
+  ])[0]!
+  const reduced = reducedNode(fromUtc, fromUtc + 10 * HOUR, 'daily-9')
+  const regular = {
+    ...reduced,
+    interpretations: [{ ...reduced.interpretations[0]!, id: 'regular', reducedDelta: 0, kind: 'continuous_regular' as const }],
+  }
+  const chain: DailyRestChain = {
+    startAnchorUtc: fromUtc,
+    nodes: [{ ...reduced, interpretations: [...reduced.interpretations, ...regular.interpretations] }, endNode(toUtc)],
+    paths: [
+      { steps: [{ anchorUtc: fromUtc, interpretationId: 'daily-9' }, { anchorUtc: toUtc, interpretationId: null }], reducedCount: 1, weeklyBoundariesDetermined: false },
+      { steps: [{ anchorUtc: fromUtc, interpretationId: 'regular' }, { anchorUtc: toUtc, interpretationId: null }], reducedCount: 0, weeklyBoundariesDetermined: false },
+    ],
+  }
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: fromUtc,
+    selections: [select(weekly, 'w0')],
+    clock: clock(3),
+    dailyChain: chain,
+  })
+  assert.equal(result.dailyReduced.status, 'undecided')
+  assert.equal(result.reducedDailyIntervals[0]?.status, 'undecided')
+  if (result.reducedDailyIntervals[0]?.status !== 'undecided') return
+  assert.equal(result.reducedDailyIntervals[0].reason, 'paths_disagree')
+})
+
+test('neprokázaný odpočinek počet neuzavře', () => {
+  const fromUtc = Date.parse('2026-03-02T06:00:00.000Z')
+  const reducedEnd = Date.parse('2026-03-02T16:00:00.000Z')
+  const toUtc = Date.parse('2026-03-08T18:00:00.000Z')
+  const weekly = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-07T00:00:00.000Z'), toUtc, { sourceActivityIds: ['weekly'] }),
+  ])[0]!
+  const chain: DailyRestChain = {
+    startAnchorUtc: fromUtc,
+    nodes: [reducedNode(fromUtc, reducedEnd, 'daily-9', false), endNode(toUtc)],
+    paths: [
+      {
+        steps: [
+          { anchorUtc: fromUtc, interpretationId: 'daily-9' },
+          { anchorUtc: toUtc, interpretationId: null },
+        ],
+        reducedCount: 1,
+        weeklyBoundariesDetermined: false,
+      },
+    ],
+  }
+  chain.nodes[0]!.interpretations[0]!.nextAnchorUtc = toUtc
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: fromUtc,
+    selections: [select(weekly, 'w0')],
+    clock: clock(3),
+    dailyChain: chain,
+  })
+  assert.equal(result.reducedDailyIntervals[0]?.status, 'undecided')
+  if (result.reducedDailyIntervals[0]?.status !== 'undecided') return
+  assert.equal(result.reducedDailyIntervals[0].reason, 'unproven_rest')
+})
+
+test('neznámý úsek mezi předěly počet neuzavře', () => {
+  const fromUtc = Date.parse('2026-03-02T06:00:00.000Z')
+  const toUtc = Date.parse('2026-03-08T18:00:00.000Z')
+  const weekly = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-07T00:00:00.000Z'), toUtc, { sourceActivityIds: ['weekly'] }),
+  ])[0]!
+  const chain: DailyRestChain = {
+    startAnchorUtc: fromUtc,
+    nodes: [reducedNode(fromUtc, fromUtc + 10 * HOUR, 'daily-9'), endNode(toUtc)],
+    paths: [{ steps: [{ anchorUtc: fromUtc, interpretationId: 'daily-9' }, { anchorUtc: toUtc, interpretationId: null }], reducedCount: 1, weeklyBoundariesDetermined: false }],
+  }
+  chain.nodes[0]!.interpretations[0]!.nextAnchorUtc = toUtc
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: fromUtc,
+    selections: [select(weekly, 'w0')],
+    clock: clock(3),
+    dailyChain: chain,
+    unknownIntervals: [{ startUtc: fromUtc + HOUR, endUtc: fromUtc + 2 * HOUR }],
+  })
+  assert.equal(result.reducedDailyIntervals[0]?.status, 'undecided')
+  if (result.reducedDailyIntervals[0]?.status !== 'undecided') return
+  assert.equal(result.reducedDailyIntervals[0].reason, 'unknown_interval')
+})
+
+test('analysis_gap mezi předěly počet nesčítá', () => {
+  const fromUtc = Date.parse('2026-03-02T06:00:00.000Z')
+  const toUtc = Date.parse('2026-03-08T18:00:00.000Z')
+  const weekly = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-07T00:00:00.000Z'), toUtc, { sourceActivityIds: ['weekly'] }),
+  ])[0]!
+  const chain: DailyRestChain = {
+    startAnchorUtc: fromUtc,
+    nodes: [reducedNode(fromUtc, fromUtc + 10 * HOUR, 'daily-9'), endNode(toUtc)],
+    paths: [{ steps: [{ anchorUtc: fromUtc, interpretationId: 'daily-9' }, { anchorUtc: toUtc, interpretationId: null }], reducedCount: 1, weeklyBoundariesDetermined: false }],
+  }
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: fromUtc,
+    selections: [select(weekly, 'w0')],
+    clock: clock(3),
+    dailyChain: chain,
+    dailySegments: [
+      { kind: 'analysis_gap', startUtc: fromUtc + 24 * HOUR, endUtc: fromUtc + 36 * HOUR },
+      { kind: 'chain', anchorUtc: fromUtc + 36 * HOUR },
+    ],
+  })
+  assert.equal(result.dailyReduced.status, 'undecided')
+  assert.equal(result.reducedDailyIntervals[0]?.status, 'undecided')
+  if (result.reducedDailyIntervals[0]?.status !== 'undecided') return
+  assert.equal(result.reducedDailyIntervals[0].reason, 'analysis_gap')
+})
+
+test('denní kotva mimo týdenní předěl počet neuzavře', () => {
+  const fromUtc = Date.parse('2026-03-02T06:00:00.000Z')
+  const toUtc = Date.parse('2026-03-08T18:00:00.000Z')
+  const weekly = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-07T00:00:00.000Z'), toUtc, { sourceActivityIds: ['weekly'] }),
+  ])[0]!
+  const anchor = fromUtc + 5 * HOUR
+  const chain: DailyRestChain = {
+    startAnchorUtc: anchor,
+    nodes: [reducedNode(anchor, anchor + 10 * HOUR, 'daily-9'), endNode(toUtc)],
+    paths: [{ steps: [{ anchorUtc: anchor, interpretationId: 'daily-9' }, { anchorUtc: toUtc, interpretationId: null }], reducedCount: 1, weeklyBoundariesDetermined: false }],
+  }
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: fromUtc,
+    selections: [select(weekly, 'w0')],
+    clock: clock(3),
+    dailyChain: chain,
+  })
+  assert.equal(result.reducedDailyIntervals[0]?.status, 'undecided')
+  if (result.reducedDailyIntervals[0]?.status !== 'undecided') return
+  assert.equal(result.reducedDailyIntervals[0].reason, 'anchor_mismatch')
+})
+
+test('čtyři zkrácené odpočinky vrátí počet 4 bez závěru o porušení', () => {
+  const fromUtc = Date.parse('2026-03-02T06:00:00.000Z')
+  const ends = [1, 2, 3, 4].map((index) => fromUtc + index * 12 * HOUR)
+  const toUtc = Date.parse('2026-03-08T18:00:00.000Z')
+  const weekly = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-07T00:00:00.000Z'), toUtc, { sourceActivityIds: ['weekly'] }),
+  ])[0]!
+  const anchors = [fromUtc, ...ends]
+  const nodes = ends.map((end, index) => reducedNode(anchors[index]!, end, `reduced-${index + 1}`))
+  nodes.push(endNode(toUtc))
+  const chain: DailyRestChain = {
+    startAnchorUtc: fromUtc,
+    nodes,
+    paths: [
+      {
+        steps: [
+          ...ends.map((end, index) => ({ anchorUtc: anchors[index]!, interpretationId: `reduced-${index + 1}` })),
+          { anchorUtc: toUtc, interpretationId: null },
+        ],
+        reducedCount: 4,
+        weeklyBoundariesDetermined: false,
+      },
+    ],
+  }
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: fromUtc,
+    selections: [select(weekly, 'w0')],
+    clock: clock(3),
+    dailyChain: chain,
+  })
+  const interval = result.reducedDailyIntervals[0]
+  assert.equal(interval?.status, 'summed')
+  if (interval?.status !== 'summed') return
+  assert.equal(interval.reducedCount, 4)
+  assert.equal(interval.limitEvaluated, false)
+  assert.deepEqual(interval.rests.map((rest) => rest.sourceActivityIds), [['reduced-1'], ['reduced-2'], ['reduced-3'], ['reduced-4']])
+  assert.equal(Object.hasOwn(interval, 'infringement'), false)
+  assert.equal(Object.hasOwn(result, 'infringement'), false)
+})
+
+test('automaticky navržený týdenní konec není předěl', () => {
+  const firstEnd = Date.parse('2026-03-04T18:00:00.000Z')
+  const secondEnd = Date.parse('2026-03-12T18:00:00.000Z')
+  const classified = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-02T18:00:00.000Z'), firstEnd, { sourceActivityIds: ['first'] }),
+    candidate(Date.parse('2026-03-10T18:00:00.000Z'), secondEnd, { sourceActivityIds: ['second'] }),
+  ])
+  const assignment = buildWeeklyRestAssignment({ candidates: classified })
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: Date.parse('2026-03-01T06:00:00.000Z'),
+    selections: [select(classified[0]!, 'w0')],
+    clock: clock(3),
+  })
+  assert.equal(assignment.recommendationIsLegalFinding, false)
+  assert.deepEqual(result.boundaryEndsUtc, [firstEnd])
+  assert.equal(result.reducedDailyIntervals.some((interval) => interval.toUtc === secondEnd || interval.fromUtc === secondEnd), false)
+})
+
+function chainWithReducedCount(count: number): DailyRestChain {
+  const fromUtc = Date.parse('2026-03-02T06:00:00.000Z')
+  const toUtc = Date.parse('2026-03-08T18:00:00.000Z')
+  const ends = Array.from({ length: count }, (_, index) => fromUtc + (index + 1) * 12 * HOUR)
+  const anchors = [fromUtc, ...ends.slice(0, -1)]
+  const nodes = count === 0
+    ? [endNode(toUtc)]
+    : [...anchors.map((anchor, index) => reducedNode(anchor, ends[index]!, `reduced-${index + 1}`)), endNode(toUtc)]
+  if (count === 0) {
+    nodes.unshift({
+      ...reducedNode(fromUtc, toUtc, 'regular'),
+      interpretations: [{ ...reducedNode(fromUtc, toUtc, 'regular').interpretations[0]!, reducedDelta: 0, kind: 'continuous_regular' }],
+    })
+  }
+  return {
+    startAnchorUtc: fromUtc,
+    nodes,
+    paths: [
+      {
+        steps: count === 0
+          ? [{ anchorUtc: fromUtc, interpretationId: 'regular' }, { anchorUtc: toUtc, interpretationId: null }]
+          : [
+              ...anchors.map((anchorUtc, index) => ({ anchorUtc, interpretationId: `reduced-${index + 1}` })),
+              { anchorUtc: toUtc, interpretationId: null },
+            ],
+        reducedCount: count,
+        weeklyBoundariesDetermined: false,
+      },
+    ],
+  }
+}
+
+function assessCount(count: number) {
+  const fromUtc = Date.parse('2026-03-02T06:00:00.000Z')
+  const toUtc = Date.parse('2026-03-08T18:00:00.000Z')
+  const weekly = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-07T00:00:00.000Z'), toUtc, { sourceActivityIds: ['weekly'] }),
+  ])[0]!
+  return assessWeeklyRests({
+    previousWeeklyEndUtc: fromUtc,
+    selections: [select(weekly, 'w0')],
+    clock: clock(3),
+    dailyChain: chainWithReducedCount(count),
+  })
+}
+
+test('počty 0 až 3 limit tří nepřekročí', () => {
+  for (const count of [0, 1, 2, 3]) {
+    const result = assessCount(count)
+    const interval = result.reducedDailyIntervals[0]
+    const check = result.reducedDailyLimitChecks[0]
+    assert.equal(interval?.status, 'summed')
+    if (interval?.status !== 'summed' || check == null) return
+    assert.equal(interval.reducedCount, count)
+    assert.equal(check.status, 'within_limit')
+    assert.equal(check.exceeded, false)
+    assert.equal(check.limit, 3)
+    assert.equal(check.rule, 'ec_561_2006_article_8_4')
+    assert.equal(Object.hasOwn(check, 'infringement'), false)
+    if (count === 1) {
+      assert.deepEqual(result.dailyReduced, { status: 'summed', fromUtc: interval.fromUtc, toUtc: interval.toUtc, reducedCount: 1 })
+    }
+  }
+})
+
+test('počty 4 a 5 překročí jen limit tří zkrácených denních odpočinků', () => {
+  for (const count of [4, 5]) {
+    const result = assessCount(count)
+    const interval = result.reducedDailyIntervals[0]
+    const check = result.reducedDailyLimitChecks[0]
+    assert.equal(interval?.status, 'summed')
+    if (interval?.status !== 'summed' || check?.status !== 'exceeded') return
+    assert.equal(interval.reducedCount, count)
+    assert.deepEqual(interval.rests.map((rest) => rest.sourceActivityIds), Array.from({ length: count }, (_, index) => [`reduced-${index + 1}`]))
+    assert.equal(check.reducedCount, count)
+    assert.equal(check.exceeded, true)
+    assert.equal(check.limit, 3)
+    assert.equal(check.rule, 'ec_561_2006_article_8_4')
+    assert.equal(Object.hasOwn(check, 'severity'), false)
+    assert.equal(Object.hasOwn(result, 'infringement'), false)
+    assert.deepEqual(result.dailyReduced, { status: 'summed', fromUtc: interval.fromUtc, toUtc: interval.toUtc, reducedCount: count })
+  }
+})
+
+test('sousední období mají nezávislé kontroly limitu', () => {
+  const first = Date.parse('2026-03-02T06:00:00.000Z')
+  const middle = Date.parse('2026-03-08T18:00:00.000Z')
+  const last = Date.parse('2026-03-16T12:00:00.000Z')
+  const weekly = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-07T00:00:00.000Z'), middle, { sourceActivityIds: ['weekly-1'] }),
+    candidate(Date.parse('2026-03-14T12:00:00.000Z'), last, { sourceActivityIds: ['weekly-2'] }),
+  ])
+  const firstEnds = [1, 2, 3].map((index) => first + index * 10 * HOUR)
+  const secondEnds = [1, 2, 3, 4].map((index) => middle + index * 10 * HOUR)
+  const firstAnchors = [first, ...firstEnds.slice(0, -1)]
+  const secondAnchors = [middle, ...secondEnds.slice(0, -1)]
+  const chain: DailyRestChain = {
+    startAnchorUtc: first,
+    nodes: [
+      ...firstAnchors.map((anchor, index) => reducedNode(anchor, firstEnds[index]!, `a-${index + 1}`)),
+      ...secondAnchors.map((anchor, index) => reducedNode(anchor, secondEnds[index]!, `b-${index + 1}`)),
+      endNode(last),
+    ],
+    paths: [
+      {
+        steps: [
+          ...firstAnchors.map((anchorUtc, index) => ({ anchorUtc, interpretationId: `a-${index + 1}` })),
+          ...secondAnchors.map((anchorUtc, index) => ({ anchorUtc, interpretationId: `b-${index + 1}` })),
+          { anchorUtc: last, interpretationId: null },
+        ],
+        reducedCount: 7,
+        weeklyBoundariesDetermined: false,
+      },
+    ],
+  }
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: first,
+    selections: [select(weekly[0]!, 'w0'), select(weekly[1]!, 'w1')],
+    clock: clock(4),
+    dailyChain: chain,
+  })
+  assert.equal(result.dailyReduced.status, 'undecided')
+  assert.deepEqual(result.reducedDailyLimitChecks.map((check) => check.status), ['within_limit', 'exceeded'])
+  assert.deepEqual(
+    result.reducedDailyIntervals.map((interval) => interval.status === 'summed' ? interval.rests.map((rest) => rest.sourceActivityIds[0]) : []),
+    [['a-1', 'a-2', 'a-3'], ['b-1', 'b-2', 'b-3', 'b-4']],
+  )
+})
+
+test('nerozhodnutý počet nemá závěr o limitu', () => {
+  const fromUtc = Date.parse('2026-03-02T06:00:00.000Z')
+  const toUtc = Date.parse('2026-03-08T18:00:00.000Z')
+  const weekly = classifyWeeklyRestCandidates([
+    candidate(Date.parse('2026-03-07T00:00:00.000Z'), toUtc, { sourceActivityIds: ['weekly'] }),
+  ])[0]!
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: fromUtc,
+    selections: [select(weekly, 'w0')],
+    clock: clock(3),
+    dailyChain: chainWithReducedCount(2),
+    unknownIntervals: [{ startUtc: fromUtc + HOUR, endUtc: fromUtc + 2 * HOUR }],
+  })
+  assert.equal(result.dailyReduced.status, 'undecided')
+  assert.equal(result.reducedDailyIntervals[0]?.status, 'undecided')
+  const check = result.reducedDailyLimitChecks[0]
+  assert.equal(check?.status, 'not_concluded')
+  if (check?.status !== 'not_concluded' || result.reducedDailyIntervals[0]?.status !== 'undecided') return
+  assert.equal(check.reason, result.reducedDailyIntervals[0].reason)
+  assert.equal(check.reason, 'unknown_interval')
+  assert.equal(Object.hasOwn(check, 'exceeded'), false)
 })

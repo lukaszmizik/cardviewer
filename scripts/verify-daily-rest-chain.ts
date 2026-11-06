@@ -155,3 +155,88 @@ test('méně než 9 hodin v okně zůstává window_unsatisfied a kotva je skute
   assert.equal(Object.hasOwn(interpretation, 'noBreach'), false)
   assert.deepEqual(source, snapshot)
 })
+
+test('historie končící na začátku dalšího okna není nesplněný odpočinek', () => {
+  const chain = buildDailyRestChain(WINDOW, [], [], WINDOW)
+  assert.equal(chain.nodes[0]?.status, 'history_incomplete')
+  assert.deepEqual(chain.nodes[0]?.interpretations, [])
+  assert.equal(chain.paths.length, 1)
+  assert.equal(chain.paths[0]?.steps[0]?.interpretationId, null)
+})
+
+test('historie končící uprostřed okna není nesplněný odpočinek', () => {
+  const recordEnd = WINDOW + 6 * HOUR
+  const chain = buildDailyRestChain(
+    WINDOW,
+    [candidate(WINDOW + HOUR, WINDOW + 3 * HOUR, { sourceActivityIds: ['short'] })],
+    [],
+    recordEnd,
+  )
+  assert.equal(chain.nodes[0]?.status, 'history_incomplete')
+  assert.equal(chain.nodes[0]?.windowEndUtc, WINDOW + 24 * HOUR)
+  assert.deepEqual(chain.nodes[0]?.interpretations, [])
+  assert.equal(chain.paths.length, 1)
+})
+
+test('úplné okno bez kvalifikovaného odpočinku zůstává window_unsatisfied', () => {
+  const recordEnd = WINDOW + 24 * HOUR
+  const chain = buildDailyRestChain(
+    WINDOW,
+    [candidate(WINDOW + HOUR, WINDOW + 9 * HOUR, { sourceActivityIds: ['eight'] })],
+    [],
+    recordEnd,
+  )
+  assert.equal(chain.nodes[0]?.status, 'window_unsatisfied')
+  assert.deepEqual(chain.nodes[0]?.interpretations, [])
+  assert.notEqual(chain.nodes[0]?.status, 'history_incomplete')
+  assert.equal(chain.paths.length, 1)
+})
+
+test('neznámý úsek má přednost před neúplnou historií', () => {
+  const unknown = [{ startUtc: WINDOW + 2 * HOUR, endUtc: WINDOW + 4 * HOUR }]
+  const covered = buildDailyRestChain(WINDOW, [], unknown, WINDOW + 24 * HOUR)
+  const short = buildDailyRestChain(WINDOW, [], unknown, WINDOW + 6 * HOUR)
+  assert.equal(covered.nodes[0]?.status, 'insufficient_data')
+  assert.equal(short.nodes[0]?.status, 'insufficient_data')
+  assert.deepEqual(covered.nodes[0]?.interpretations, [])
+  assert.equal(covered.paths.length, 1)
+  assert.equal(short.paths.length, 1)
+})
+
+test('odpočinek dokončený před koncem okna zůstává vyhodnocený i při kratší historii', () => {
+  const restEnd = WINDOW + 12 * HOUR
+  const chain = buildDailyRestChain(
+    WINDOW,
+    [candidate(WINDOW + HOUR, restEnd, { sourceActivityIds: ['done'] })],
+    [],
+    restEnd,
+  )
+  const first = chain.nodes[0]!
+  assert.equal(first.status, 'evaluated')
+  assert.equal(first.interpretations.length, 1)
+  assert.equal(first.interpretations[0]?.kind, 'continuous_regular')
+  assert.equal(first.interpretations[0]?.nextAnchorUtc, restEnd)
+  assert.equal(chain.nodes[1]?.status, 'history_incomplete')
+  assert.equal(chain.paths.length, 1)
+  assert.equal(chain.paths[0]?.steps[0]?.interpretationId, first.interpretations[0]?.id)
+  assert.equal(chain.paths[0]?.steps[1]?.anchorUtc, restEnd)
+})
+
+test('odpočinek pokračující za konec okna zůstává window_unsatisfied s variantou', () => {
+  const restEnd = WINDOW + 30 * HOUR
+  const chain = buildDailyRestChain(
+    WINDOW,
+    [candidate(WINDOW + 18 * HOUR, restEnd, { sourceActivityIds: ['crosses'] })],
+    [],
+    restEnd,
+  )
+  const first = chain.nodes[0]!
+  assert.equal(first.status, 'window_unsatisfied')
+  assert.equal(first.interpretations.length, 1)
+  assert.equal(first.interpretations[0]?.kind, 'window_unsatisfied')
+  assert.equal(first.interpretations[0]?.qualifiesWindow, false)
+  assert.equal(first.interpretations[0]?.nextAnchorUtc, restEnd)
+  assert.equal(chain.nodes[1]?.status, 'history_incomplete')
+  assert.equal(chain.paths.length, 1)
+  assert.equal(chain.paths[0]?.steps.map((step) => step.anchorUtc).join(','), [WINDOW, restEnd].join(','))
+})

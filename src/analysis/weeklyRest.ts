@@ -87,6 +87,73 @@ export type DailyReducedBetweenWeeklyRests =
   | { status: 'summed'; fromUtc: number; toUtc: number; reducedCount: number }
   | { status: 'undecided' }
 
+export type ReducedDailyIntervalReason =
+  | 'anchor_mismatch'
+  | 'unknown_interval'
+  | 'insufficient_data'
+  | 'history_incomplete'
+  | 'window_unsatisfied'
+  | 'analysis_gap'
+  | 'paths_disagree'
+  | 'unproven_rest'
+  | 'uncovered'
+
+export type CountedReducedDailyRest = {
+  startUtc: number
+  endUtc: number
+  sourceActivityIds: string[]
+}
+
+/** Počet mezi dvěma sousedními předěly. Samotný počet není kontrola limitu. */
+export type ReducedDailyInterval =
+  | {
+      status: 'summed'
+      fromUtc: number
+      toUtc: number
+      reducedCount: number
+      rests: CountedReducedDailyRest[]
+      limitEvaluated: false
+    }
+  | {
+      status: 'undecided'
+      fromUtc: number
+      toUtc: number
+      reason: ReducedDailyIntervalReason
+      limitEvaluated: false
+    }
+
+/** Kontrola jen čl. 8 odst. 4. Není to celkové potvrzení zákonnosti odpočinků. */
+export type ReducedDailyLimitCheck =
+  | {
+      status: 'within_limit'
+      fromUtc: number
+      toUtc: number
+      reducedCount: number
+      limit: 3
+      exceeded: false
+      rule: 'ec_561_2006_article_8_4'
+    }
+  | {
+      status: 'exceeded'
+      fromUtc: number
+      toUtc: number
+      reducedCount: number
+      limit: 3
+      exceeded: true
+      rule: 'ec_561_2006_article_8_4'
+    }
+  | {
+      status: 'not_concluded'
+      fromUtc: number
+      toUtc: number
+      reason: ReducedDailyIntervalReason
+      rule: 'ec_561_2006_article_8_4'
+    }
+
+export type DailySegmentView =
+  | { kind: 'analysis_gap'; startUtc: number; endUtc: number }
+  | { kind: 'chain'; anchorUtc: number }
+
 export type WeeklyRestMvp = {
   selections: WeeklySelectionReport[]
   /** Skutečné konce přijatých týdenních odpočinků, vzestupně. */
@@ -94,7 +161,12 @@ export type WeeklyRestMvp = {
   consecutiveWeeks: 'not_evaluated'
   internationalRegime: 'not_evaluated'
   compensationTaken: 'not_evaluated'
+  /** Souhrn jen pro přesně jedno období. Více období zůstává undecided. */
   dailyReduced: DailyReducedBetweenWeeklyRests
+  /** Samostatný počet pro každou sousední dvojici použitelných předělů. */
+  reducedDailyIntervals: ReducedDailyInterval[]
+  /** Samostatná kontrola limitu tří pro stejná období. */
+  reducedDailyLimitChecks: ReducedDailyLimitCheck[]
 }
 
 /**
@@ -132,6 +204,8 @@ export function assessWeeklyRests(input: {
   clock: WeekClock
   dailyChain?: DailyRestChain | null
   unknownIntervals?: readonly TimeInterval[]
+  /** Mezery a obnovené řetězce. Automatické týdenní návrhy se sem nepředávají. */
+  dailySegments?: readonly DailySegmentView[]
 }): WeeklyRestMvp {
   const unknowns = input.unknownIntervals ?? []
   const weeks = [...input.clock.weeks].sort((a, b) => a.startUtc - b.startUtc)
@@ -149,7 +223,16 @@ export function assessWeeklyRests(input: {
   }
 
   const boundaryEndsUtc = reports.filter((report) => report.usableAsBoundary).map((report) => report.endUtc)
-  const boundaryInstants = input.previousWeeklyEndUtc == null ? boundaryEndsUtc : [input.previousWeeklyEndUtc, ...boundaryEndsUtc]
+  const boundaryInstants = (input.previousWeeklyEndUtc == null ? boundaryEndsUtc : [input.previousWeeklyEndUtc, ...boundaryEndsUtc])
+    .filter((value, index, all) => all.indexOf(value) === index)
+    .sort((left, right) => left - right)
+  const boundarySources = new Map<number, string[]>()
+  for (const report of reports) {
+    if (report.usableAsBoundary) boundarySources.set(report.endUtc, report.sourceActivityIds)
+  }
+  const reducedDailyIntervals = adjacentPairs(boundaryInstants).map(([fromUtc, toUtc]) =>
+    countReducedInterval(fromUtc, toUtc, input.dailyChain ?? null, unknowns, input.dailySegments ?? [], boundarySources.get(toUtc) ?? []),
+  )
 
   return {
     selections: reports,
@@ -157,8 +240,23 @@ export function assessWeeklyRests(input: {
     consecutiveWeeks: 'not_evaluated',
     internationalRegime: 'not_evaluated',
     compensationTaken: 'not_evaluated',
-    dailyReduced: sumDailyReduced(boundaryInstants, input.dailyChain ?? null, unknowns),
+    dailyReduced: legacyDailyReduced(boundaryInstants, reducedDailyIntervals),
+    reducedDailyIntervals,
+    reducedDailyLimitChecks: reducedDailyIntervals.map(checkReducedDailyLimit),
   }
+}
+
+const REDUCED_DAILY_LIMIT = 3 as const
+
+function checkReducedDailyLimit(interval: ReducedDailyInterval): ReducedDailyLimitCheck {
+  const rule = 'ec_561_2006_article_8_4' as const
+  if (interval.status === 'undecided') {
+    return { status: 'not_concluded', fromUtc: interval.fromUtc, toUtc: interval.toUtc, reason: interval.reason, rule }
+  }
+  const exceeded = interval.reducedCount > REDUCED_DAILY_LIMIT
+  return exceeded
+    ? { status: 'exceeded', fromUtc: interval.fromUtc, toUtc: interval.toUtc, reducedCount: interval.reducedCount, limit: REDUCED_DAILY_LIMIT, exceeded: true, rule }
+    : { status: 'within_limit', fromUtc: interval.fromUtc, toUtc: interval.toUtc, reducedCount: interval.reducedCount, limit: REDUCED_DAILY_LIMIT, exceeded: false, rule }
 }
 
 function reportSelection(
@@ -255,43 +353,92 @@ function compensationFor(
   }
 }
 
-function sumDailyReduced(
-  boundaries: readonly number[],
-  chain: DailyRestChain | null,
-  unknowns: readonly TimeInterval[],
-): DailyReducedBetweenWeeklyRests {
-  if (boundaries.length !== 2 || chain == null) return { status: 'undecided' }
-  const fromUtc = boundaries[0]!
-  const toUtc = boundaries[1]!
-  if (!(fromUtc < toUtc)) return { status: 'undecided' }
-  if (chain.startAnchorUtc !== fromUtc) return { status: 'undecided' }
-  if (intersectsAny(fromUtc, toUtc, unknowns)) return { status: 'undecided' }
-  if (chain.nodes.some((node) => node.anchorUtc >= fromUtc && node.anchorUtc < toUtc && node.status === 'insufficient_data')) {
-    return { status: 'undecided' }
+function adjacentPairs(values: readonly number[]): Array<[number, number]> {
+  const pairs: Array<[number, number]> = []
+  for (let index = 0; index < values.length - 1; index += 1) {
+    const fromUtc = values[index]!
+    const toUtc = values[index + 1]!
+    if (fromUtc < toUtc) pairs.push([fromUtc, toUtc])
   }
-
-  const counts: number[] = []
-  for (const path of chain.paths) {
-    const reached = path.steps.some((step) => step.anchorUtc === toUtc)
-    const starts = path.steps.some((step) => step.anchorUtc === fromUtc)
-    if (!starts || !reached) continue
-    let count = 0
-    for (const step of path.steps) {
-      if (step.anchorUtc < fromUtc || step.anchorUtc >= toUtc) continue
-      count += reducedDelta(chain, step.anchorUtc, step.interpretationId)
-    }
-    counts.push(count)
-  }
-  if (counts.length === 0) return { status: 'undecided' }
-  if (counts.some((count) => count !== counts[0])) return { status: 'undecided' }
-  return { status: 'summed', fromUtc, toUtc, reducedCount: counts[0]! }
+  return pairs
 }
 
-function reducedDelta(chain: DailyRestChain, anchorUtc: number, interpretationId: string | null): number {
-  if (interpretationId == null) return 0
-  const node = chain.nodes.find((item) => item.anchorUtc === anchorUtc)
-  const interpretation = node?.interpretations.find((item) => item.id === interpretationId)
-  return interpretation?.reducedDelta ?? 0
+function legacyDailyReduced(
+  boundaries: readonly number[],
+  intervals: readonly ReducedDailyInterval[],
+): DailyReducedBetweenWeeklyRests {
+  const interval = intervals[0]
+  if (boundaries.length !== 2 || interval == null || interval.status !== 'summed') return { status: 'undecided' }
+  return { status: 'summed', fromUtc: interval.fromUtc, toUtc: interval.toUtc, reducedCount: interval.reducedCount }
+}
+
+function countReducedInterval(
+  fromUtc: number,
+  toUtc: number,
+  chain: DailyRestChain | null,
+  unknowns: readonly TimeInterval[],
+  segments: readonly DailySegmentView[],
+  boundarySourceIds: readonly string[],
+): ReducedDailyInterval {
+  const open = { fromUtc, toUtc, limitEvaluated: false as const }
+  if (segments.some((segment) => segmentIntersects(segment, fromUtc, toUtc))) {
+    return { ...open, status: 'undecided', reason: 'analysis_gap' }
+  }
+  if (chain == null || chain.startAnchorUtc > fromUtc) return { ...open, status: 'undecided', reason: 'anchor_mismatch' }
+  if (!chain.paths.some((path) => path.steps.some((step) => step.anchorUtc === fromUtc))) {
+    return { ...open, status: 'undecided', reason: chain.startAnchorUtc === fromUtc ? 'uncovered' : 'anchor_mismatch' }
+  }
+  if (intersectsAny(fromUtc, toUtc, unknowns)) return { ...open, status: 'undecided', reason: 'unknown_interval' }
+  const inside = chain.nodes.filter((node) => node.anchorUtc >= fromUtc && node.anchorUtc < toUtc)
+  const blocked = inside.find((node) => node.status === 'insufficient_data' || node.status === 'history_incomplete' || node.status === 'window_unsatisfied')
+  if (blocked != null && blocked.status !== 'evaluated') return { ...open, status: 'undecided', reason: blocked.status }
+
+  const tallies = chain.paths
+    .filter((path) => path.steps.some((step) => step.anchorUtc === fromUtc) && path.steps.some((step) => step.anchorUtc === toUtc))
+    .map((path) => restsOnPath(chain, path.steps, fromUtc, toUtc, boundarySourceIds))
+  if (tallies.length === 0) return { ...open, status: 'undecided', reason: 'uncovered' }
+  if (tallies.some((tally) => tally.unproven)) return { ...open, status: 'undecided', reason: 'unproven_rest' }
+  const first = tallies[0]!
+  const same = tallies.every((tally) => tally.key === first.key)
+  if (!same) return { ...open, status: 'undecided', reason: 'paths_disagree' }
+  return { ...open, status: 'summed', reducedCount: first.rests.length, rests: first.rests }
+}
+
+function segmentIntersects(segment: DailySegmentView, fromUtc: number, toUtc: number): boolean {
+  if (segment.kind === 'analysis_gap') return segment.startUtc < toUtc && segment.endUtc > fromUtc
+  return segment.anchorUtc > fromUtc && segment.anchorUtc < toUtc
+}
+
+function restsOnPath(
+  chain: DailyRestChain,
+  steps: DailyRestChain['paths'][number]['steps'],
+  fromUtc: number,
+  toUtc: number,
+  boundarySourceIds: readonly string[],
+): { unproven: boolean; key: string; rests: CountedReducedDailyRest[] } {
+  const rests: CountedReducedDailyRest[] = []
+  for (const step of steps) {
+    if (step.anchorUtc < fromUtc || step.anchorUtc >= toUtc || step.interpretationId == null) continue
+    const node = chain.nodes.find((item) => item.anchorUtc === step.anchorUtc)
+    const interpretation = node?.interpretations.find((item) => item.id === step.interpretationId)
+    if (interpretation == null || interpretation.reducedDelta <= 0) continue
+    const boundaryRest = interpretation.parts.some((part) =>
+      part.endUtc === toUtc || part.sourceActivityIds.some((id) => boundarySourceIds.includes(id)),
+    )
+    if (boundaryRest) continue
+    if (!interpretation.established) return { unproven: true, key: '', rests: [] }
+    const part = interpretation.parts[0]
+    rests.push(
+      part == null
+        ? { startUtc: step.anchorUtc, endUtc: interpretation.nextAnchorUtc ?? step.anchorUtc, sourceActivityIds: [] }
+        : { startUtc: part.startUtc, endUtc: part.endUtc, sourceActivityIds: [...part.sourceActivityIds] },
+    )
+  }
+  return {
+    unproven: false,
+    key: rests.map((rest) => `${rest.startUtc}:${rest.endUtc}:${rest.sourceActivityIds.join(',')}`).join('|'),
+    rests,
+  }
 }
 
 function keysUsedMoreThanOnce(selections: readonly WeeklySelection[]): Set<string> {
