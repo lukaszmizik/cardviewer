@@ -40,7 +40,7 @@ test('chybějící vstupy a délka nevytvářejí případ pro každý odpočine
   assert.equal(cases.filter((item) => item.id.startsWith('recorded:rest-')).length, 0)
   assert.equal(cases.some((item) => item.id === 'insufficient:daily-anchor'), true)
   assert.equal(cases.some((item) => item.id === 'insufficient:weekly-selection'), true)
-  assert.equal(cases.filter((item) => item.status === 'not_implemented').length, 4)
+  assert.equal(cases.filter((item) => item.status === 'not_implemented').length, 3)
   assert.equal(cases.every((item) => item.status !== ('compliant' as typeof item.status)), true)
   const lengthCase = cases.find((item) => item.id === 'recorded:length-classes')
   assert.match(lengthCase?.summary ?? '', /20 souvislých odpočinků/)

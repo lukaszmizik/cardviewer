@@ -37,9 +37,17 @@ export type WeekClock = {
 
 export type WeeklyAttachment = 'single_week' | 'starting_week' | 'ending_week'
 
+export type WeeklyCoveredWeek = {
+  weekId: string
+  overlapStartUtc: number
+  overlapEndUtc: number
+  overlapMs: number
+}
+
 export type WeeklyAssignment =
   | { status: 'assigned'; weekId: string; attachment: WeeklyAttachment }
-  | { status: 'rejected'; reason: 'week_not_overlapped' | 'both_weeks' | 'more_than_two_weeks' }
+  | { status: 'continuous_cover'; weeks: WeeklyCoveredWeek[] }
+  | { status: 'rejected'; reason: 'week_not_overlapped' | 'both_weeks' }
 
 export type WeeklyTiming =
   | { status: 'on_time'; latestStartUtc: number }
@@ -162,12 +170,14 @@ function reportSelection(
 ): WeeklySelectionReport {
   const candidate = selection.candidate
   const overlapped = weeks.filter((week) => rangesOverlap(candidate.startUtc, candidate.endUtc, week.startUtc, week.endUtc))
-  const assignment = assignmentFor(selection.weekId, overlapped, usedForBothWeeks)
+  const assignment = assignmentFor(candidate, selection.weekId, overlapped, usedForBothWeeks)
   const crossesUnknown =
     intersectsAny(candidate.startUtc, candidate.endUtc, unknowns) ||
     (previousEnd != null && intersectsAny(previousEnd, candidate.startUtc, unknowns))
   const timing = timingFor(candidate.startUtc, previousEnd, crossesUnknown)
-  const usableAsBoundary = assignment.status === 'assigned' && !intersectsAny(candidate.startUtc, candidate.endUtc, unknowns)
+  const usableAsBoundary =
+    (assignment.status === 'assigned' || assignment.status === 'continuous_cover') &&
+    !intersectsAny(candidate.startUtc, candidate.endUtc, unknowns)
   const compensation = compensationFor(candidate, assignment, weeks)
 
   return {
@@ -192,14 +202,24 @@ function lengthClassOf(durationMs: number): WeeklyLengthClass | null {
 }
 
 function assignmentFor(
+  candidate: WeeklyRestCandidate,
   weekId: string,
   overlapped: readonly CalendarWeek[],
   usedForBothWeeks: boolean,
 ): WeeklyAssignment {
   if (usedForBothWeeks) return { status: 'rejected', reason: 'both_weeks' }
-  if (overlapped.length > 2) return { status: 'rejected', reason: 'more_than_two_weeks' }
   const chosen = overlapped.find((week) => week.id === weekId)
   if (chosen == null) return { status: 'rejected', reason: 'week_not_overlapped' }
+  if (overlapped.length > 2) {
+    return {
+      status: 'continuous_cover',
+      weeks: overlapped.map((week) => {
+        const overlapStartUtc = Math.max(candidate.startUtc, week.startUtc)
+        const overlapEndUtc = Math.min(candidate.endUtc, week.endUtc)
+        return { weekId: week.id, overlapStartUtc, overlapEndUtc, overlapMs: overlapEndUtc - overlapStartUtc }
+      }),
+    }
+  }
   if (overlapped.length === 1) return { status: 'assigned', weekId, attachment: 'single_week' }
   const earlier = overlapped[0]!
   return {
@@ -222,6 +242,8 @@ function compensationFor(
   assignment: WeeklyAssignment,
   weeks: readonly CalendarWeek[],
 ): WeeklyCompensation {
+  if (assignment.status === 'rejected') return { status: 'not_recorded', reason: 'not_accepted' }
+  if (assignment.status === 'continuous_cover') return { status: 'not_recorded', reason: 'regular_length' }
   if (assignment.status !== 'assigned') return { status: 'not_recorded', reason: 'not_accepted' }
   if (candidate.lengthClass !== 'reduced') return { status: 'not_recorded', reason: 'regular_length' }
   const index = weeks.findIndex((week) => week.id === assignment.weekId)

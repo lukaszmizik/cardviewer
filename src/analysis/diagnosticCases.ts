@@ -1,4 +1,5 @@
 import type { ActivityAnalysis, NotEvaluatedTopic } from './analyzeDriverActivities.ts'
+import type { ConsecutiveWeeksResult } from './consecutiveWeeks.ts'
 import type { DailyChainNode } from './dailyRestChain.ts'
 import type { WeeklyAutomaticAssignment } from './weeklyRestAssignment.ts'
 import type { WeeklySelectionReport } from './weeklyRest.ts'
@@ -52,6 +53,7 @@ export type DiagnosticExport = {
   cases: Array<DiagnosticCase & { note: string }>
   periods: Array<PeriodDiagnostic & { note: string }>
   weeklyAssignment: WeeklyAutomaticAssignment | null
+  consecutiveWeeks: ConsecutiveWeeksResult | null
 }
 
 const MODULES = [
@@ -62,6 +64,7 @@ const MODULES = [
   'dailyRestChain',
   'weeklyRest',
   'weeklyRestAssignment',
+  'consecutiveWeeks',
   'analyzeDriverActivities',
 ]
 
@@ -70,7 +73,8 @@ const LIMITATIONS = [
   'Automatický graf týdenních návazností není právní potvrzení. Ruční větev dál vyžaduje výběr a WeekClock.',
   'Více délkových hranic jednoho odpočinku není více právních interpretací.',
   'Neznámý úsek se nedoplňuje odpočinkem.',
-  'Přestupky, dvě po sobě jdoucí týdny, mezinárodní režim a čerpání kompenzace nejsou implementované.',
+  'Dlouhý odpočinek přes více než dva týdny nechává dvoutýdenní kontrolu jako not_evaluated.',
+  'Nesplnění základního dvoutýdenního pravidla není přestupek. Mezinárodní režim a kompenzace se neposuzují.',
 ]
 
 const LIST_LIMIT = 8
@@ -80,11 +84,6 @@ const NOT_IMPLEMENTED: Record<NotEvaluatedTopic, Pick<DiagnosticCase, 'summary' 
     summary: 'Přestupky se nevyhodnocují.',
     reason: 'Jádro eviduje údaje a varianty. Právní nález nevytváří.',
     needed: 'Samostatná vrstva nálezů, až budou pravidla dokončená.',
-  },
-  consecutive_weeks: {
-    summary: 'Pravidlo dvou po sobě jdoucích týdnů není implementováno.',
-    reason: 'Týdenní modul tuto kontrolu záměrně nechává jako not_evaluated.',
-    needed: 'Doplnit pravidlo dvou týdnů až po explicitním výběru odpočinků.',
   },
   international_regime: {
     summary: 'Zvláštní režim mezinárodní nákladní dopravy není implementován.',
@@ -131,6 +130,7 @@ export function buildDiagnosticExport(
   notes: Readonly<Record<string, string>>,
   exportedAtUtc: string,
   weeklyAssignment: WeeklyAutomaticAssignment | null = null,
+  consecutiveWeeks: ConsecutiveWeeksResult | null = null,
 ): DiagnosticExport {
   const withNotes = <T extends { id: string; sourceActivityIds: string[] }>(item: T) => ({
     ...item,
@@ -154,6 +154,7 @@ export function buildDiagnosticExport(
     cases: exportedCases,
     periods: exportedPeriods,
     weeklyAssignment,
+    consecutiveWeeks,
   }
 }
 
@@ -276,7 +277,10 @@ function describeInterpretation(item: DailyChainNode['interpretations'][number])
 function pushConcreteWeeklyPeriods(analysis: ActivityAnalysis, periods: PeriodDiagnostic[]): void {
   if (analysis.assessed.weekly.status !== 'assessed') return
   const result = analysis.assessed.weekly.result
-  const notable = result.selections.filter((item) => item.assignment.status !== 'assigned' || item.timing.status !== 'on_time')
+  const notable = result.selections.filter(
+    (item) =>
+      (item.assignment.status !== 'assigned' && item.assignment.status !== 'continuous_cover') || item.timing.status !== 'on_time',
+  )
   pushLimited(notable, LIST_LIMIT, periods, weeklySelectionPeriod, (omitted) => ({
     id: 'period:weekly-selections-summary',
     blocker: 'missing_input',
@@ -321,9 +325,11 @@ function weeklySelectionPeriod(item: WeeklySelectionReport): PeriodDiagnostic {
     blockedBy:
       item.assignment.status === 'rejected'
         ? `Výběr týdne odmítnut: ${item.assignment.reason}.`
-        : item.timing.status === 'late'
-          ? 'Začátek je později než konec předchozího týdenního odpočinku plus šestkrát 24 hodin. Přestupek se nevytváří.'
-          : 'Návaznost od předchozího týdenního konce nelze potvrdit.',
+        : item.assignment.status === 'continuous_cover'
+          ? 'Fyzický odpočinek pokračuje přes více týdnů. Průniky se nepřekrývají. Šestidobá lhůta běží až od skutečného konce. Právní přiřazení jednotlivých týdnů není potvrzené a přestupek se nevytváří.'
+          : item.timing.status === 'late'
+            ? 'Začátek je později než konec předchozího týdenního odpočinku plus šestkrát 24 hodin. Přestupek se nevytváří.'
+            : 'Návaznost od předchozího týdenního konce nelze potvrdit.',
     nextStep: 'Opravit výběr týdne nebo doplnit chybějící záznam a export opakovat.',
     module: 'weeklyRest',
   }
@@ -334,6 +340,7 @@ function pushAutomaticWeeklyPeriods(analysis: ActivityAnalysis, periods: PeriodD
   if (assignment.nodes.length === 0) return
   const branches = assignment.nodes.filter((node) => node.nextOnTime.length > 1)
   const twoWeeks = assignment.nodes.filter((node) => node.weekChoice === 'needs_controller')
+  const longRests = assignment.nodes.filter((node) => node.weekChoice === 'continuous_cover')
   const shownIds =
     assignment.recommendation.status === 'suggested' ? assignment.recommendation.nodeIds.slice(0, LIST_LIMIT) : []
   periods.push({
@@ -346,9 +353,10 @@ function pushAutomaticWeeklyPeriods(analysis: ActivityAnalysis, periods: PeriodD
       `Týdenních délkových kandidátů v grafu: ${assignment.nodes.length}.`,
       'Hranice týdne je pondělí 00:00 UTC. Místní čas tachografu z karty nelze zjistit.',
       assignment.recommendation.reason,
+      `Nepřerušených odpočinků přes více než dva týdny: ${longRests.length}. Původní interval zůstává jeden.`,
       shownIds.length > 0 && assignment.recommendation.status === 'suggested' && assignment.recommendation.nodeIds.length > shownIds.length
         ? `Výpis doporučené větve ukazuje ${shownIds.length} z ${assignment.recommendation.nodeIds.length} uzlů. Graf obsahuje všechny.`
-        : 'Graf obsahuje všechny včasné i pozdní návaznosti. Cesty se násobně nesestavují.',
+        : 'Po lhůtě vede jen hrana k nejbližšímu dalšímu odpočinku. Vzdálenější odpočinky nejsou alternativy tohoto kroku.',
     ],
     variants:
       assignment.recommendation.status === 'suggested'
@@ -358,7 +366,7 @@ function pushAutomaticWeeklyPeriods(analysis: ActivityAnalysis, periods: PeriodD
               `od ${node.sourceActivityIds.join('+')}: ${node.nextOnTime.map((link) => link.toId).join(', ')}`,
           ),
     blockedBy:
-      'Doporučení algoritmu není právní závěr. Dvě po sobě jdoucí týdny, kompenzace a mezinárodní režim zůstávají nevyhodnocené.',
+      'Doporučení algoritmu není právní závěr. Kompenzace a mezinárodní režim zůstávají nevyhodnocené.',
     nextStep:
       assignment.recommendation.status === 'suggested'
         ? 'Kontrolor doporučenou větev potvrdí, nebo z grafu vybere jinou návaznost.'

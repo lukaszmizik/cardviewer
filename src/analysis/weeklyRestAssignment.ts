@@ -11,13 +11,17 @@ export type WeeklyWeekOption = {
   weekId: string
   startUtc: number
   endUtc: number
-  attachment: 'single_week' | 'starting_week' | 'ending_week'
+  overlapStartUtc: number
+  overlapEndUtc: number
+  overlapMs: number
+  attachment: 'single_week' | 'starting_week' | 'ending_week' | 'covered_slice'
 }
 
 export type WeeklyNextLink = {
   toId: string
-  timing: 'on_time' | 'late'
+  timing: 'on_time' | 'after_deadline'
   latestStartUtc: number
+  role: 'possible_next' | 'nearest_recorded_after_deadline'
 }
 
 export type WeeklyAssignmentNode = {
@@ -29,12 +33,16 @@ export type WeeklyAssignmentNode = {
   lengthClass: WeeklyLengthClass
   manualEntry: boolean
   ambiguous: boolean
-  weekChoice: 'single' | 'needs_controller' | 'spans_more_than_two_weeks'
+  weekChoice: 'single' | 'needs_controller' | 'continuous_cover'
+  /** U dvou týdnů jsou to dvě možnosti, ne současné započtení. U delšího odpočinku jsou to nesdílené průniky. */
   possibleWeeks: WeeklyWeekOption[]
+  /** Šestidobá lhůta běží od skutečného konce, ne uvnitř probíhajícího odpočinku. */
+  sixPeriodMeasuredFrom: 'actual_end'
+  latestNextStartUtc: number
   /** Návaznosti začínající nejpozději šestkrát 24 hodin po skutečném konci tohoto odpočinku. */
   nextOnTime: WeeklyNextLink[]
-  /** Pozdější odpočinky. Nejsou vybrané jako právní závěr. */
-  nextLate: WeeklyNextLink[]
+  /** Jen nejbližší pozdější odpočinek. Není to další přípustná varianta. */
+  nextAfterDeadline: WeeklyNextLink | null
 }
 
 export type WeeklyAssignmentRecommendation =
@@ -48,7 +56,8 @@ export type WeeklyAutomaticAssignment = {
   compensationTaken: 'not_evaluated'
   /** false znamená, že se z grafu nestaví kartézský součin cest. */
   pathsMaterialized: false
-  /** true jen když by se z grafu nějaká návaznost musela vynechat. Teď se neděje. */
+  /** Vzdálené pozdní hrany se nesestavují. Nejbližší odpočinek po lhůtě zůstává. */
+  lateLinksReducedToNearest: true
   searchLimited: false
   nodes: WeeklyAssignmentNode[]
   rootIds: string[]
@@ -86,16 +95,26 @@ export function buildWeeklyRestAssignment(input: {
 
   for (const node of nodes) {
     const latestStartUtc = node.endUtc + SIX_PERIODS
+    node.latestNextStartUtc = latestStartUtc
     const later = nodes.filter((item) => item.startUtc >= node.endUtc && !unknownBetween(node.endUtc, item.startUtc, unknowns))
     node.nextOnTime = later
       .filter((item) => item.startUtc <= latestStartUtc)
-      .map((item) => ({ toId: item.id, timing: 'on_time', latestStartUtc }))
-    node.nextLate = later
-      .filter((item) => item.startUtc > latestStartUtc)
-      .map((item) => ({ toId: item.id, timing: 'late', latestStartUtc }))
+      .map((item) => ({ toId: item.id, timing: 'on_time' as const, latestStartUtc, role: 'possible_next' as const }))
+    const afterDeadline = later.find((item) => item.startUtc > latestStartUtc)
+    node.nextAfterDeadline =
+      afterDeadline == null
+        ? null
+        : {
+            toId: afterDeadline.id,
+            timing: 'after_deadline',
+            latestStartUtc,
+            role: 'nearest_recorded_after_deadline',
+          }
   }
 
-  const incoming = new Set(nodes.flatMap((node) => [...node.nextOnTime, ...node.nextLate].map((link) => link.toId)))
+  const incoming = new Set(
+    nodes.flatMap((node) => [...node.nextOnTime, ...(node.nextAfterDeadline == null ? [] : [node.nextAfterDeadline])].map((link) => link.toId)),
+  )
   const rootIds = nodes.filter((node) => !incoming.has(node.id)).map((node) => node.id)
   const recommendation = recommend(nodes, byId, rootIds)
 
@@ -105,6 +124,7 @@ export function buildWeeklyRestAssignment(input: {
     internationalRegime: 'not_evaluated',
     compensationTaken: 'not_evaluated',
     pathsMaterialized: false,
+    lateLinksReducedToNearest: true,
     searchLimited: false,
     nodes,
     rootIds,
@@ -120,12 +140,21 @@ export function buildWeeklyRestAssignment(input: {
 
 function toNode(candidate: WeeklyRestCandidate, weeks: readonly WeekSpan[]): WeeklyAssignmentNode {
   const overlapped = weeks.filter((week) => rangesOverlap(candidate.startUtc, candidate.endUtc, week.startUtc, week.endUtc))
-  const possibleWeeks = overlapped.map((week, index) => ({
-    weekId: week.id,
-    startUtc: week.startUtc,
-    endUtc: week.endUtc,
-    attachment: overlapped.length === 1 ? ('single_week' as const) : index === 0 ? ('starting_week' as const) : ('ending_week' as const),
-  }))
+  const possibleWeeks = overlapped.map((week, index) => {
+    const overlapStartUtc = Math.max(candidate.startUtc, week.startUtc)
+    const overlapEndUtc = Math.min(candidate.endUtc, week.endUtc)
+    const attachment =
+      overlapped.length === 1 ? ('single_week' as const) : overlapped.length === 2 ? (index === 0 ? ('starting_week' as const) : ('ending_week' as const)) : ('covered_slice' as const)
+    return {
+      weekId: week.id,
+      startUtc: week.startUtc,
+      endUtc: week.endUtc,
+      overlapStartUtc,
+      overlapEndUtc,
+      overlapMs: overlapEndUtc - overlapStartUtc,
+      attachment,
+    }
+  })
   return {
     id: `${candidate.startUtc}:${candidate.sourceActivityIds.join('+')}`,
     startUtc: candidate.startUtc,
@@ -135,10 +164,12 @@ function toNode(candidate: WeeklyRestCandidate, weeks: readonly WeekSpan[]): Wee
     lengthClass: candidate.lengthClass,
     manualEntry: candidate.manualEntry,
     ambiguous: candidate.ambiguous,
-    weekChoice: overlapped.length === 1 ? 'single' : overlapped.length === 2 ? 'needs_controller' : 'spans_more_than_two_weeks',
-    possibleWeeks: overlapped.length <= 2 ? possibleWeeks : [],
+    weekChoice: overlapped.length > 2 ? 'continuous_cover' : overlapped.length === 2 ? 'needs_controller' : 'single',
+    possibleWeeks,
+    sixPeriodMeasuredFrom: 'actual_end',
+    latestNextStartUtc: candidate.endUtc + SIX_PERIODS,
     nextOnTime: [],
-    nextLate: [],
+    nextAfterDeadline: null,
   }
 }
 
@@ -169,15 +200,18 @@ function recommend(
     }
     chosen.push(...walked)
   }
-  const last = byId.get(chosen[chosen.length - 1] ?? '')
-  const lateNote =
-    last != null && last.nextLate.length > 0
-      ? ` Po posledním včasném odpočinku zbývá ${last.nextLate.length} pozdějších odpočinků. Algoritmus je nevybírá.`
-      : ''
+  const crossedDeadline = chosen.some((id) => {
+    const node = byId.get(id)
+    const nextId = chosen[chosen.indexOf(id) + 1]
+    return node?.nextAfterDeadline != null && node.nextAfterDeadline.toId === nextId
+  })
+  const deadlineNote = crossedDeadline
+    ? ' Krok po šesti 24 hodinách je jen nejbližší další zaznamenaný odpočinek po skutečném konci. Během nepřerušeného odpočinku se lhůta neporušuje a nejde o právní nález.'
+    : ''
   return {
     status: 'suggested',
     nodeIds: chosen,
-    reason: `V každém úseku je jediná včasná návaznost. Úseky oddělené neznámým úsekem se nespojují. Před prvním záznamem historie chybí. Není to právní potvrzení.${lateNote}`,
+    reason: `V každém úseku je jediná včasná návaznost. Úseky oddělené neznámým úsekem se nespojují. Před prvním záznamem historie chybí. Není to právní potvrzení.${deadlineNote}`,
   }
 }
 
@@ -189,8 +223,9 @@ function walkUniqueOnTime(rootId: string, byId: ReadonlyMap<string, WeeklyAssign
     seen.add(current.id)
     ids.push(current.id)
     if (current.nextOnTime.length > 1) return null
-    if (current.nextOnTime.length === 0) break
-    current = byId.get(current.nextOnTime[0]!.toId)
+    const nextId = current.nextOnTime.length === 1 ? current.nextOnTime[0]!.toId : current.nextAfterDeadline?.toId
+    if (nextId == null) break
+    current = byId.get(nextId)
   }
   return ids
 }
@@ -211,7 +246,7 @@ function componentGroups(nodes: readonly WeeklyAssignmentNode[]): string[][] {
   }
   for (const node of nodes) parent.set(node.id, node.id)
   for (const node of nodes) {
-    for (const link of [...node.nextOnTime, ...node.nextLate]) unite(node.id, link.toId)
+    for (const link of [...node.nextOnTime, ...(node.nextAfterDeadline == null ? [] : [node.nextAfterDeadline])]) unite(node.id, link.toId)
   }
   const groups = new Map<string, string[]>()
   for (const node of nodes) {

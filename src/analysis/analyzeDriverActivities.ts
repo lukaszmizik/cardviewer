@@ -2,6 +2,7 @@ import type { Activity, DriverCardData } from '../types/tacho.ts'
 import { buildDailyRestChain, type DailyRestChain, type UnrecordedInterval } from './dailyRestChain.ts'
 import { classifyRestCandidates, type RestCandidate } from './restCandidates.ts'
 import { findRestIntervals, type RestInterval } from './restIntervals.ts'
+import { assessConsecutiveWeeks, type ConsecutiveWeeksResult } from './consecutiveWeeks.ts'
 import { buildWeeklyRestAssignment, type WeeklyAutomaticAssignment } from './weeklyRestAssignment.ts'
 import {
   assessWeeklyRests,
@@ -36,11 +37,7 @@ export type WeeklyAnalysis =
   | { status: 'assessed'; result: WeeklyRestMvp }
   | { status: 'requires_input'; missing: AnalysisInputGap[] }
 
-export type NotEvaluatedTopic =
-  | 'infringements'
-  | 'consecutive_weeks'
-  | 'international_regime'
-  | 'compensation_taken'
+export type NotEvaluatedTopic = 'infringements' | 'international_regime' | 'compensation_taken'
 
 export type ActivityAnalysis = {
   recorded: {
@@ -60,6 +57,8 @@ export type ActivityAnalysis = {
   notEvaluated: Array<{ topic: NotEvaluatedTopic; status: 'not_evaluated' }>
   /** Automatické návaznosti. Nevyžadují ruční výběr ani denní kotvu a nejsou právní potvrzení. */
   weeklyAssignment: WeeklyAutomaticAssignment
+  /** Klouzavá kontrola dvou sousedních týdnů. Není to přestupek. */
+  consecutiveWeeks: ConsecutiveWeeksResult
 }
 
 export type ActivityAnalysisRequest = {
@@ -75,7 +74,6 @@ export type ActivityAnalysisRequest = {
 
 const NOT_EVALUATED: ActivityAnalysis['notEvaluated'] = [
   { topic: 'infringements', status: 'not_evaluated' },
-  { topic: 'consecutive_weeks', status: 'not_evaluated' },
   { topic: 'international_regime', status: 'not_evaluated' },
   { topic: 'compensation_taken', status: 'not_evaluated' },
 ]
@@ -91,6 +89,11 @@ export function analyzeDriverActivities(request: ActivityAnalysisRequest): Activ
   const restCandidates = classifyRestCandidates(restIntervals)
   const weeklyRestCandidates = classifyWeeklyRestCandidates(restCandidates)
   const weeklyAssignment = buildWeeklyRestAssignment({ candidates: weeklyRestCandidates, unknownIntervals })
+  const consecutiveWeeks = assessConsecutiveWeeks({
+    assignment: weeklyAssignment,
+    unknownIntervals,
+    recordSpan: recordSpan(activities),
+  })
   const anchorUtc = request.dailyAnchorUtc
   const daily: DailyAnalysis =
     typeof anchorUtc === 'number' && Number.isFinite(anchorUtc)
@@ -118,6 +121,7 @@ export function analyzeDriverActivities(request: ActivityAnalysisRequest): Activ
     },
     notEvaluated: NOT_EVALUATED.map((item) => ({ ...item })),
     weeklyAssignment,
+    consecutiveWeeks,
   }
 }
 
@@ -149,6 +153,15 @@ function assessWeekly(
       dailyChain,
       unknownIntervals,
     }),
+  }
+}
+
+function recordSpan(activities: readonly Activity[]): { startUtc: number; endUtc: number } | null {
+  const finite = activities.filter((activity) => activity.endUtc > activity.startUtc)
+  if (finite.length === 0) return null
+  return {
+    startUtc: Math.min(...finite.map((activity) => activity.startUtc)),
+    endUtc: Math.max(...finite.map((activity) => activity.endUtc)),
   }
 }
 

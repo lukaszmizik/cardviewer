@@ -62,17 +62,17 @@ test('hranice šesti 24hodinových období je včasná a minuta po ní je pozdn�
   const onTime = assignmentOf([first, activity('second', 'rest', end + 6 * DAY, end + 6 * DAY + 24 * HOUR)])
   assert.equal(onTime.nodes[0]?.nextOnTime.length, 1)
   assert.equal(onTime.nodes[0]?.nextOnTime[0]?.timing, 'on_time')
-  assert.equal(onTime.nodes[0]?.nextLate.length, 0)
+  assert.equal(onTime.nodes[0]?.nextAfterDeadline, null)
 
   const late = assignmentOf([
     first,
     activity('second', 'rest', end + 6 * DAY + 60_000, end + 6 * DAY + 60_000 + 24 * HOUR),
   ])
   assert.equal(late.nodes[0]?.nextOnTime.length, 0)
-  assert.equal(late.nodes[0]?.nextLate.length, 1)
-  assert.equal(late.nodes[0]?.nextLate[0]?.timing, 'late')
+  assert.equal(late.nodes[0]?.nextAfterDeadline?.timing, 'after_deadline')
+  assert.equal(late.nodes[0]?.nextAfterDeadline?.role, 'nearest_recorded_after_deadline')
   assert.equal(late.recommendation.status, 'suggested')
-  assert.equal(late.recommendation.status === 'suggested' ? late.recommendation.nodeIds.length : 0, 1)
+  assert.match(late.recommendation.status === 'suggested' ? late.recommendation.reason : '', /skutečném konci/)
 })
 
 test('odpočinek přes dva kalendářní týdny zůstává jeden a týden se nevolí', () => {
@@ -111,7 +111,7 @@ test('neznámý úsek návaznost nespojuje a není odpočinek', () => {
   ])
   assert.equal(result.nodes.length, 2)
   assert.equal(result.nodes[0]?.nextOnTime.length, 0)
-  assert.equal(result.nodes[0]?.nextLate.length, 0)
+  assert.equal(result.nodes[0]?.nextAfterDeadline, null)
   assert.deepEqual(result.rootIds.length, 2)
 })
 
@@ -131,6 +131,31 @@ test('dlouhý ruční odpočinek zůstává jeden uzel a není odmítnutý', () 
   assert.equal(result.nodes.length, 1)
   assert.equal(result.nodes[0]?.manualEntry, true)
   assert.equal(result.nodes[0]?.lengthClass, 'regular')
-  assert.equal(result.nodes[0]?.weekChoice, 'spans_more_than_two_weeks')
+  assert.equal(result.nodes[0]?.weekChoice, 'continuous_cover')
+  const slices = result.nodes[0]?.possibleWeeks ?? []
+  assert.ok(slices.length > 2)
+  assert.equal(
+    slices.reduce((sum, slice) => sum + slice.overlapMs, 0),
+    result.nodes[0]?.durationMs,
+  )
+  assert.deepEqual(result.nodes[0]?.sourceActivityIds, ['manual'])
   assert.equal(result.excludedByUnknown.length, 0)
+  assert.equal(result.recommendation.status, 'suggested')
+})
+
+test('dlouhý odpočinek a odpočinek o několik týdnů později nejsou falešná nejednoznačnost', () => {
+  const start = Date.parse('2026-03-02T06:00:00.000Z')
+  const result = assignmentOf([
+    activity('long', 'rest', start, start + 20 * DAY, { isManualEntry: true }),
+    activity('work', 'work', start + 20 * DAY, start + 50 * DAY),
+    activity('next', 'rest', start + 50 * DAY, start + 50 * DAY + 45 * HOUR),
+    activity('later', 'rest', start + 80 * DAY, start + 80 * DAY + 45 * HOUR),
+  ])
+  assert.equal(result.nodes.length, 3)
+  assert.equal(result.nodes[0]?.nextOnTime.length, 0)
+  assert.equal(result.nodes[0]?.nextAfterDeadline?.toId, result.nodes[1]?.id)
+  assert.equal(result.nodes[1]?.nextAfterDeadline?.toId, result.nodes[2]?.id)
+  assert.equal(result.recommendation.status, 'suggested')
+  assert.equal(result.recommendation.status === 'suggested' ? result.recommendation.nodeIds.length : 0, 3)
+  assert.match(result.recommendation.status === 'suggested' ? result.recommendation.reason : '', /nepřerušeného odpočinku/)
 })

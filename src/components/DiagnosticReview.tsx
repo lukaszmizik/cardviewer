@@ -9,6 +9,7 @@ import {
   type PeriodBlocker,
   type PeriodDiagnostic,
 } from '../analysis/diagnosticCases.ts'
+import type { ConsecutiveWeeksResult } from '../analysis/consecutiveWeeks.ts'
 import type { WeeklyAutomaticAssignment } from '../analysis/weeklyRestAssignment.ts'
 import type { DriverCardData } from '../types/tacho.ts'
 
@@ -61,7 +62,7 @@ export function DiagnosticReview({ card }: DiagnosticReviewProps) {
         </label>
         <button
           type="button"
-          onClick={() => downloadCases(cases, periods, notes, analysis?.weeklyAssignment ?? null)}
+          onClick={() => downloadCases(cases, periods, notes, analysis?.weeklyAssignment ?? null, analysis?.consecutiveWeeks ?? null)}
           disabled={cases.length === 0}
         >
           Exportovat JSON
@@ -71,7 +72,7 @@ export function DiagnosticReview({ card }: DiagnosticReviewProps) {
       <p className="diagnostic-hint">
         Délka odpočinku není právně potvrzený odpočinek. Přestupky se zde nevytvářejí.
       </p>
-      {analysis != null ? <WeeklyOverview assignment={analysis.weeklyAssignment} /> : null}
+      {analysis != null ? <WeeklyOverview assignment={analysis.weeklyAssignment} consecutive={analysis.consecutiveWeeks} /> : null}
       <h3>Konkrétní odpočinky a období</h3>
       <ol className="diagnostic-list">
         {periods.map((item) => (
@@ -138,9 +139,16 @@ function formatInterval(item: Pick<DiagnosticCase, 'startUtc' | 'endUtc'>): stri
   return `${new Date(item.startUtc).toISOString()} – ${new Date(item.endUtc).toISOString()}`
 }
 
-function WeeklyOverview({ assignment }: { assignment: WeeklyAutomaticAssignment }) {
+function WeeklyOverview({
+  assignment,
+  consecutive,
+}: {
+  assignment: WeeklyAutomaticAssignment
+  consecutive: ConsecutiveWeeksResult
+}) {
   const suggested = assignment.recommendation.status === 'suggested' ? assignment.recommendation.nodeIds : []
   const branches = assignment.nodes.filter((node) => node.nextOnTime.length > 1)
+  const longRests = assignment.nodes.filter((node) => node.weekChoice === 'continuous_cover')
   return (
     <section className="diagnostic-review">
       <h3>Týdenní odpočinky</h3>
@@ -148,9 +156,24 @@ function WeeklyOverview({ assignment }: { assignment: WeeklyAutomaticAssignment 
         {assignment.recommendation.status === 'suggested' ? 'Doporučení k zobrazení' : 'Nerozhodnuto'}: {assignment.recommendation.reason}
       </p>
       <p>
-        Kandidátů {assignment.nodes.length}, začátků bez předchozí návaznosti {assignment.rootIds.length}, kroků s více
-        včasnými pokračováními {branches.length}. Právní závěr to není.
+        Kandidátů {assignment.nodes.length}, z toho nepřerušených přes více týdnů {longRests.length}. Začátků bez
+        předchozí návaznosti {assignment.rootIds.length}, kroků s více včasnými pokračováními {branches.length}. Právní
+        závěr to není.
       </p>
+      <p>
+        Dva sousední týdny, pondělí 00:00 UTC: splněno {consecutive.counts.satisfied}, základní pravidlo nesplněno{' '}
+        {consecutive.counts.not_satisfied_basic_rule}, závisí na výkladu {consecutive.counts.ambiguous}, chybí údaje{' '}
+        {consecutive.counts.insufficient_data}, nevyhodnoceno {consecutive.counts.not_evaluated}. Není to přestupek.
+      </p>
+      {consecutive.periods
+        .filter((period) => period.needsController)
+        .slice(0, 3)
+        .map((period) => (
+          <p key={`${period.earlierWeek.startUtc}-${period.laterWeek.startUtc}`}>
+            {new Date(period.earlierWeek.startUtc).toISOString()} – {new Date(period.laterWeek.endUtc).toISOString()}:{' '}
+            {period.reason}
+          </p>
+        ))}
       {suggested.length > 0 ? (
         <p>
           Konce doporučené větve:{' '}
@@ -167,8 +190,9 @@ function downloadCases(
   periods: readonly PeriodDiagnostic[],
   notes: Readonly<Record<string, string>>,
   weeklyAssignment: WeeklyAutomaticAssignment | null,
+  consecutiveWeeks: ConsecutiveWeeksResult | null,
 ): void {
-  const payload = buildDiagnosticExport(cases, periods, notes, new Date().toISOString(), weeklyAssignment)
+  const payload = buildDiagnosticExport(cases, periods, notes, new Date().toISOString(), weeklyAssignment, consecutiveWeeks)
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')

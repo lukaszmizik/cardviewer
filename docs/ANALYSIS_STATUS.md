@@ -10,7 +10,8 @@ Dokument popisuje, co umí výpočty v `src/analysis` k datu poslední úpravy d
 - `dailyRestOptions.ts` vrací délkové varianty denního odpočinku v jednom okně a žádnou nevolí.
 - `dailyRestChain.ts` navazuje 24hodinová období od explicitní kotvy. Další kotva je skutečný konec odpočinku.
 - `weeklyRest.ts` klasifikuje týdenní délku a posoudí jen explicitně vybrané odpočinky.
-- `weeklyRestAssignment.ts` z těchto kandidátů staví graf včasných a pozdních návazností. Doporučená větev není právní potvrzení.
+- `weeklyRestAssignment.ts` z těchto kandidátů staví graf včasných návazností. Dlouhý odpočinek zůstává jeden interval a po lhůtě ukazuje jen nejbližší další záznam. Doporučená větev není právní potvrzení.
+- `consecutiveWeeks.ts` kontroluje každé dva sousední týdny v běžném režimu. Dlouhý odpočinek přes více než dva týdny nechává jako nevyhodnocený.
 - `analyzeDriverActivities.ts` složí tyto kroky z původních `DriverCardData.activities`.
 - `diagnosticCases.ts` z výsledku vybere souhrnné případy a konkrétní odpočinky nebo období. Export má schéma verze 2.
 
@@ -38,7 +39,6 @@ Délková třída `regular` a `reduced` není stav `recorded_fact` ve smyslu pr�
 ## Dosud neimplementovaná pravidla
 
 - přestupky a závěr o souladu,
-- dvě po sobě jdoucí kalendářní týdny,
 - zvláštní režim mezinárodní nákladní dopravy mimo stát usazení,
 - skutečné čerpání kompenzace zkráceného týdenního odpočinku,
 - vícečlenná osádka a příležitostná osobní doprava,
@@ -48,6 +48,6 @@ Délková třída `regular` a `reduced` není stav `recorded_fact` ve smyslu pr�
 
 1. V panelu umožnit explicitní výběr týdenního kandidáta a zadání `WeekClock` bez automatické volby.
 2. Uzavírat počet zkrácených denních odpočinků až ve chvíli, kdy jsou oba týdenní předěly vybrané.
-3. Teprve potom doplnit pravidlo dvou po sobě jdoucích týdnů.
+3. Právní započtení jednoho odpočinku přes více než dva týdny doplnit, teprve až bude jednoznačné.
 4. Kompenzaci zatím jen evidovat. Párování s jiným odpočinkem nechat na pozdější krok.
 5. Přestupky přidat až jako samostatnou vrstvu nad dokončenými pravidly.

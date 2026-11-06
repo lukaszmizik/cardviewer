@@ -279,3 +279,27 @@ test('dva úplné předěly sečtou zkrácené denní odpočinky, neúplné nech
   })
   assert.equal(undecided.dailyReduced.status, 'undecided')
 })
+
+test('dlouhý odpočinek zůstává použitelný a stejný čas se nezapočítá dvakrát', () => {
+  const start = MONDAY + 6 * HOUR
+  const end = start + 20 * 24 * HOUR
+  const [item] = classifyWeeklyRestCandidates([candidate(start, end, { sourceActivityIds: ['manual'], manualEntry: true })])
+  const result = assessWeeklyRests({
+    previousWeeklyEndUtc: null,
+    selections: [select(item!, 'w0')],
+    clock: clock(5),
+  })
+  const report = result.selections[0]
+  assert.equal(report?.assignment.status, 'continuous_cover')
+  assert.equal(report?.usableAsBoundary, true)
+  assert.deepEqual(result.boundaryEndsUtc, [end])
+  if (report?.assignment.status !== 'continuous_cover') return
+  assert.ok(report.assignment.weeks.length > 2)
+  assert.equal(
+    report.assignment.weeks.reduce((sum, week) => sum + week.overlapMs, 0),
+    end - start,
+  )
+  for (let index = 1; index < report.assignment.weeks.length; index += 1) {
+    assert.ok(report.assignment.weeks[index - 1]!.overlapEndUtc <= report.assignment.weeks[index]!.overlapStartUtc)
+  }
+})
