@@ -1,4 +1,5 @@
-import type { ActivityAnalysis, DailyAnalysisSegment } from '../analysis/analyzeDriverActivities.ts'
+import type { ActivityAnalysis, DailyAnalysisSegment, RecordedActivity, RecordedUnknownInterval } from '../analysis/analyzeDriverActivities.ts'
+import { assessCrewDailyWindow, type CrewDailyCandidate } from '../analysis/crewDailyRest.ts'
 import type { DailyChainInterpretation, DailyChainNode, DailyRestChain } from '../analysis/dailyRestChain.ts'
 import type { RestCandidate } from '../analysis/restCandidates.ts'
 import { clockParts, formatClockDateTime } from '../lib/clock.ts'
@@ -33,6 +34,10 @@ export type DailyRestOverview =
   | { status: 'needs_anchor'; message: string }
   | { status: 'rows'; rows: DailyRestOverviewRow[] }
 
+const CREW_WARNING =
+  'Tachograf v tomto období zaznamenal režim osádky. Současná analýza používá 24hodinové období pro jednoho řidiče. Kandidátní 30hodinový výpočet je uveden samostatně a není právní posouzení.'
+const CREW_LIMIT = 'Příznak osádky sám o sobě neprokazuje splnění všech podmínek režimu osádky.'
+const CREW_UNSATISFIED = 'Nesplněno podle 24hodinového výpočtu – režim osádky neposouzen.'
 const REDUCED_WEEKLY_LENGTH_MS = 24 * 60 * 60 * 1000
 const REGULAR_WEEKLY_LENGTH_MS = 45 * 60 * 60 * 1000
 const NEEDS_ANCHOR =
@@ -49,17 +54,19 @@ type ShownRest = {
 }
 
 /**
- * Zobrazovací řádky denního přehledu. Nový výpočet odpočinků nedělá.
+ * Zobrazovací řádky denního přehledu. 24hodinový řetězec nepřepočítává.
  */
 export function buildDailyRestOverview(analysis: ActivityAnalysis): DailyRestOverview {
   if (analysis.assessed.daily.status !== 'assessed') return { status: 'needs_anchor', message: NEEDS_ANCHOR }
   const candidates = analysis.candidates.restCandidates
+  const activities = analysis.recorded.activities
+  const unknowns = analysis.recorded.unknownIntervals
   const shown = new Set<string>()
   const seenWindows = new Set<number>()
   const rows: DailyRestOverviewRow[] = []
-  appendChain(rows, analysis.assessed.daily.chain, candidates, shown, seenWindows)
+  appendChain(rows, analysis.assessed.daily.chain, candidates, activities, unknowns, shown, seenWindows)
   for (const segment of analysis.assessed.daily.segments) {
-    appendSegment(rows, segment, candidates, shown, seenWindows)
+    appendSegment(rows, segment, candidates, activities, unknowns, shown, seenWindows)
   }
   return { status: 'rows', rows }
 }
@@ -72,6 +79,8 @@ function appendChain(
   rows: DailyRestOverviewRow[],
   chain: DailyRestChain,
   candidates: readonly RestCandidate[],
+  activities: readonly RecordedActivity[],
+  unknowns: readonly RecordedUnknownInterval[],
   shown: Set<string>,
   seenWindows: Set<number>,
 ): void {
@@ -79,7 +88,7 @@ function appendChain(
   for (const node of nodes) {
     if (seenWindows.has(node.anchorUtc)) continue
     seenWindows.add(node.anchorUtc)
-    rows.push(windowRow(node, candidates, shown))
+    rows.push(windowRow(node, candidates, activities, unknowns, shown))
   }
 }
 
@@ -87,6 +96,8 @@ function appendSegment(
   rows: DailyRestOverviewRow[],
   segment: DailyAnalysisSegment,
   candidates: readonly RestCandidate[],
+  activities: readonly RecordedActivity[],
+  unknowns: readonly RecordedUnknownInterval[],
   shown: Set<string>,
   seenWindows: Set<number>,
 ): void {
@@ -109,13 +120,22 @@ function appendSegment(
   const bridge = candidates.find((candidate) => sameIds(candidate.sourceActivityIds, segment.sourceActivityIds))
   if (bridge != null && !shown.has(restKey(bridge))) {
     shown.add(restKey(bridge))
-    rows.push(recognizedCandidateRow(bridge, ['Od konce tohoto odpočinku pokračuje další denní návaznost.']))
+    rows.push(recognizedCandidateRow(bridge, activities, ['Od konce tohoto odpočinku pokračuje další denní návaznost.']))
   }
-  appendChain(rows, segment.chain, candidates, shown, seenWindows)
+  appendChain(rows, segment.chain, candidates, activities, unknowns, shown, seenWindows)
 }
 
-function windowRow(node: DailyChainNode, candidates: readonly RestCandidate[], shown: Set<string>): DailyRestOverviewRow {
+function windowRow(
+  node: DailyChainNode,
+  candidates: readonly RestCandidate[],
+  activities: readonly RecordedActivity[],
+  unknowns: readonly RecordedUnknownInterval[],
+  shown: Set<string>,
+): DailyRestOverviewRow {
   const windowDetail = { label: 'Posuzované období', value: intervalLabel(node.windowStartUtc, node.windowEndUtc) }
+  const crewDetails = crewPeriodDetails(node.windowStartUtc, node.windowEndUtc, activities)
+  const candidateDetails = crewCandidateDetails(node.windowStartUtc, activities, unknowns)
+  const crew = crewDetails.length > 0
   if (node.status === 'history_incomplete' || node.status === 'insufficient_data') {
     const rests = recordedRests(node, candidates, shown)
     return {
@@ -134,7 +154,9 @@ function windowRow(node: DailyChainNode, candidates: readonly RestCandidate[], s
             ? 'Záznam končí dříve, než toto 24hodinové období skončí.'
             : 'V období je neznámý úsek. Neznámý úsek není odpočinek a z období nelze rozhodnout.',
         },
-        ...restDetailLines(rests),
+        ...crewDetails,
+        ...candidateDetails,
+        ...restDetailLines(rests, activities),
       ],
     }
   }
@@ -146,20 +168,24 @@ function windowRow(node: DailyChainNode, candidates: readonly RestCandidate[], s
       dateUtc: dateLabel(node.windowStartUtc),
       atUtc: node.windowStartUtc,
       restSummary: summaryOfRests(rests),
-      result: 'Nesplněné 24hodinové období',
+      result: crew ? CREW_UNSATISFIED : 'Nesplněné 24hodinové období',
       tone: toneOfRests(rests),
       attention: true,
       details: [
         windowDetail,
         {
           label: 'Vysvětlení',
-          value: continues
-            ? 'Odpočinek pokračuje za konec období. Toto období tím není splněné. Nejde o pravomocně zjištěný přestupek.'
-            : rests.length > 0
-              ? 'Zaznamenaný odpočinek požadavek tohoto období nesplňuje. Nejde o pravomocně zjištěný přestupek.'
-              : 'V tomto 24hodinovém období není odpočinek, který by požadavek splnil. Nejde o pravomocně zjištěný přestupek.',
+          value: crew
+            ? 'Výpočet používá 24hodinové období pro jednoho řidiče. Režim osádky posouzen není. Nejde o pravomocně zjištěný přestupek.'
+            : continues
+              ? 'Odpočinek pokračuje za konec období. Toto období tím není splněné. Nejde o pravomocně zjištěný přestupek.'
+              : rests.length > 0
+                ? 'Zaznamenaný odpočinek požadavek tohoto období nesplňuje. Nejde o pravomocně zjištěný přestupek.'
+                : 'V tomto 24hodinovém období není odpočinek, který by požadavek splnil. Nejde o pravomocně zjištěný přestupek.',
         },
-        ...restDetailLines(rests),
+        ...crewDetails,
+        ...candidateDetails,
+        ...restDetailLines(rests, activities),
       ],
     }
   }
@@ -178,9 +204,11 @@ function windowRow(node: DailyChainNode, candidates: readonly RestCandidate[], s
       details: [
         windowDetail,
         { label: 'Vysvětlení', value: 'Jde o možné podoby téhož období. Platí nejvýše jedna a žádná není vybraná.' },
+        ...crewDetails,
+        ...candidateDetails,
         ...qualifying.map((item, index) => ({
           label: `Možnost ${index + 1}`,
-          value: optionText(item, candidates),
+          value: optionText(item, candidates, activities),
         })),
       ],
     }
@@ -195,14 +223,14 @@ function windowRow(node: DailyChainNode, candidates: readonly RestCandidate[], s
       result: 'Nedostatečná data',
       tone: 'neutral',
       attention: true,
-      details: [windowDetail, { label: 'Vysvětlení', value: 'Okno nemá vybranou podobu odpočinku.' }],
+      details: [windowDetail, { label: 'Vysvětlení', value: 'Okno nemá vybranou podobu odpočinku.' }, ...crewDetails, ...candidateDetails],
     }
   }
   chosen.parts.forEach((part) => shown.add(restKey(part)))
-  return recognizedInterpretationRow(`window:${node.anchorUtc}`, chosen, candidates, [windowDetail])
+  return recognizedInterpretationRow(`window:${node.anchorUtc}`, chosen, candidates, activities, [windowDetail, ...crewDetails, ...candidateDetails])
 }
 
-function recognizedCandidateRow(candidate: RestCandidate, notes: string[]): DailyRestOverviewRow {
+function recognizedCandidateRow(candidate: RestCandidate, activities: readonly RecordedActivity[], notes: string[]): DailyRestOverviewRow {
   return presentRest({
     id: `bridge:${candidate.startUtc}:${candidate.endUtc}`,
     startUtc: candidate.startUtc,
@@ -214,7 +242,9 @@ function recognizedCandidateRow(candidate: RestCandidate, notes: string[]): Dail
     result: resultForDuration(candidate.endUtc - candidate.startUtc, candidate.kinds.includes('daily_reduced') && !candidate.kinds.includes('daily_regular') ? 'continuous_reduced' : 'continuous_regular', 1),
     tone: toneForDuration(candidate.endUtc - candidate.startUtc),
     notes,
-    extra: [],
+    extra: sourcesHaveCrew(candidate.sourceActivityIds, activities)
+      ? [{ label: 'Režim osádky', value: 'Tachograf u této činnosti zaznamenal režim osádky.' }]
+      : [],
   })
 }
 
@@ -222,6 +252,7 @@ function recognizedInterpretationRow(
   id: string,
   item: DailyChainInterpretation,
   candidates: readonly RestCandidate[],
+  activities: readonly RecordedActivity[],
   extra: OverviewDetail[],
 ): DailyRestOverviewRow {
   const parts = [...item.parts].sort((left, right) => left.startUtc - right.startUtc)
@@ -234,8 +265,14 @@ function recognizedInterpretationRow(
   const partDetails = parts.length > 1
     ? parts.map((part, index) => ({
         label: `Část ${index + 1}`,
-        value: `${intervalLabel(part.startUtc, part.endUtc)}, ${lengthLabel(part.endUtc - part.startUtc)}`,
+        value: [
+          `${intervalLabel(part.startUtc, part.endUtc)}, ${lengthLabel(part.endUtc - part.startUtc)}`,
+          sourcesHaveCrew(part.sourceActivityIds, activities) ? 'Režim osádky.' : '',
+        ].filter((partText) => partText !== '').join(' '),
       }))
+    : []
+  const crewOnRest = sourcesHaveCrew(parts.flatMap((part) => part.sourceActivityIds), activities)
+    ? [{ label: 'Režim osádky', value: 'Tachograf u této činnosti zaznamenal režim osádky.' }]
     : []
   return presentRest({
     id,
@@ -248,7 +285,7 @@ function recognizedInterpretationRow(
     result: resultForDuration(durationMs, item.kind, parts.length),
     tone: parts.length > 1 ? 'daily' : toneForDuration(durationMs),
     notes: [],
-    extra: [...extra, ...partDetails],
+    extra: [...extra, ...partDetails, ...crewOnRest],
   })
 }
 
@@ -372,19 +409,20 @@ function toneForDuration(durationMs: number): RestTone {
   return 'daily'
 }
 
-function restDetailLines(rests: readonly ShownRest[]): OverviewDetail[] {
+function restDetailLines(rests: readonly ShownRest[], activities: readonly RecordedActivity[]): OverviewDetail[] {
   return rests.map((rest, index) => ({
     label: rests.length === 1 ? 'Zaznamenaný odpočinek' : `Úsek ${index + 1}`,
     value: [
       `${intervalLabel(rest.startUtc, rest.endUtc)}, ${lengthLabel(rest.endUtc - rest.startUtc)}`,
       rest.established ? '' : 'Interval je nejistý kvůli překryvu.',
       rest.manualEntry ? 'Ruční záznam.' : '',
+      sourcesHaveCrew(rest.sourceActivityIds, activities) ? 'Režim osádky.' : '',
       rest.sourceActivityIds.length > 0 ? `Zdroje: ${rest.sourceActivityIds.join(', ')}.` : '',
     ].filter((part) => part !== '').join(' '),
   }))
 }
 
-function optionText(item: DailyChainInterpretation, candidates: readonly RestCandidate[]): string {
+function optionText(item: DailyChainInterpretation, candidates: readonly RestCandidate[], activities: readonly RecordedActivity[]): string {
   const rest = combinedRest(item, candidates)
   const long = rest.endUtc - rest.startUtc >= REDUCED_WEEKLY_LENGTH_MS
   const label = long ? 'dlouhý souvislý odpočinek' : item.kind === 'split_regular' ? 'dělený denní odpočinek' : item.kind === 'continuous_reduced' ? 'zkrácený denní odpočinek' : 'běžný denní odpočinek'
@@ -395,8 +433,95 @@ function optionText(item: DailyChainInterpretation, candidates: readonly RestCan
   const notes = [
     !item.established ? 'Interval je nejistý kvůli překryvu.' : '',
     rest.manualEntry ? 'Ruční záznam.' : '',
+    sourcesHaveCrew(rest.sourceActivityIds, activities) ? 'Režim osádky.' : '',
   ].filter((note) => note !== '')
   return [`${label}: ${body}`, ...notes].join(' ')
+}
+
+function crewCandidateDetails(
+  windowStartUtc: number,
+  activities: readonly RecordedActivity[],
+  unknowns: readonly RecordedUnknownInterval[],
+): OverviewDetail[] {
+  const candidate = assessCrewDailyWindow({ windowStartUtc, activities, unknownIntervals: unknowns })
+  if (candidate.recording === 'not_recorded') return []
+  const rest = candidate.qualifyingRest
+  const restValue = rest == null
+    ? 'Souvislý odpočinek alespoň 9 hodin v období není.'
+    : `${intervalLabel(rest.startUtc, rest.nineHoursAtUtc)}, devět hodin v ${formatClockDateTime(rest.nineHoursAtUtc, 'utc')} UTC.`
+  const condition = candidate.nineHourCondition === 'met'
+    ? candidate.marginMs === 0
+      ? 'Splněna, přesně na hranici 30 hodin.'
+      : `Splněna, rezerva ${lengthLabel(candidate.marginMs ?? 0)}.`
+    : candidate.marginMs == null
+      ? 'Nesplněna, souvislý odpočinek alespoň 9 hodin v období není.'
+      : `Nesplněna, devět hodin končí ${lengthLabel(-candidate.marginMs)} po hranici.`
+  return [
+    { label: 'Kandidátní posouzení režimu osádky', value: crewSummary(candidate) },
+    { label: '30hodinové období', value: intervalLabel(candidate.windowStartUtc, candidate.windowEndUtc) },
+    { label: 'Devítihodinový odpočinek', value: restValue },
+    { label: 'Časová podmínka', value: condition },
+    { label: 'Průběh záznamu', value: crewRecordSentence(candidate, activities) },
+    { label: 'Právní podmínky', value: 'Právní podmínky režimu osádky zatím nejsou plně vyhodnoceny.' },
+  ]
+}
+
+function crewSummary(candidate: CrewDailyCandidate): string {
+  const parts: string[] = []
+  if (candidate.nineHourCondition === 'met') {
+    const reserve = candidate.marginMs === 0 ? 'přesně na hranici 30 hodin' : `rezerva ${reserveLength(candidate.marginMs ?? 0)}`
+    parts.push(`Časová podmínka splněna (${reserve}). Použitelnost režimu osádky nepotvrzena.`)
+  } else {
+    parts.push('Časová podmínka nesplněna.')
+  }
+  if (candidate.crewRecord === 'crew_record_interrupted') parts.push('Záznam režimu osádky přerušen.')
+  if (crewDataMissing(candidate)) parts.push('Nedostatek údajů k vyhodnocení.')
+  return parts.join(' ')
+}
+
+function crewDataMissing(candidate: CrewDailyCandidate): boolean {
+  if (candidate.recording === 'insufficient_data' || candidate.uncertainties.includes('unknown_in_period')) return true
+  return candidate.crewRecord === 'crew_record_unknown' && candidate.nineHourCondition !== 'met'
+}
+
+function reserveLength(durationMs: number): string {
+  const minutes = Math.max(0, Math.round(durationMs / 60_000))
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  if (hours > 0) return lengthLabel(durationMs)
+  if (rest === 1) return '1 minutu'
+  if (rest >= 2 && rest <= 4) return `${rest} minuty`
+  return `${rest} minut`
+}
+
+function crewRecordSentence(candidate: CrewDailyCandidate, activities: readonly RecordedActivity[]): string {
+  if (candidate.crewRecord === 'crew_record_consistent') return 'Dostupný záznam příznaku osádky je v pracovním úseku souvislý s přihlédnutím k první hodině.'
+  if (candidate.crewRecord === 'crew_record_interrupted') return 'V pracovním úseku je doložené přerušení záznamu režimu osádky.'
+  if (cardRemovedInWork(candidate, activities)) return 'Průběh příznaku osádky nelze kvůli úsekům s vyjmutou kartou spolehlivě potvrdit.'
+  return 'Údaje nestačí ke spolehlivému určení průběhu záznamu osádky.'
+}
+
+function cardRemovedInWork(candidate: CrewDailyCandidate, activities: readonly RecordedActivity[]): boolean {
+  const segmentEndUtc = candidate.qualifyingRest?.startUtc ?? candidate.windowEndUtc
+  return activities.some((activity) =>
+    activity.isManualEntry
+    && activity.startUtc < segmentEndUtc
+    && activity.endUtc > candidate.windowStartUtc,
+  )
+}
+
+function crewPeriodDetails(startUtc: number, endUtc: number, activities: readonly RecordedActivity[]): OverviewDetail[] {
+  const crew = activities.some((activity) => activity.isCrew && activity.startUtc < endUtc && activity.endUtc > startUtc)
+  if (!crew) return []
+  return [
+    { label: 'Režim osádky', value: CREW_WARNING },
+    { label: 'Omezení příznaku', value: CREW_LIMIT },
+  ]
+}
+
+function sourcesHaveCrew(sourceActivityIds: readonly string[], activities: readonly RecordedActivity[]): boolean {
+  const ids = new Set(sourceActivityIds)
+  return activities.some((activity) => activity.isCrew && ids.has(activity.id))
 }
 
 function candidateFor(

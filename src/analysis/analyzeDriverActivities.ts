@@ -27,6 +27,8 @@ export type RecordedActivity = {
   endUtc: number
   durationMinutes: number
   isManualEntry: boolean
+  /** Příznak osádky z karty. Sám o sobě režim osádky neprokazuje. */
+  isCrew: boolean
   slot: Activity['slot']
 }
 
@@ -398,6 +400,7 @@ function recordedActivity(activity: Activity): RecordedActivity {
     endUtc: activity.endUtc,
     durationMinutes: activity.durationMinutes,
     isManualEntry: activity.isManualEntry === true,
+    isCrew: activity.isCrew === true,
     slot: activity.slot,
   }
 }

@@ -26,6 +26,12 @@ function detailText(row: DailyRestOverviewRow): string {
   return row.details.map((detail) => `${detail.label}: ${detail.value}`).join('\n')
 }
 
+function crewSummaryOf(activities: Activity[]): string {
+  const row = rowsOf(activities).find((item) => item.details.some((detail) => detail.label === 'Kandidátní posouzení režimu osádky'))
+  assert.ok(row)
+  return row.details.find((detail) => detail.label === 'Kandidátní posouzení režimu osádky')?.value ?? ''
+}
+
 function mainText(row: DailyRestOverviewRow): string {
   return `${row.dateUtc} ${row.restSummary} ${row.result}`
 }
@@ -50,6 +56,7 @@ test('běžný denní odpočinek má stručný řádek a interval v detailu', ()
   assert.match(detailText(row), /03\.03\.2026 06:00/)
   assert.match(detailText(row), /17:00 UTC/)
   assert.match(detailText(row), /daily/)
+  assert.doesNotMatch(detailText(row), /režim osádky/i)
   assert.equal(rows.filter((item) => item.id.startsWith('window:')).length, new Set(rows.filter((item) => item.id.startsWith('window:')).map((item) => item.id)).size)
 })
 
@@ -139,6 +146,7 @@ test('osmihodinový odpočinek zůstane v nesplněném období svou barvou', () 
   assert.equal(row.tone, 'daily')
   assert.match(detailText(row), /02:45/)
   assert.match(detailText(row), /nesplňuje/)
+  assert.doesNotMatch(detailText(row), /režim osádky/i)
 })
 
 test('dlouhý souvislý odpočinek nedostane denní ani týdenní roli', () => {
@@ -242,6 +250,125 @@ test('neprokázaný a ruční odpočinek dostanou poznámku v detailu', () => {
   ]).find((item) => item.result === 'Běžný denní odpočinek')
   assert.match(detailText(manual!), /Ruční záznam/)
   assert.doesNotMatch(mainText(manual!), /Ruční záznam/)
+})
+
+test('příznak osádky zůstane v datech a nezmění 24hodinové okno', () => {
+  const anchor = Date.parse('2025-02-21T07:39:00.000Z')
+  const restStart = Date.parse('2025-02-21T08:15:00.000Z')
+  const restEnd = Date.parse('2025-02-21T14:11:00.000Z')
+  const manualStart = Date.parse('2025-02-22T04:30:00.000Z')
+  const analysis = analyzeDriverActivities({
+    card: card([
+      activity('avail-1', 'availability', anchor, restStart, { slot: 2, isCrew: true }),
+      activity('rest-5h56', 'rest', restStart, restEnd, { slot: 2, isCrew: true }),
+      activity('avail-2', 'availability', restEnd, Date.parse('2025-02-21T18:09:00.000Z'), { slot: 2, isCrew: true }),
+      activity('out-1', 'rest', Date.parse('2025-02-21T18:09:00.000Z'), Date.parse('2025-02-21T18:10:00.000Z'), { slot: 2, isCrew: false, isManualEntry: true }),
+      activity('between', 'driving', Date.parse('2025-02-21T18:10:00.000Z'), Date.parse('2025-02-22T03:30:00.000Z'), { slot: 1, isCrew: true }),
+      activity('drive', 'driving', Date.parse('2025-02-22T03:30:00.000Z'), manualStart, { slot: 1, isCrew: true }),
+      activity('manual-long', 'rest', manualStart, Date.parse('2025-06-01T12:50:00.000Z'), { slot: 1, isCrew: false, isManualEntry: true }),
+    ]),
+    dailyAnchorUtc: anchor,
+  })
+  assert.equal(analysis.recorded.activities.find((item) => item.id === 'avail-1')?.isCrew, true)
+  assert.equal(analysis.recorded.activities.find((item) => item.id === 'rest-5h56')?.isCrew, true)
+  assert.equal(analysis.recorded.activities.find((item) => item.id === 'avail-2')?.isCrew, true)
+  assert.equal(analysis.recorded.activities.find((item) => item.id === 'drive')?.isCrew, true)
+  assert.equal(analysis.recorded.activities.find((item) => item.id === 'manual-long')?.isCrew, false)
+  assert.equal(analysis.assessed.daily.status, 'assessed')
+  if (analysis.assessed.daily.status !== 'assessed') return
+  const node = analysis.assessed.daily.chain.nodes.find((item) => item.anchorUtc === anchor)
+  assert.equal(node?.status, 'window_unsatisfied')
+  assert.equal(node?.windowStartUtc, anchor)
+  assert.equal(node?.windowEndUtc, Date.parse('2025-02-22T07:39:00.000Z'))
+
+  const overview = buildDailyRestOverview(analysis)
+  assert.equal(overview.status, 'rows')
+  if (overview.status !== 'rows') return
+  const row = overview.rows.find((item) => item.atUtc === anchor)
+  assert.ok(row)
+  assert.equal(row.result, 'Nesplněno podle 24hodinového výpočtu – režim osádky neposouzen.')
+  assert.doesNotMatch(row.result, /Nesplněné 24hodinové období|přestupek|porušení/i)
+  const details = detailText(row)
+  assert.match(details, /Tachograf v tomto období zaznamenal režim osádky/)
+  assert.match(details, /24hodinové období pro jednoho řidiče/)
+  assert.match(details, /Kandidátní 30hodinový výpočet je uveden samostatně/)
+  assert.match(details, /Kandidátní posouzení režimu osádky/)
+  assert.equal(
+    row.details.find((detail) => detail.label === 'Kandidátní posouzení režimu osádky')?.value,
+    'Časová podmínka splněna (rezerva 9 minut). Použitelnost režimu osádky nepotvrzena.',
+  )
+  assert.match(details, /22\.02\.2025 13:39/)
+  assert.match(details, /22\.02\.2025 13:30/)
+  assert.match(details, /rezerva 9 min/)
+  assert.match(details, /nejsou plně vyhodnoceny/)
+  assert.match(details, /nelze kvůli úsekům s vyjmutou kartou spolehlivě potvrdit/)
+  assert.doesNotMatch(details, /souvislý s přihlédnutím k první hodině/)
+  assert.doesNotMatch(details, /právně vyhovující/)
+  assert.match(details, /neprokazuje splnění všech podmínek/)
+  assert.match(details, /07:39/)
+  assert.match(details, /22\.02\.2025 07:39/)
+  const shortRest = row.details.find((detail) => detail.value.includes('08:15') && detail.value.includes('14:11'))
+  assert.ok(shortRest)
+  assert.match(shortRest.value, /5 h 56 min/)
+  assert.match(shortRest.value, /Režim osádky/)
+  const manualRest = row.details.find((detail) => detail.value.includes('04:30') && detail.value.includes('Ruční záznam'))
+  assert.ok(manualRest)
+  assert.doesNotMatch(manualRest.value, /Režim osádky/)
+})
+
+test('souhrn osádky rozliší nesplněnou podmínku, přerušení a nedostatek údajů', () => {
+  const anchor = Date.parse('2026-05-01T06:00:00.000Z')
+  const unmet = crewSummaryOf([
+    activity('initial', 'rest', anchor - 11 * HOUR, anchor),
+    activity('drive', 'driving', anchor, anchor + 20 * HOUR, { isCrew: true }),
+    activity('short', 'rest', anchor + 20 * HOUR, anchor + 24 * HOUR, { isCrew: true }),
+    activity('tail', 'driving', anchor + 24 * HOUR, anchor + 30 * HOUR, { isCrew: true }),
+  ])
+  assert.equal(unmet, 'Časová podmínka nesplněna.')
+
+  const interrupted = crewSummaryOf([
+    activity('initial', 'rest', anchor - 11 * HOUR, anchor),
+    activity('crew', 'driving', anchor, anchor + 3 * HOUR, { isCrew: true }),
+    activity('plain', 'work', anchor + 3 * HOUR, anchor + 4 * HOUR, { isCrew: false }),
+    activity('again', 'driving', anchor + 4 * HOUR, anchor + 12 * HOUR, { isCrew: true }),
+    activity('rest', 'rest', anchor + 12 * HOUR, anchor + 21 * HOUR, { isCrew: true }),
+    activity('after', 'driving', anchor + 21 * HOUR, anchor + 30 * HOUR),
+  ])
+  assert.match(interrupted, /Časová podmínka splněna/)
+  assert.match(interrupted, /Použitelnost režimu osádky nepotvrzena/)
+  assert.match(interrupted, /Záznam režimu osádky přerušen/)
+
+  const missing = crewSummaryOf([
+    activity('initial', 'rest', anchor - 11 * HOUR, anchor),
+    activity('before', 'driving', anchor, anchor + 4 * HOUR, { isCrew: true }),
+    activity('gap', 'unknown', anchor + 4 * HOUR, anchor + 5 * HOUR),
+    activity('after', 'driving', anchor + 5 * HOUR, anchor + 12 * HOUR, { isCrew: true }),
+    activity('rest', 'rest', anchor + 12 * HOUR, anchor + 21 * HOUR, { isCrew: true }),
+  ])
+  assert.match(missing, /Časová podmínka splněna/)
+  assert.match(missing, /Nedostatek údajů k vyhodnocení/)
+
+  const both = crewSummaryOf([
+    activity('initial', 'rest', anchor - 11 * HOUR, anchor),
+    activity('crew', 'driving', anchor, anchor + 3 * HOUR, { isCrew: true }),
+    activity('plain', 'work', anchor + 3 * HOUR, anchor + 4 * HOUR, { isCrew: false }),
+    activity('later', 'driving', anchor + 4 * HOUR, anchor + 22 * HOUR, { isCrew: true }),
+    activity('short', 'rest', anchor + 22 * HOUR, anchor + 26 * HOUR, { isCrew: true }),
+  ])
+  assert.match(both, /Časová podmínka nesplněna/)
+  assert.match(both, /Záznam režimu osádky přerušen/)
+  const bothRow = rowsOf([
+    activity('initial', 'rest', anchor - 11 * HOUR, anchor),
+    activity('crew', 'driving', anchor, anchor + 3 * HOUR, { isCrew: true }),
+    activity('plain', 'work', anchor + 3 * HOUR, anchor + 4 * HOUR, { isCrew: false }),
+    activity('later', 'driving', anchor + 4 * HOUR, anchor + 22 * HOUR, { isCrew: true }),
+    activity('short', 'rest', anchor + 22 * HOUR, anchor + 26 * HOUR, { isCrew: true }),
+  ]).find((item) => item.atUtc === anchor)
+  assert.ok(bothRow)
+  const bothDetail = detailText(bothRow)
+  assert.match(bothDetail, /Nesplněna/)
+  assert.match(bothDetail, /doložené přerušení záznamu režimu osádky/)
+  assert.equal(bothRow.tone, 'daily')
 })
 
 test('bez kotvy se místo tabulky vysvětlí, proč přehled chybí', () => {
