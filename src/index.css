@@ -645,6 +645,53 @@ body {
   border-bottom: none;
 }
 
+.diagnostic-rest-mark {
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  margin-right: 0.45rem;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+.diagnostic-attention {
+  color: #d97706;
+}
+
+.diagnostic-detail-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #334155;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.diagnostic-table-detail td {
+  background: #f8fafc;
+}
+
+.diagnostic-detail-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.diagnostic-detail-list div {
+  display: grid;
+  grid-template-columns: minmax(9rem, 14rem) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.diagnostic-detail-list dt {
+  color: #475569;
+}
+
+.diagnostic-detail-list dd {
+  margin: 0;
+}
+
 .graph-empty {
   display: flex;
   flex-direction: column;
