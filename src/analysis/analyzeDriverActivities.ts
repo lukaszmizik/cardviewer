@@ -2,6 +2,7 @@ import type { Activity, DriverCardData } from '../types/tacho.ts'
 import { buildDailyRestChain, type DailyRestChain, type UnrecordedInterval } from './dailyRestChain.ts'
 import { classifyRestCandidates, type RestCandidate } from './restCandidates.ts'
 import { findRestIntervals, type RestInterval } from './restIntervals.ts'
+import { buildWeeklyRestAssignment, type WeeklyAutomaticAssignment } from './weeklyRestAssignment.ts'
 import {
   assessWeeklyRests,
   classifyWeeklyRestCandidates,
@@ -57,6 +58,8 @@ export type ActivityAnalysis = {
     weekly: WeeklyAnalysis
   }
   notEvaluated: Array<{ topic: NotEvaluatedTopic; status: 'not_evaluated' }>
+  /** Automatické návaznosti. Nevyžadují ruční výběr ani denní kotvu a nejsou právní potvrzení. */
+  weeklyAssignment: WeeklyAutomaticAssignment
 }
 
 export type ActivityAnalysisRequest = {
@@ -87,6 +90,7 @@ export function analyzeDriverActivities(request: ActivityAnalysisRequest): Activ
   const restIntervals = findRestIntervals(activities)
   const restCandidates = classifyRestCandidates(restIntervals)
   const weeklyRestCandidates = classifyWeeklyRestCandidates(restCandidates)
+  const weeklyAssignment = buildWeeklyRestAssignment({ candidates: weeklyRestCandidates, unknownIntervals })
   const anchorUtc = request.dailyAnchorUtc
   const daily: DailyAnalysis =
     typeof anchorUtc === 'number' && Number.isFinite(anchorUtc)
@@ -113,6 +117,7 @@ export function analyzeDriverActivities(request: ActivityAnalysisRequest): Activ
       ),
     },
     notEvaluated: NOT_EVALUATED.map((item) => ({ ...item })),
+    weeklyAssignment,
   }
 }
 

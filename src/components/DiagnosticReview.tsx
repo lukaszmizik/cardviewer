@@ -9,6 +9,7 @@ import {
   type PeriodBlocker,
   type PeriodDiagnostic,
 } from '../analysis/diagnosticCases.ts'
+import type { WeeklyAutomaticAssignment } from '../analysis/weeklyRestAssignment.ts'
 import type { DriverCardData } from '../types/tacho.ts'
 
 const STATUS_LABEL: Record<DiagnosticStatus, string> = {
@@ -58,7 +59,11 @@ export function DiagnosticReview({ card }: DiagnosticReviewProps) {
             spellCheck={false}
           />
         </label>
-        <button type="button" onClick={() => downloadCases(cases, periods, notes)} disabled={cases.length === 0}>
+        <button
+          type="button"
+          onClick={() => downloadCases(cases, periods, notes, analysis?.weeklyAssignment ?? null)}
+          disabled={cases.length === 0}
+        >
           Exportovat JSON
         </button>
       </div>
@@ -66,6 +71,7 @@ export function DiagnosticReview({ card }: DiagnosticReviewProps) {
       <p className="diagnostic-hint">
         Délka odpočinku není právně potvrzený odpočinek. Přestupky se zde nevytvářejí.
       </p>
+      {analysis != null ? <WeeklyOverview assignment={analysis.weeklyAssignment} /> : null}
       <h3>Konkrétní odpočinky a období</h3>
       <ol className="diagnostic-list">
         {periods.map((item) => (
@@ -132,12 +138,37 @@ function formatInterval(item: Pick<DiagnosticCase, 'startUtc' | 'endUtc'>): stri
   return `${new Date(item.startUtc).toISOString()} – ${new Date(item.endUtc).toISOString()}`
 }
 
+function WeeklyOverview({ assignment }: { assignment: WeeklyAutomaticAssignment }) {
+  const suggested = assignment.recommendation.status === 'suggested' ? assignment.recommendation.nodeIds : []
+  const branches = assignment.nodes.filter((node) => node.nextOnTime.length > 1)
+  return (
+    <section className="diagnostic-review">
+      <h3>Týdenní odpočinky</h3>
+      <p>
+        {assignment.recommendation.status === 'suggested' ? 'Doporučení k zobrazení' : 'Nerozhodnuto'}: {assignment.recommendation.reason}
+      </p>
+      <p>
+        Kandidátů {assignment.nodes.length}, začátků bez předchozí návaznosti {assignment.rootIds.length}, kroků s více
+        včasnými pokračováními {branches.length}. Právní závěr to není.
+      </p>
+      {suggested.length > 0 ? (
+        <p>
+          Konce doporučené větve:{' '}
+          {assignment.suggestedBoundaryEndsUtc.slice(0, 8).map((utc) => new Date(utc).toISOString()).join(', ')}
+          {assignment.suggestedBoundaryEndsUtc.length > 8 ? ` a dalších ${assignment.suggestedBoundaryEndsUtc.length - 8}` : ''}
+        </p>
+      ) : null}
+    </section>
+  )
+}
+
 function downloadCases(
   cases: readonly DiagnosticCase[],
   periods: readonly PeriodDiagnostic[],
   notes: Readonly<Record<string, string>>,
+  weeklyAssignment: WeeklyAutomaticAssignment | null,
 ): void {
-  const payload = buildDiagnosticExport(cases, periods, notes, new Date().toISOString())
+  const payload = buildDiagnosticExport(cases, periods, notes, new Date().toISOString(), weeklyAssignment)
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')

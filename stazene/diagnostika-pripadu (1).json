@@ -1,0 +1,231 @@
+{
+  "schemaVersion": "2",
+  "exportedAtUtc": "2026-11-05T20:28:59.159Z",
+  "projectStatus": {
+    "schemaVersion": "2",
+    "modules": [
+      "restIntervals",
+      "restCandidates",
+      "restWindowIntersection",
+      "dailyRestOptions",
+      "dailyRestChain",
+      "weeklyRest",
+      "analyzeDriverActivities"
+    ],
+    "limitations": [
+      "Denní okna se počítají jen z explicitní kotvy.",
+      "Týdenní použití se posuzuje jen z explicitního výběru a WeekClock.",
+      "Více délkových hranic jednoho odpočinku není více právních interpretací.",
+      "Neznámý úsek se nedoplňuje odpočinkem.",
+      "Přestupky, dvě po sobě jdoucí týdny, mezinárodní režim a čerpání kompenzace nejsou implementované."
+    ],
+    "unresolvedCaseIds": [
+      "insufficient:daily-anchor",
+      "insufficient:weekly-selection",
+      "insufficient:unknown:gap-1330:1774224000000",
+      "insufficient:unknown:act-1524:1785690000000",
+      "not-implemented:infringements",
+      "not-implemented:consecutive_weeks",
+      "not-implemented:international_regime",
+      "not-implemented:compensation_taken",
+      "period:missing-daily-anchor",
+      "period:missing-weekly-selection",
+      "period:unknown:gap-1330:1774224000000",
+      "period:unknown:act-1524:1785690000000"
+    ]
+  },
+  "cases": [
+    {
+      "id": "recorded:activity-span",
+      "status": "recorded_fact",
+      "startUtc": 1722124800000,
+      "endUtc": 1785715200000,
+      "sourceActivityIds": [],
+      "module": "analyzeDriverActivities",
+      "summary": "Zaznamenáno 1526 aktivit v původní časové ose.",
+      "reason": "Počty a časy pocházejí z aktivit karty, ne z oříznutého grafu.",
+      "needed": "Pro denní návaznost zadat explicitní kotvu.",
+      "note": ""
+    },
+    {
+      "id": "recorded:length-classes",
+      "status": "recorded_fact",
+      "startUtc": 1722124800000,
+      "endUtc": 1785673920000,
+      "sourceActivityIds": [],
+      "module": "restCandidates",
+      "summary": "222 souvislých odpočinků, z toho 27 s týdenní délkou (25 alespoň 45 h, 2 alespoň 24 h a méně než 45 h).",
+      "reason": "Jde o délkovou způsobilost, ne o právně potvrzený odpočinek. Ruční záznam není chyba.",
+      "needed": "Týdenní roli vybrat explicitně. Samotná délka ji nepřiřazuje.",
+      "note": ""
+    },
+    {
+      "id": "insufficient:daily-anchor",
+      "status": "insufficient_data",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "dailyRestChain",
+      "summary": "Denní návaznost nemá kotvu.",
+      "reason": "Počátek 24hodinového okna se z prvního záznamu karty neodvozuje.",
+      "needed": "Zadat skutečný konec předchozího denního nebo týdenního odpočinku v UTC.",
+      "note": ""
+    },
+    {
+      "id": "insufficient:weekly-selection",
+      "status": "insufficient_data",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "weeklyRest",
+      "summary": "Týdenní odpočinek není vybraný.",
+      "reason": "Délková způsobilost není právní použití odpočinku jako týdenního.",
+      "needed": "Explicitně vybrat odpočinky a jejich týden.",
+      "note": ""
+    },
+    {
+      "id": "insufficient:unknown:gap-1330:1774224000000",
+      "status": "insufficient_data",
+      "startUtc": 1774224000000,
+      "endUtc": 1776816000000,
+      "sourceActivityIds": [
+        "gap-1330"
+      ],
+      "module": "restIntervals",
+      "summary": "Neznámý úsek není odpočinek.",
+      "reason": "Chybějící záznam se nedoplňuje domnělým odpočinkem a nepřemosťuje se.",
+      "needed": "Doplnit zdrojový záznam, nebo úsek ponechat jako neznámý.",
+      "note": ""
+    },
+    {
+      "id": "insufficient:unknown:act-1524:1785690000000",
+      "status": "insufficient_data",
+      "startUtc": 1785690000000,
+      "endUtc": 1785715200000,
+      "sourceActivityIds": [
+        "act-1524"
+      ],
+      "module": "restIntervals",
+      "summary": "Neznámý úsek není odpočinek.",
+      "reason": "Chybějící záznam se nedoplňuje domnělým odpočinkem a nepřemosťuje se.",
+      "needed": "Doplnit zdrojový záznam, nebo úsek ponechat jako neznámý.",
+      "note": ""
+    },
+    {
+      "id": "not-implemented:infringements",
+      "status": "not_implemented",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "analyzeDriverActivities",
+      "summary": "Přestupky se nevyhodnocují.",
+      "reason": "Jádro eviduje údaje a varianty. Právní nález nevytváří.",
+      "needed": "Samostatná vrstva nálezů, až budou pravidla dokončená.",
+      "note": ""
+    },
+    {
+      "id": "not-implemented:consecutive_weeks",
+      "status": "not_implemented",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "analyzeDriverActivities",
+      "summary": "Pravidlo dvou po sobě jdoucích týdnů není implementováno.",
+      "reason": "Týdenní modul tuto kontrolu záměrně nechává jako not_evaluated.",
+      "needed": "Doplnit pravidlo dvou týdnů až po explicitním výběru odpočinků.",
+      "note": ""
+    },
+    {
+      "id": "not-implemented:international_regime",
+      "status": "not_implemented",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "analyzeDriverActivities",
+      "summary": "Zvláštní režim mezinárodní nákladní dopravy není implementován.",
+      "reason": "Karta sama neprokazuje dopravu mimo stát usazení.",
+      "needed": "Výslovně zadat režim a doplnit čtyřtýdenní podmínku.",
+      "note": ""
+    },
+    {
+      "id": "not-implemented:compensation_taken",
+      "status": "not_implemented",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "module": "analyzeDriverActivities",
+      "summary": "Čerpání kompenzace zkráceného týdenního odpočinku není implementováno.",
+      "reason": "Deficit se smí jen evidovat. K jinému odpočinku se nepřiřazuje.",
+      "needed": "Pozdější modul, který kompenzaci teprve spáruje.",
+      "note": ""
+    }
+  ],
+  "periods": [
+    {
+      "id": "period:missing-daily-anchor",
+      "blocker": "missing_input",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "established": [
+        "Spočteno 222 souvislých odpočinků.",
+        "Týdenní délkovou třídu má 27 odpočinků."
+      ],
+      "variants": [],
+      "blockedBy": "Bez kotvy se findDailyRestOptions ani denní návaznost nevolají. Konkrétní sporná okna proto ve výstupu nejsou.",
+      "nextStep": "Zadat UTC konec předchozího denního nebo týdenního odpočinku a export opakovat.",
+      "module": "dailyRestChain",
+      "note": ""
+    },
+    {
+      "id": "period:missing-weekly-selection",
+      "blocker": "missing_input",
+      "startUtc": null,
+      "endUtc": null,
+      "sourceActivityIds": [],
+      "established": [
+        "Délková třída regular: 25. Délková třída reduced: 2.",
+        "Třída popisuje jen délku. Právní použití jako týdenní odpočinek z ní nevzniká."
+      ],
+      "variants": [],
+      "blockedBy": "Chybí weekly_selection. Konkrétní týdenní přiřazení se nevymýšlí.",
+      "nextStep": "Vybrat kandidáty z této karty, zadat weekId a WeekClock.",
+      "module": "weeklyRest",
+      "note": ""
+    },
+    {
+      "id": "period:unknown:gap-1330:1774224000000",
+      "blocker": "source_uncertainty",
+      "startUtc": 1774224000000,
+      "endUtc": 1776816000000,
+      "sourceActivityIds": [
+        "gap-1330"
+      ],
+      "established": [
+        "V původních aktivitách je druh unknown. Odpočinek z něj nevznikl."
+      ],
+      "variants": [],
+      "blockedBy": "Neznámý úsek přerušuje možnost spolehlivé návaznosti.",
+      "nextStep": "Doplnit činnost v tomto intervalu, nebo ho ponechat jako neznámý.",
+      "module": "restIntervals",
+      "note": ""
+    },
+    {
+      "id": "period:unknown:act-1524:1785690000000",
+      "blocker": "source_uncertainty",
+      "startUtc": 1785690000000,
+      "endUtc": 1785715200000,
+      "sourceActivityIds": [
+        "act-1524"
+      ],
+      "established": [
+        "V původních aktivitách je druh unknown. Odpočinek z něj nevznikl."
+      ],
+      "variants": [],
+      "blockedBy": "Neznámý úsek přerušuje možnost spolehlivé návaznosti.",
+      "nextStep": "Doplnit činnost v tomto intervalu, nebo ho ponechat jako neznámý.",
+      "module": "restIntervals",
+      "note": ""
+    }
+  ]
+}

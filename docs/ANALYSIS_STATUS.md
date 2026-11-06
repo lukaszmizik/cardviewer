@@ -10,6 +10,7 @@ Dokument popisuje, co umí výpočty v `src/analysis` k datu poslední úpravy d
 - `dailyRestOptions.ts` vrací délkové varianty denního odpočinku v jednom okně a žádnou nevolí.
 - `dailyRestChain.ts` navazuje 24hodinová období od explicitní kotvy. Další kotva je skutečný konec odpočinku.
 - `weeklyRest.ts` klasifikuje týdenní délku a posoudí jen explicitně vybrané odpočinky.
+- `weeklyRestAssignment.ts` z těchto kandidátů staví graf včasných a pozdních návazností. Doporučená větev není právní potvrzení.
 - `analyzeDriverActivities.ts` složí tyto kroky z původních `DriverCardData.activities`.
 - `diagnosticCases.ts` z výsledku vybere souhrnné případy a konkrétní odpočinky nebo období. Export má schéma verze 2.
 
@@ -27,7 +28,7 @@ Délková třída `regular` a `reduced` není stav `recorded_fact` ve smyslu pr�
 ## Známá omezení
 
 - Denní návaznost se spustí jen po zadání kotvy v UTC. První záznam karty kotvou není.
-- Týdenní posouzení se spustí jen po explicitním výběru odpočinků a dodání kalendáře týdnů. Rozhraní výběr zatím nezadává, proto panel ukazuje chybějící výběr.
+- Automatický graf týdenních návazností se počítá bez ruční kotvy. Týden je pondělí 00:00 UTC, protože místní čas tachografu karta neobsahuje. Ruční posouzení dál vyžaduje výběr a WeekClock.
 - Odpočinek přes dva týdny patří jen jednomu z nich. Výběr týdne dělá volající, ne automat.
 - Čítač zkrácených denních odpočinků se uzavře jen mezi dvěma použitelnými týdenními předěly a úplnou denní návazností.
 - Ruční odpočinek zůstává zaznamenaným odpočinkem.

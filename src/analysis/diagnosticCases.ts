@@ -1,5 +1,6 @@
 import type { ActivityAnalysis, NotEvaluatedTopic } from './analyzeDriverActivities.ts'
 import type { DailyChainNode } from './dailyRestChain.ts'
+import type { WeeklyAutomaticAssignment } from './weeklyRestAssignment.ts'
 import type { WeeklySelectionReport } from './weeklyRest.ts'
 
 export type DiagnosticStatus =
@@ -50,6 +51,7 @@ export type DiagnosticExport = {
   projectStatus: DiagnosticProjectStatus
   cases: Array<DiagnosticCase & { note: string }>
   periods: Array<PeriodDiagnostic & { note: string }>
+  weeklyAssignment: WeeklyAutomaticAssignment | null
 }
 
 const MODULES = [
@@ -59,12 +61,13 @@ const MODULES = [
   'dailyRestOptions',
   'dailyRestChain',
   'weeklyRest',
+  'weeklyRestAssignment',
   'analyzeDriverActivities',
 ]
 
 const LIMITATIONS = [
   'Denní okna se počítají jen z explicitní kotvy.',
-  'Týdenní použití se posuzuje jen z explicitního výběru a WeekClock.',
+  'Automatický graf týdenních návazností není právní potvrzení. Ruční větev dál vyžaduje výběr a WeekClock.',
   'Více délkových hranic jednoho odpočinku není více právních interpretací.',
   'Neznámý úsek se nedoplňuje odpočinkem.',
   'Přestupky, dvě po sobě jdoucí týdny, mezinárodní režim a čerpání kompenzace nejsou implementované.',
@@ -118,6 +121,7 @@ export function derivePeriodDiagnostics(analysis: ActivityAnalysis): PeriodDiagn
   pushConcreteWeeklyPeriods(analysis, periods)
   pushUnknownPeriods(analysis, periods)
   pushAmbiguousPeriods(analysis, periods)
+  pushAutomaticWeeklyPeriods(analysis, periods)
   return periods
 }
 
@@ -126,6 +130,7 @@ export function buildDiagnosticExport(
   periods: readonly PeriodDiagnostic[],
   notes: Readonly<Record<string, string>>,
   exportedAtUtc: string,
+  weeklyAssignment: WeeklyAutomaticAssignment | null = null,
 ): DiagnosticExport {
   const withNotes = <T extends { id: string; sourceActivityIds: string[] }>(item: T) => ({
     ...item,
@@ -148,6 +153,7 @@ export function buildDiagnosticExport(
     },
     cases: exportedCases,
     periods: exportedPeriods,
+    weeklyAssignment,
   }
 }
 
@@ -185,8 +191,8 @@ function pushMissingWeeklyPeriods(analysis: ActivityAnalysis, periods: PeriodDia
       'Třída popisuje jen délku. Právní použití jako týdenní odpočinek z ní nevzniká.',
     ],
     variants: [],
-    blockedBy: `Chybí ${analysis.assessed.weekly.missing.join(', ')}. Konkrétní týdenní přiřazení se nevymýšlí.`,
-    nextStep: 'Vybrat kandidáty z této karty, zadat weekId a WeekClock.',
+    blockedBy: `Ruční výběr pro potvrzenou větev chybí (${analysis.assessed.weekly.missing.join(', ')}). Automatický graf návazností je samostatně a není právní potvrzení.`,
+    nextStep: 'Porovnat automatické návaznosti. Ruční výběr a WeekClock zadat, teprve když má kontrolor rozhodnout.',
     module: 'weeklyRest',
   })
 }
@@ -320,6 +326,73 @@ function weeklySelectionPeriod(item: WeeklySelectionReport): PeriodDiagnostic {
           : 'Návaznost od předchozího týdenního konce nelze potvrdit.',
     nextStep: 'Opravit výběr týdne nebo doplnit chybějící záznam a export opakovat.',
     module: 'weeklyRest',
+  }
+}
+
+function pushAutomaticWeeklyPeriods(analysis: ActivityAnalysis, periods: PeriodDiagnostic[]): void {
+  const assignment = analysis.weeklyAssignment
+  if (assignment.nodes.length === 0) return
+  const branches = assignment.nodes.filter((node) => node.nextOnTime.length > 1)
+  const twoWeeks = assignment.nodes.filter((node) => node.weekChoice === 'needs_controller')
+  const shownIds =
+    assignment.recommendation.status === 'suggested' ? assignment.recommendation.nodeIds.slice(0, LIST_LIMIT) : []
+  periods.push({
+    id: 'period:weekly-assignment',
+    blocker: assignment.recommendation.status === 'undecided' ? 'multiple_interpretations' : 'missing_input',
+    startUtc: assignment.nodes[0]?.startUtc ?? null,
+    endUtc: assignment.nodes[assignment.nodes.length - 1]?.endUtc ?? null,
+    sourceActivityIds: uniqueIds(assignment.nodes.flatMap((node) => node.sourceActivityIds)),
+    established: [
+      `Týdenních délkových kandidátů v grafu: ${assignment.nodes.length}.`,
+      'Hranice týdne je pondělí 00:00 UTC. Místní čas tachografu z karty nelze zjistit.',
+      assignment.recommendation.reason,
+      shownIds.length > 0 && assignment.recommendation.status === 'suggested' && assignment.recommendation.nodeIds.length > shownIds.length
+        ? `Výpis doporučené větve ukazuje ${shownIds.length} z ${assignment.recommendation.nodeIds.length} uzlů. Graf obsahuje všechny.`
+        : 'Graf obsahuje všechny včasné i pozdní návaznosti. Cesty se násobně nesestavují.',
+    ],
+    variants:
+      assignment.recommendation.status === 'suggested'
+        ? shownIds.map((id) => `zobrazení ${id}`)
+        : branches.slice(0, LIST_LIMIT).map(
+            (node) =>
+              `od ${node.sourceActivityIds.join('+')}: ${node.nextOnTime.map((link) => link.toId).join(', ')}`,
+          ),
+    blockedBy:
+      'Doporučení algoritmu není právní závěr. Dvě po sobě jdoucí týdny, kompenzace a mezinárodní režim zůstávají nevyhodnocené.',
+    nextStep:
+      assignment.recommendation.status === 'suggested'
+        ? 'Kontrolor doporučenou větev potvrdí, nebo z grafu vybere jinou návaznost.'
+        : 'Kontrolor vybere, který odpočinek je v daném kroku týdenní.',
+    module: 'weeklyRestAssignment',
+  })
+
+  for (const node of twoWeeks.slice(0, LIST_LIMIT)) {
+    periods.push({
+      id: `period:weekly-week:${node.startUtc}`,
+      blocker: 'multiple_interpretations',
+      startUtc: node.startUtc,
+      endUtc: node.endUtc,
+      sourceActivityIds: [...node.sourceActivityIds],
+      established: [`Délková třída ${node.lengthClass}. Jeden odpočinek se nezapočítá do obou týdnů.`],
+      variants: node.possibleWeeks.map((week) => `${week.attachment} ${week.weekId}`),
+      blockedBy: 'Odpočinek zasahuje do dvou kalendářních týdnů. Přiřazení jednomu z nich není vybrané.',
+      nextStep: 'Kontrolor určí, ke kterému týdnu se tento odpočinek vztahuje.',
+      module: 'weeklyRestAssignment',
+    })
+  }
+  if (twoWeeks.length > LIST_LIMIT) {
+    periods.push({
+      id: 'period:weekly-week-summary',
+      blocker: 'multiple_interpretations',
+      startUtc: null,
+      endUtc: null,
+      sourceActivityIds: [],
+      established: [`Odpočinků ve dvou týdnech: ${twoWeeks.length}.`],
+      variants: [],
+      blockedBy: `Dalších ${twoWeeks.length - LIST_LIMIT} odpočinků přes dva týdny je ve grafu a ve výpisu se nezobrazuje.`,
+      nextStep: 'Projít zbývající uzly s weekChoice needs_controller v exportu.',
+      module: 'weeklyRestAssignment',
+    })
   }
 }
 
