@@ -1493,17 +1493,6 @@ body {
   opacity: 0.55;
 }
 
-.day-driving-more {
-  margin-top: 4px;
-}
-
-.day-driving-more summary {
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1.35;
-  color: #64748b;
-}
-
 .work-week-graph-table-wrapper {
   margin: 12px 0;
   font-size: 12px;

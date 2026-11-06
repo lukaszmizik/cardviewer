@@ -204,12 +204,7 @@ function DayDrivingTable({ days, dayStartUtc, dayEndUtc, clockMode }: { days: Da
             ) : (
               <p className={row.presentation === 'note' ? 'day-driving-note' : 'day-driving-primary'}>{row.primary}</p>
             )}
-            {row.detail != null ? (
-              <details className="day-driving-more">
-                <summary>Podrobnosti</summary>
-                <p className="day-driving-detail">{row.detail}</p>
-              </details>
-            ) : null}
+            {row.detail != null ? <p className="day-driving-detail">{row.detail}</p> : null}
           </div>
         </div>
       ))}
