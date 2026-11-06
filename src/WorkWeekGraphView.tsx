@@ -58,7 +58,7 @@ import {
 } from './lib/graphGeometry'
 import { TimeScaleSelect } from './components/TimeScaleSelect'
 import { CardInfoTable } from './components/CardInfoTable'
-import { buildDayDrivingRows, type DayDrivingActivity } from './components/dayDrivingTable'
+import { buildDayDrivingRows, type DayDrivingActivity, type DayDrivingTone, type ExtensionSlot } from './components/dayDrivingTable'
 import { CardHistoryTables } from './components/CardHistoryTables'
 import { bestDailyDistance, type DailyDistanceRecord } from './utils/weekDistance'
 import { GraphStage } from './components/GraphStage'
@@ -179,18 +179,92 @@ function DayDrivingTable({ days, dayStartUtc, dayEndUtc, clockMode }: { days: Da
   })))
   const rows = buildDayDrivingRows({ activities, dayStartUtc, dayEndUtc, clockMode })
   return (
-    <div className="work-week-graph-table-wrapper">
-      <table className="work-week-graph-table">
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.label}>
-              <th scope="row">{row.label}</th>
-              <td>{row.value}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <section className="day-driving-panel" aria-label="Hodnocení řízení">
+      {rows.map((row, index) => (
+        <div className="day-driving-row" key={`${row.label}:${index}`} data-rule={row.rule ?? undefined}>
+          <div className="day-driving-label">{row.label}</div>
+          <div className="day-driving-body">
+            {row.presentation === 'extensions' && row.tone != null ? (
+              <p className={`day-driving-status day-driving-status-${row.tone}`}>
+                <span className="day-driving-clocks">
+                  {(row.extensionSlots ?? []).map((slot, slotIndex) => (
+                    <ClockIcon key={slotIndex} slot={slot} />
+                  ))}
+                </span>
+                <span>{row.primary}</span>
+              </p>
+            ) : row.presentation === 'status' && row.tone != null ? (
+              <>
+                {row.statusText != null && row.statusText !== row.primary ? <p className="day-driving-primary">{row.primary}</p> : null}
+                <p className={`day-driving-status day-driving-status-${row.tone}`}>
+                  <StatusIcon tone={row.tone} />
+                  <span>{row.statusText ?? row.primary}</span>
+                </p>
+              </>
+            ) : (
+              <p className={row.presentation === 'note' ? 'day-driving-note' : 'day-driving-primary'}>{row.primary}</p>
+            )}
+            {row.detail != null ? (
+              <details className="day-driving-more">
+                <summary>Podrobnosti</summary>
+                <p className="day-driving-detail">{row.detail}</p>
+              </details>
+            ) : null}
+          </div>
+        </div>
+      ))}
+    </section>
+  )
+}
+
+function ClockIcon({ slot }: { slot: ExtensionSlot }) {
+  return (
+    <svg className={`day-driving-clock day-driving-clock-${slot}`} viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeDasharray={slot === 'unknown' ? '2 2' : undefined} />
+      <path d="M8 4.7V8.1L10.3 9.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function StatusIcon({ tone }: { tone: DayDrivingTone }) {
+  if (tone === 'clear') {
+    return (
+      <svg className="day-driving-status-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M3.5 8.2 6.4 11.1 12.5 4.8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )
+  }
+  if (tone === 'caution') {
+    return (
+      <svg className="day-driving-status-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 2.2 14.2 13.2H1.8L8 2.2Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+        <path d="M8 6.2v3.3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        <circle cx="8" cy="11.4" r="0.7" fill="currentColor" />
+      </svg>
+    )
+  }
+  if (tone === 'exceeded') {
+    return (
+      <svg className="day-driving-status-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" />
+        <path d="M8 4.8v3.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        <circle cx="8" cy="10.8" r="0.7" fill="currentColor" />
+      </svg>
+    )
+  }
+  if (tone === 'neutral') {
+    return (
+      <svg className="day-driving-status-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" />
+        <circle cx="8" cy="8" r="1.2" fill="currentColor" />
+      </svg>
+    )
+  }
+  return (
+    <svg className="day-driving-status-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M5.4 8h5.2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
   )
 }
 

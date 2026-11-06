@@ -1367,6 +1367,143 @@ body {
   color: #222;
 }
 
+.day-driving-panel {
+  margin: 12px 0 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: transparent;
+}
+
+.day-driving-row {
+  display: grid;
+  grid-template-columns: minmax(10rem, 16.5rem) minmax(0, 1fr);
+  gap: 4px 16px;
+  align-items: center;
+  padding: 9px 14px;
+}
+
+.day-driving-row + .day-driving-row {
+  border-top: 1px solid #eef2f6;
+}
+
+.day-driving-label {
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 500;
+  color: #64748b;
+}
+
+.day-driving-body {
+  min-width: 0;
+}
+
+.day-driving-primary,
+.day-driving-note,
+.day-driving-detail,
+.day-driving-status {
+  margin: 0;
+}
+
+.day-driving-primary {
+  font-size: 15px;
+  line-height: 1.3;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+
+.day-driving-note {
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 600;
+  color: #334155;
+}
+
+.day-driving-detail {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #64748b;
+}
+
+.day-driving-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 9px 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.day-driving-status-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+
+.day-driving-status-clear {
+  color: #166534;
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.day-driving-status-caution {
+  color: #9a3412;
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.day-driving-status-exceeded {
+  color: #991b1b;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.day-driving-status-undecided {
+  color: #475569;
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+.day-driving-status-neutral {
+  color: #1e293b;
+  background: transparent;
+  border-color: #cbd5e1;
+}
+
+.day-driving-clocks {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.day-driving-clock {
+  width: 16px;
+  height: 16px;
+}
+
+.day-driving-clock-available {
+  opacity: 0.4;
+}
+
+.day-driving-clock-unknown {
+  opacity: 0.55;
+}
+
+.day-driving-more {
+  margin-top: 4px;
+}
+
+.day-driving-more summary {
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #64748b;
+}
+
 .work-week-graph-table-wrapper {
   margin: 12px 0;
   font-size: 12px;
@@ -1969,6 +2106,12 @@ body {
 
   .work-week-graph-legend-label {
     font-size: 13px;
+  }
+
+  .day-driving-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+    padding: 8px 12px;
   }
 
   .work-week-graph-table td:first-child,
