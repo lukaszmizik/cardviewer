@@ -487,7 +487,7 @@ function crewSummary(candidate: CrewDailyCandidate): string {
 
 function crewDataMissing(candidate: CrewDailyCandidate): boolean {
   if (candidate.recording === 'insufficient_data' || candidate.uncertainties.includes('unknown_in_period')) return true
-  return candidate.crewRecord === 'crew_record_unknown' && candidate.nineHourCondition !== 'met'
+  return candidate.crewRecord === 'crew_record_uncertain' && candidate.nineHourCondition !== 'met'
 }
 
 function reserveLength(durationMs: number): string {
@@ -504,6 +504,10 @@ function crewRecordSentence(candidate: CrewDailyCandidate, activities: readonly 
   if (candidate.crewRecord === 'crew_record_consistent') return 'Dostupný záznam příznaku osádky je v pracovním úseku souvislý s přihlédnutím k první hodině.'
   if (candidate.crewRecord === 'crew_record_interrupted') return 'V pracovním úseku je doložené přerušení záznamu režimu osádky.'
   if (cardRemovedInWork(candidate, activities)) return 'Průběh příznaku osádky nelze kvůli úsekům s vyjmutou kartou spolehlivě potvrdit.'
+  if (candidate.crewRecord === 'crew_record_uncertain') {
+    const intervals = candidate.uncertainIntervals.map((interval) => intervalLabel(interval.startUtc, interval.endUtc)).join('; ')
+    return `Průběh osádky v těchto úsecích není prokázaný ani vyvrácený: ${intervals}.`
+  }
   return 'Údaje nestačí ke spolehlivému určení průběhu záznamu osádky.'
 }
 

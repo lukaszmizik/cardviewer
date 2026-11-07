@@ -1,6 +1,7 @@
 import { analyzeDriverActivities } from '../analysis/analyzeDriverActivities.ts'
 import { assessConsecutiveWeeks, type ConsecutiveWeekPeriod } from '../analysis/consecutiveWeeks.ts'
 import { assessDailyDrivingTime, assessWeeklyDrivingExtensions, utcWeekStart, WEEKLY_EXTENSION_LIMIT, type DailyDrivingPeriod } from '../analysis/dailyDrivingTime.ts'
+import type { CrewIntervalConfirmation } from '../analysis/crewDailyRest.ts'
 import { buildDailyRestChain, type DailyChainNode } from '../analysis/dailyRestChain.ts'
 import { buildDiagnosticExport, deriveDiagnosticCases, derivePeriodDiagnostics } from '../analysis/diagnosticCases.ts'
 import { assessDrivingBreaks, DRIVING_LIMIT_MS, type CrewBreakConfirmation, type DrivingBreakPeriod } from '../analysis/drivingBreaks.ts'
@@ -40,6 +41,13 @@ export type ComplianceFinding = {
   meterOver: boolean
   /** Intervaly pohotovosti, které lze v této relaci potvrdit nebo jejichž potvrzení lze zrušit. */
   crewBreakIntervals?: ComplianceCrewInterval[]
+  /** Nejisté úseky, které lze potvrdit jednotlivě. Přestávky se jím neuznávají. */
+  crewWindowConfirmation?: {
+    windowStartUtc: number
+    /** Všechny úseky tohoto okna jsou potvrzené a 30 h se proto použilo. */
+    confirmed: boolean
+    intervals: { startUtc: number; endUtc: number; intervalText: string; durationText: string }[]
+  }
 }
 
 export type ComplianceCrewInterval = {
@@ -124,6 +132,8 @@ export function buildComplianceReview(input: {
   period?: CompliancePeriodRequest
   /** Potvrzení pohotovosti v osádce. Jen pro přestávky a jen pro toto volání. */
   confirmedCrewBreaks?: readonly CrewBreakConfirmation[]
+  /** Potvrzení nejistých úseků denního okna. Jen pro toto volání, bez uložení. */
+  confirmedCrewWindows?: readonly CrewIntervalConfirmation[]
 }): ComplianceReview {
   const clockMode = input.clockMode ?? 'local'
   const todayStart = dayStartMs(input.nowUtc, clockMode)
@@ -136,7 +146,7 @@ export function buildComplianceReview(input: {
   const record = recordSpan(activities)
   const coveredThrough = Math.min(input.nowUtc, periodEndUtc)
   const dataComplete = days.length > 0 && record != null && record.startUtc <= periodStartUtc && record.endUtc >= coveredThrough && !hasUnknown(activities, periodStartUtc, periodEndUtc)
-  const prepared = prepare(activities, input.confirmedCrewBreaks ?? [])
+  const prepared = prepare(activities, input.confirmedCrewBreaks ?? [], input.confirmedCrewWindows ?? [], input.activities)
   const findings: ComplianceFinding[] = []
   const weekDriving = weekDrivingStatuses(activities, periodStartUtc, periodEndUtc)
   const consecutive = consecutivePeriods(prepared, record)
@@ -310,7 +320,13 @@ function summaryText(violations: number, uncertainties: number, dataComplete: bo
   return 'Jsou tu prokázaná porušení z dokončených kontrol.'
 }
 
-function prepare(activities: readonly Activity[], confirmations: readonly CrewBreakConfirmation[]) {
+function prepare(
+  activities: readonly Activity[],
+  confirmations: readonly CrewBreakConfirmation[],
+  crewWindows: readonly CrewIntervalConfirmation[] = [],
+  /** Včetně nulové délky. Značka výměny karet se do odpočinku nepočítá, pro osádku ano. */
+  crewActivities: readonly Activity[] = activities,
+) {
   const unknownIntervals = activities
     .filter((activity) => activity.kind === 'unknown')
     .map((activity) => ({ startUtc: activity.startUtc, endUtc: activity.endUtc }))
@@ -320,7 +336,7 @@ function prepare(activities: readonly Activity[], confirmations: readonly CrewBr
     .filter((candidate) => candidate.established && candidate.durationMs >= ELEVEN_HOURS)
     .filter((candidate) => !unknownIntervals.some((interval) => overlaps(candidate.startUtc, candidate.endUtc, interval.startUtc, interval.endUtc)))
     .sort((left, right) => left.endUtc - right.endUtc)[0]?.endUtc
-  const chain = anchor == null ? null : buildDailyRestChain(anchor, candidates, unknownIntervals, recordEndUtc, activities)
+  const chain = anchor == null ? null : buildDailyRestChain(anchor, candidates, unknownIntervals, recordEndUtc, crewActivities, crewWindows)
   const daily = chain == null ? [] : assessDailyDrivingTime({ activities, candidates, chains: [chain] })
   return {
     candidates,
@@ -675,10 +691,12 @@ function collectDailyWindows(
   findings: ComplianceFinding[],
 ) {
   for (const node of nodes) {
-    if (node.status !== 'window_unsatisfied') continue
+    if (node.status !== 'window_unsatisfied' && node.crewBasis !== 'confirmed') continue
     if (!overlaps(node.windowStartUtc, node.windowEndUtc, periodStartUtc, periodEndUtc)) continue
     const mapDayUtc = placeDay(node.windowStartUtc, node.windowStartUtc, node.windowEndUtc, days)
     if (mapDayUtc == null) continue
+    const confirmed = node.crewBasis === 'confirmed'
+    const offer = node.crewConfirmationAvailable || confirmed
     findings.push({
       id: `daily-window:${node.windowStartUtc}`,
       severity: 'uncertain',
@@ -687,23 +705,220 @@ function collectDailyWindows(
       startUtc: node.windowStartUtc,
       endUtc: node.windowEndUtc,
       mapDayUtc,
-      actualText: 'Odpočinek v okně není prokázaný',
+      actualText: confirmed ? 'Odpočinek v okně 30 h po potvrzení uživatele' : 'Odpočinek v okně není prokázaný',
       limitText: node.windowMode === 'crew_30h' ? '9 h v okně 30 h' : '11 h nebo uznané zkrácení v okně 24 h',
       deltaText: 'Nelze určit nedostatek',
       explanation: windowExplanation(node),
-      technicalText: `status ${node.status}, window ${node.windowMode}`,
+      technicalText: `status ${node.status}, window ${node.windowMode}${confirmed ? ', crew basis confirmed' : ''}`,
       meterPercent: null,
       meterOver: false,
+      crewWindowConfirmation: offer
+        ? {
+            windowStartUtc: node.windowStartUtc,
+            confirmed,
+            intervals: node.uncertainIntervals.map((interval) => ({
+              startUtc: interval.startUtc,
+              endUtc: interval.endUtc,
+              intervalText: `${formatPrague(interval.startUtc)} – ${formatPrague(interval.endUtc)} (Europe/Prague)`,
+              durationText: czechDuration(interval.endUtc - interval.startUtc),
+            })),
+          }
+        : undefined,
     })
   }
 }
 
+export type CrewVerificationStatus = 'nepotvrzeno' | 'částečně potvrzeno' | 'potvrzeno'
+
+export type CrewVerificationInterval = {
+  windowStartUtc: number
+  startUtc: number
+  endUtc: number
+  intervalText: string
+  durationText: string
+  confirmed: boolean
+}
+
+export type CrewVerificationDay = {
+  windowStartUtc: number
+  dateText: string
+  intervalCount: number
+  durationText: string
+  status: CrewVerificationStatus
+  intervals: CrewVerificationInterval[]
+}
+
+export type CrewVerificationWeek = {
+  id: string
+  rangeText: string
+  windowsToVerify: number
+  intervalCount: number
+  confirmedDays: number
+  fullyConfirmed: boolean
+  days: CrewVerificationDay[]
+}
+
+/** Kalendářní týden pondělí–neděle podle začátku okna v Europe/Prague. */
+export function groupCrewVerification(
+  findings: readonly ComplianceFinding[],
+  confirmations: readonly CrewIntervalConfirmation[],
+): CrewVerificationWeek[] {
+  const matched = new Set(confirmations.map(crewConfirmationKey))
+  const weeks = new Map<string, CrewVerificationWeek>()
+  for (const finding of findings) {
+    const offer = finding.crewWindowConfirmation
+    if (offer == null || offer.intervals.length === 0) continue
+    const monday = pragueMonday(offer.windowStartUtc)
+    const existing = weeks.get(monday.id)
+    const intervals = offer.intervals.map((interval) => ({
+      windowStartUtc: offer.windowStartUtc,
+      startUtc: interval.startUtc,
+      endUtc: interval.endUtc,
+      intervalText: interval.intervalText,
+      durationText: interval.durationText,
+      confirmed: matched.has(crewConfirmationKey({ windowStartUtc: offer.windowStartUtc, startUtc: interval.startUtc, endUtc: interval.endUtc })),
+    }))
+    const confirmedCount = intervals.filter((interval) => interval.confirmed).length
+    const status: CrewVerificationStatus = confirmedCount === 0
+      ? 'nepotvrzeno'
+      : confirmedCount === intervals.length
+        ? 'potvrzeno'
+        : 'částečně potvrzeno'
+    const day: CrewVerificationDay = {
+      windowStartUtc: offer.windowStartUtc,
+      dateText: pragueDateText(offer.windowStartUtc),
+      intervalCount: intervals.length,
+      durationText: czechDuration(intervals.reduce((sum, interval) => sum + (interval.endUtc - interval.startUtc), 0)),
+      status,
+      intervals,
+    }
+    if (existing == null) {
+      weeks.set(monday.id, {
+        id: monday.id,
+        rangeText: `${monday.startText} – ${monday.endText}`,
+        windowsToVerify: status === 'potvrzeno' ? 0 : 1,
+        intervalCount: intervals.length,
+        confirmedDays: status === 'potvrzeno' ? 1 : 0,
+        fullyConfirmed: status === 'potvrzeno',
+        days: [day],
+      })
+      continue
+    }
+    existing.days.push(day)
+    existing.intervalCount += intervals.length
+    if (status === 'potvrzeno') existing.confirmedDays += 1
+    else existing.windowsToVerify += 1
+    existing.fullyConfirmed = existing.windowsToVerify === 0
+  }
+  return [...weeks.values()]
+    .map((week) => ({ ...week, days: [...week.days].sort((left, right) => left.windowStartUtc - right.windowStartUtc) }))
+    .sort((left, right) => left.id.localeCompare(right.id))
+}
+
+/** Po přepočtu zůstane jen přesná shoda se stejným oknem. Duplicity odpadnou. */
+export function retainCrewConfirmations(
+  current: readonly CrewIntervalConfirmation[],
+  findings: readonly ComplianceFinding[],
+): CrewIntervalConfirmation[] {
+  const allowed = new Set<string>()
+  for (const finding of findings) {
+    const offer = finding.crewWindowConfirmation
+    if (offer == null) continue
+    for (const interval of offer.intervals) {
+      allowed.add(crewConfirmationKey({ windowStartUtc: offer.windowStartUtc, startUtc: interval.startUtc, endUtc: interval.endUtc }))
+    }
+  }
+  const seen = new Set<string>()
+  const next: CrewIntervalConfirmation[] = []
+  for (const item of current) {
+    const key = crewConfirmationKey(item)
+    if (!allowed.has(key) || seen.has(key)) continue
+    seen.add(key)
+    next.push(item)
+  }
+  return next
+}
+
+export function crewConfirmationKey(item: CrewIntervalConfirmation): string {
+  return `${item.windowStartUtc}:${item.startUtc}:${item.endUtc}`
+}
+
+function czechDuration(ms: number): string {
+  const totalMinutes = Math.max(0, Math.round(ms / 60_000))
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours === 0) return `${minutes} min`
+  if (minutes === 0) return `${hours} h`
+  return `${hours} h ${minutes} min`
+}
+
+function pragueMonday(ms: number): { id: string; startText: string; endText: string } {
+  const date = pragueCalendar(ms)
+  const index = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(date.weekday)
+  const monday = shiftCalendar(date, index < 0 ? 0 : -index)
+  const sunday = shiftCalendar(monday, 6)
+  return {
+    id: `${monday.year}-${pad(monday.month)}-${pad(monday.day)}`,
+    startText: calendarText(monday),
+    endText: calendarText(sunday),
+  }
+}
+
+function pragueDateText(ms: number): string {
+  return calendarText(pragueCalendar(ms))
+}
+
+function pragueCalendar(ms: number): { weekday: string; year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Prague',
+    weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(ms))
+  const pick = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? ''
+  return { weekday: pick('weekday'), year: Number(pick('year')), month: Number(pick('month')), day: Number(pick('day')) }
+}
+
+function shiftCalendar(
+  date: { year: number; month: number; day: number },
+  days: number,
+): { year: number; month: number; day: number } {
+  const shifted = new Date(Date.UTC(date.year, date.month - 1, date.day + days))
+  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate() }
+}
+
+function calendarText(date: { year: number; month: number; day: number }): string {
+  return `${pad(date.day)}. ${pad(date.month)}. ${date.year}`
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+function formatPrague(ms: number): string {
+  const parts = new Intl.DateTimeFormat('cs-CZ', {
+    timeZone: 'Europe/Prague',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(ms))
+  const pick = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? ''
+  return `${pick('day')}. ${pick('month')}. ${pick('year')} ${pick('hour')}:${pick('minute')}`
+}
+
 function windowExplanation(node: DailyChainNode): string {
   const anchor = node.anchorEstablished ? '' : ' Kotva tohoto okna nepochází z prokázaného odpočinku.'
+  if (node.windowMode === 'crew_30h' && node.crewBasis === 'confirmed') {
+    return `Použito 30hodinové okno na základě potvrzení uživatele. Tachograf osádku v uvedených úsecích neprokázal. Potvrzení neuznává bezpečnostní přestávku.${anchor}`
+  }
   if (node.windowMode === 'crew_30h') {
     return `Použito 30hodinové okno. Záznam příznaku osádky pokrývá pracovní úsek po první hodině, proto se posuzuje souvislý odpočinek alespoň 9 hodin. Samo o sobě to není označené jako přestupek.${anchor}`
   }
-  const withheld = node.crewRecord === 'crew_record_interrupted' || node.crewRecord === 'crew_record_unknown'
+  const withheld = node.crewRecord === 'crew_record_interrupted' || node.crewRecord === 'crew_record_uncertain'
     ? ' 30hodinové okno se nepoužilo, protože záznam osádky po první hodině není souvislý nebo úplný.'
     : ''
   return `Použito 24hodinové okno pro jednoho řidiče. Požadavek je běžný nebo uznaný zkrácený denní odpočinek. Samo o sobě to není označené jako přestupek.${withheld}${anchor}`
@@ -720,6 +935,9 @@ function dailyWindowNotes(
     .map((node) => {
       const ambiguous = node.interpretations.some((item) => item.qualifiesWindow && !item.established)
       const doubt = ambiguous ? ' Nejednoznačný odpočinek zůstává neprokázaný.' : ''
+      if (node.crewBasis === 'confirmed') {
+        return `${formatRange(node.windowStartUtc, node.windowEndUtc, clockMode)}: použito okno 30 h na základě potvrzení uživatele. Tachograf tyto úseky jako osádku neprokázal.${doubt}`
+      }
       return `${formatRange(node.windowStartUtc, node.windowEndUtc, clockMode)}: použito okno 30 h. Záznam osádky pokrývá pracovní úsek po první hodině, proto platí souvislý odpočinek alespoň 9 hodin.${doubt}`
     })
 }

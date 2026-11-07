@@ -1,7 +1,7 @@
 import type { RestCandidate, RestCandidateKind } from './restCandidates.ts'
 import type { DailyRestOption, DailyRestOptionPart, DailyRestVariantKind } from './dailyRestOptions.ts'
 import { findDailyRestOptions } from './dailyRestOptions.ts'
-import { CREW_WINDOW_MS, decideCrewDailyWindow, type CrewActivity, type CrewRecordCourse } from './crewDailyRest.ts'
+import { CREW_WINDOW_MS, decideCrewDailyWindow, type CrewActivity, type CrewIntervalConfirmation, type CrewRecordCourse, type CrewUncertainInterval, type CrewWindowBasis } from './crewDailyRest.ts'
 import { DAILY_WINDOW_MS, intersectRestWithDailyWindow } from './restWindowIntersection.ts'
 
 const HOUR_MS = 60 * 60 * 1000
@@ -52,6 +52,11 @@ export type DailyChainNode = {
   windowMode: DailyWindowMode
   /** null, když volající aktivity s příznakem osádky nepředal. */
   crewRecord: CrewRecordCourse | null
+  /** recorded je tachograf. confirmed je potvrzení nejistých úseků. */
+  crewBasis: CrewWindowBasis | null
+  uncertainIntervals: readonly CrewUncertainInterval[]
+  /** Checkbox jen když 24 h nestačí a potvrzení otevře 30 h. */
+  crewConfirmationAvailable: boolean
   /** false, když tato kotva vznikla z odpočinku, který okno nesplnil nebo není jednoznačný. */
   anchorEstablished: boolean
   status: DailyChainNodeStatus
@@ -78,7 +83,11 @@ export type DailyRestChain = {
 
 /**
  * Návazná denní období od explicitní kotvy.
- * Bez prokázaného záznamu osádky má okno 24 hodin. Souvislý záznam po první hodině dává 30 hodin.
+ * Nejdřív se vždy posoudí 24hodinové okno. Splněné 24hodinové okno zůstává,
+ * i když se v období později objeví příznak osádky.
+ * 30 hodin se zkouší jen když 24hodinové okno splněné není a záznam osádky
+ * po první hodině je souvislý, nebo uživatel potvrdil právě jeho nejisté úseky.
+ * Neprokázaná osádka 24hodinový výsledek nemění. Potvrzení přerušení nepokryje.
  * Nevytváří přestupky a nevolí jednu interpretaci.
  * Další kotva je skutečný konec odpočinku, ne konec okna ani dosažení minima.
  * Nejednoznačný odpočinek tuto kotvu neoznačí jako prokázanou.
@@ -90,6 +99,7 @@ export function buildDailyRestChain(
   /** Konec poslední zaznamenané aktivity. Bez něj se neúplné okno nerozliší. */
   recordEndUtc: number | null = null,
   activities: readonly CrewActivity[] = [],
+  confirmations: readonly CrewIntervalConfirmation[] = [],
 ): DailyRestChain {
   const nodes = new Map<number, DailyChainNode>()
   const order: number[] = []
@@ -100,7 +110,7 @@ export function buildDailyRestChain(
       if (!anchorEstablished) existing.anchorEstablished = false
       return existing
     }
-    const node = evaluateWindow(utc, candidates, unknownIntervals, recordEndUtc, activities, anchorEstablished)
+    const node = evaluateWindow(utc, candidates, unknownIntervals, recordEndUtc, activities, anchorEstablished, confirmations)
     nodes.set(utc, node)
     order.push(utc)
     return node
@@ -157,18 +167,87 @@ function evaluateWindow(
   recordEndUtc: number | null,
   activities: readonly CrewActivity[],
   anchorEstablished: boolean,
+  confirmations: readonly CrewIntervalConfirmation[],
+): DailyChainNode {
+  const decision = activities.length === 0
+    ? null
+    : decideCrewDailyWindow({ windowStartUtc: anchorUtc, activities, unknownIntervals, confirmedIntervals: confirmations })
+  const attach = (node: Omit<DailyChainNode, 'crewBasis' | 'uncertainIntervals' | 'crewConfirmationAvailable'>, basis: CrewWindowBasis | null, available: boolean): DailyChainNode => ({
+    ...node,
+    crewBasis: basis,
+    uncertainIntervals: decision?.uncertainIntervals ?? [],
+    crewConfirmationAvailable: available,
+  })
+  const standard = evaluateFixedWindow(
+    anchorUtc,
+    candidates,
+    unknownIntervals,
+    recordEndUtc,
+    anchorEstablished,
+    decision?.crewRecord ?? null,
+    DAILY_WINDOW_MS,
+    'single_driver_24h',
+  )
+  if (standard.status === 'evaluated') return attach(standard, null, false)
+  const accepted = decision?.applies === true
+    ? evaluateFixedWindow(
+      anchorUtc,
+      candidates,
+      unknownIntervals,
+      recordEndUtc,
+      anchorEstablished,
+      decision.crewRecord,
+      CREW_WINDOW_MS,
+      'crew_30h',
+    )
+    : null
+  if (accepted?.status === 'evaluated' && decision != null) return attach(accepted, decision.basis, decision.basis === 'confirmed')
+  const available = decision?.crewRecord === 'crew_record_uncertain'
+    && decision.uncertainIntervals.length > 0
+    && decideCrewDailyWindow({
+      windowStartUtc: anchorUtc,
+      activities,
+      unknownIntervals,
+      confirmedIntervals: decision.uncertainIntervals.map((interval) => ({
+        windowStartUtc: anchorUtc,
+        startUtc: interval.startUtc,
+        endUtc: interval.endUtc,
+      })),
+    }).applies
+    && evaluateFixedWindow(
+      anchorUtc,
+      candidates,
+      unknownIntervals,
+      recordEndUtc,
+      anchorEstablished,
+      decision.crewRecord,
+      CREW_WINDOW_MS,
+      'crew_30h',
+    ).status === 'evaluated'
+  return attach(standard, null, available)
+}
+
+function evaluateFixedWindow(
+  anchorUtc: number,
+  candidates: readonly RestCandidate[],
+  unknownIntervals: readonly UnrecordedInterval[],
+  recordEndUtc: number | null,
+  anchorEstablished: boolean,
+  crewRecord: CrewRecordCourse | null,
+  windowMs: number,
+  windowMode: DailyWindowMode,
 ): DailyChainNode {
   const windowStartUtc = anchorUtc
-  const decision = activities.length === 0 ? null : decideCrewDailyWindow({ windowStartUtc, activities, unknownIntervals })
-  const windowMode: DailyWindowMode = decision?.applies ? 'crew_30h' : 'single_driver_24h'
-  const windowMs = windowMode === 'crew_30h' ? CREW_WINDOW_MS : DAILY_WINDOW_MS
   const windowEndUtc = anchorUtc + windowMs
   const base = {
     anchorUtc,
     windowStartUtc,
     windowEndUtc,
     windowMode,
-    crewRecord: decision?.crewRecord ?? null,
+    crewRecord,
+    crewBasis: null,
+    uncertainIntervals: [],
+    crewConfirmationAvailable: false,
     anchorEstablished,
   }
   const unknownOverlapsWindow = unknownIntervals.some((interval) =>

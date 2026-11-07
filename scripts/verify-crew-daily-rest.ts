@@ -22,6 +22,11 @@ function activity(
   return { id, kind, startUtc, endUtc, isCrew, slot, isManualEntry }
 }
 
+function expectCourse(label: string, actual: string, expected: string) {
+  console.log(`${label}: očekáváno ${expected}, skutečnost ${actual}`)
+  assert.equal(actual, expected)
+}
+
 function cardActivity(id: string, kind: Activity['kind'], startUtc: number, endUtc: number, overrides: Partial<Activity> = {}): Activity {
   return { id, kind, startUtc, endUtc, durationMinutes: Math.round((endUtc - startUtc) / 60_000), slot: 1, ...overrides }
 }
@@ -169,7 +174,7 @@ test('referenční případ 21. až 22. února 2025 splní jen časovou podmínk
   assert.equal(result.marginMs, 9 * MINUTE)
   assert.equal(result.recording, 'recorded')
   assert.equal(result.legalApplicability, 'undecided')
-  assert.equal(result.crewRecord, 'crew_record_unknown')
+  assert.equal(result.crewRecord, 'crew_record_uncertain')
   assert.equal(result.crewIntervals.some((interval) => interval.sourceActivityIds.includes('drive')), true)
   assert.equal(result.crewIntervals.some((interval) => interval.sourceActivityIds.includes('manual-long')), false)
 
@@ -198,7 +203,7 @@ test('referenční případ 21. až 22. února 2025 splní jen časovou podmínk
   assert.equal(recorded.qualifyingRest?.nineHoursAtUtc, at('2025-02-22T13:30:00.000Z'))
   assert.equal(recorded.marginMs, 9 * MINUTE)
   assert.equal(recorded.nineHourCondition, 'met')
-  assert.equal(recorded.crewRecord, 'crew_record_unknown')
+  assert.equal(recorded.crewRecord, 'crew_record_uncertain')
   assert.notEqual(recorded.crewRecord, 'crew_record_interrupted')
   assert.equal(recorded.legalApplicability, 'undecided')
 })
@@ -212,7 +217,15 @@ test('souvislý příznak osádky', () => {
       activity('rest', 'rest', restStart, restStart + 9 * HOUR, true, 1),
     ],
   })
-  assert.equal(result.crewRecord, 'crew_record_consistent')
+  expectCourse('prokazatelně nepřerušená osádka', result.crewRecord, 'crew_record_consistent')
+  assert.equal(result.uncertainIntervals.length, 0)
+  assert.equal(decideCrewDailyWindow({
+    windowStartUtc: START,
+    activities: [
+      activity('drive', 'driving', START, restStart, true, 1),
+      activity('rest', 'rest', restStart, restStart + 9 * HOUR, true, 1),
+    ],
+  }).applies, true)
   assert.equal(result.nineHourCondition, 'met')
   assert.equal(result.windowEndUtc, START + CREW_WINDOW_MS)
   assert.equal(result.legalApplicability, 'undecided')
@@ -229,7 +242,16 @@ test('přerušení příznaku po první hodině při vložené kartě', () => {
       activity('rest', 'rest', restStart, restStart + 9 * HOUR, true),
     ],
   })
-  assert.equal(interrupted.crewRecord, 'crew_record_interrupted')
+  expectCourse('prokazatelné nesplnění podmínek osádky', interrupted.crewRecord, 'crew_record_interrupted')
+  assert.equal(decideCrewDailyWindow({
+    windowStartUtc: START,
+    activities: [
+      activity('before', 'driving', START, START + 3 * HOUR, true),
+      activity('break', 'work', START + 3 * HOUR, START + 3 * HOUR + 30 * MINUTE, false),
+      activity('after', 'driving', START + 3 * HOUR + 30 * MINUTE, restStart, true),
+      activity('rest', 'rest', restStart, restStart + 9 * HOUR, true),
+    ],
+  }).applies, false)
   assert.equal(interrupted.nineHourCondition, 'met')
   assert.equal(interrupted.legalApplicability, 'undecided')
 
@@ -271,7 +293,7 @@ test('neznámý úsek nebo vyjmutá karta průběh neuzavře', () => {
     ],
     unknownIntervals: [{ startUtc: START + 4 * HOUR, endUtc: START + 5 * HOUR }],
   })
-  assert.equal(unknown.crewRecord, 'crew_record_unknown')
+  assert.equal(unknown.crewRecord, 'crew_record_uncertain')
   assert.notEqual(unknown.crewRecord, 'crew_record_interrupted')
   assert.equal(unknown.nineHourCondition, 'met')
   assert.equal(unknown.legalApplicability, 'undecided')
@@ -285,7 +307,7 @@ test('neznámý úsek nebo vyjmutá karta průběh neuzavře', () => {
       activity('rest', 'rest', restStart, restStart + 9 * HOUR, true),
     ],
   })
-  assert.equal(cardOut.crewRecord, 'crew_record_unknown')
+  assert.equal(cardOut.crewRecord, 'crew_record_uncertain')
   assert.equal(cardOut.legalApplicability, 'undecided')
   assert.equal(cardOut.windowEndUtc, START + CREW_WINDOW_MS)
 })
@@ -309,11 +331,16 @@ test('výměna karet 22. až 23. září 2025 není přerušení a neotevře 30h
   const snapshot = structuredClone(activities)
   const result = assessCrewDailyWindow({ windowStartUtc: anchor, activities })
   const decision = decideCrewDailyWindow({ windowStartUtc: anchor, activities })
-  assert.equal(result.crewRecord, 'crew_record_unknown')
+  expectCourse('22.–23. 9. 2025', result.crewRecord, 'crew_record_uncertain')
   assert.notEqual(result.crewRecord, 'crew_record_interrupted')
+  assert.notEqual(result.crewRecord, 'crew_record_consistent')
+  assert.deepEqual(result.uncertainIntervals, [
+    { startUtc: manualStart, endUtc: manualStart + MINUTE },
+    { startUtc: swap, endUtc: swap + 2 * MINUTE },
+  ])
   assert.equal(result.qualifyingRest?.startUtc, restStart)
   assert.equal(decision.applies, false)
-  assert.equal(decision.crewRecord, 'crew_record_unknown')
+  assert.equal(decision.crewRecord, 'crew_record_uncertain')
   assert.equal(activities.find((item) => item.id === 'manual-gap')?.isCrew, false)
   assert.equal(activities.find((item) => item.id === 'leave-slot')?.isCrew, false)
   assert.deepEqual(activities, snapshot)
@@ -337,11 +364,16 @@ test('výměna karet 30. září až 1. října 2025 není přerušení a neotev
   ]
   const result = assessCrewDailyWindow({ windowStartUtc: anchor, activities })
   const decision = decideCrewDailyWindow({ windowStartUtc: anchor, activities })
-  assert.equal(result.crewRecord, 'crew_record_unknown')
+  expectCourse('30. 9.–1. 10. 2025', result.crewRecord, 'crew_record_uncertain')
   assert.notEqual(result.crewRecord, 'crew_record_interrupted')
+  assert.notEqual(result.crewRecord, 'crew_record_consistent')
+  assert.deepEqual(result.uncertainIntervals, [
+    { startUtc: manualStart, endUtc: manualStart + 5 * MINUTE },
+    { startUtc: swap, endUtc: swap + 2 * MINUTE },
+  ])
   assert.equal(result.qualifyingRest?.startUtc, restStart)
   assert.equal(decision.applies, false)
-  assert.equal(decision.crewRecord, 'crew_record_unknown')
+  assert.equal(decision.crewRecord, 'crew_record_uncertain')
 })
 
 test('skutečné přerušení osádky zůstane přerušením', () => {
@@ -374,10 +406,28 @@ test('navazující výměna slotu není přerušení a odpočinek už se nekontr
     activity('ignored', 'driving', restStart + HOUR, restStart + 4 * HOUR, false, 1),
   ]
   const result = assessCrewDailyWindow({ windowStartUtc: START, activities: exchanged })
-  assert.equal(result.crewRecord, 'crew_record_consistent')
+  expectCourse('výměna slotu bez samostatného řízení', result.crewRecord, 'crew_record_uncertain')
+  assert.notEqual(result.crewRecord, 'crew_record_interrupted')
+  assert.deepEqual(result.uncertainIntervals, [{ startUtc: swap, endUtc: swap + 2 * MINUTE }])
   assert.equal(result.qualifyingRest?.startUtc, restStart)
-  assert.equal(decideCrewDailyWindow({ windowStartUtc: START, activities: exchanged }).applies, true)
+  assert.equal(decideCrewDailyWindow({ windowStartUtc: START, activities: exchanged }).applies, false)
+  assert.equal(exchanged.find((item) => item.id === 'ignored')?.isCrew, false)
   assert.equal(exchanged.find((item) => item.id === 'leave-slot')?.isCrew, false)
+})
+
+test('pozdní nástup druhého řidiče po první hodině 30hodinové okno neotevře', () => {
+  const restStart = START + 20 * HOUR
+  const activities = [
+    activity('solo', 'driving', START, START + 8 * HOUR, false, 1),
+    activity('late', 'driving', START + 8 * HOUR, restStart, true, 1),
+    activity('rest', 'rest', restStart, restStart + 10 * HOUR, true, 1),
+  ]
+  const result = assessCrewDailyWindow({ windowStartUtc: START, activities })
+  const decision = decideCrewDailyWindow({ windowStartUtc: START, activities })
+  expectCourse('pozdní nástup druhého řidiče', result.crewRecord, 'crew_record_interrupted')
+  assert.equal(decision.applies, false)
+  assert.equal(result.qualifyingRest?.startUtc, restStart)
+  assert.equal(result.uncertainIntervals.length, 0)
 })
 
 test('24hodinové okno zůstane beze změny', () => {
@@ -404,6 +454,7 @@ test('24hodinové okno zůstane beze změny', () => {
   assert.equal(overview.status, 'rows')
   if (overview.status !== 'rows') return
   const row = overview.rows.find((item) => item.result === 'Běžný denní odpočinek')
+  expectCourse('platný denní odpočinek v 24hodinovém okně', row?.result ?? 'chybí', 'Běžný denní odpočinek')
   assert.ok(row)
   assert.equal(row.details.some((detail) => detail.label === 'Kandidátní posouzení režimu osádky'), false)
 })

@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
+import type { CrewIntervalConfirmation } from '../analysis/crewDailyRest.ts'
 import { acceptCrewBreakConfirmation, type CrewBreakConfirmation } from '../analysis/drivingBreaks.ts'
 import { DiagnosticReview } from './DiagnosticReview.tsx'
-import { buildComplianceDiagnostic, buildComplianceReview, type ComplianceCrewInterval, type ComplianceFinding, type CompliancePeriodMode, type CompliancePeriodRequest, type ComplianceSeverity } from './complianceReview.ts'
+import { buildComplianceDiagnostic, buildComplianceReview, crewConfirmationKey, groupCrewVerification, retainCrewConfirmations, type ComplianceCrewInterval, type ComplianceFinding, type CompliancePeriodMode, type CompliancePeriodRequest, type ComplianceSeverity, type CrewVerificationDay, type CrewVerificationInterval, type CrewVerificationWeek } from './complianceReview.ts'
 import type { ClockMode } from '../lib/clock.ts'
 import type { Activity, DriverCardData } from '../types/tacho.ts'
 
@@ -32,11 +33,20 @@ export function ComplianceReviewView({
   const [technical, setTechnical] = useState<{ key: string; text: string } | null>(null)
   const [copied, setCopied] = useState(false)
   const [confirmations, setConfirmations] = useState<CrewBreakConfirmation[]>([])
+  const [crewWindows, setCrewWindows] = useState<CrewIntervalConfirmation[]>([])
   const period = useMemo(() => periodRequest(periodMode, fromDate, toDate, clockMode), [periodMode, fromDate, toDate, clockMode])
   const review = useMemo(
-    () => buildComplianceReview({ activities, nowUtc, clockMode, period, confirmedCrewBreaks: confirmations }),
-    [activities, nowUtc, clockMode, period, confirmations],
+    () => buildComplianceReview({ activities, nowUtc, clockMode, period, confirmedCrewBreaks: confirmations, confirmedCrewWindows: crewWindows }),
+    [activities, nowUtc, clockMode, period, confirmations, crewWindows],
   )
+  const retainedCrewWindows = retainCrewConfirmations(crewWindows, review.findings)
+  if (
+    retainedCrewWindows.length !== crewWindows.length
+    || retainedCrewWindows.some((item, index) => item !== crewWindows[index])
+  ) {
+    setCrewWindows(retainedCrewWindows)
+  }
+  const crewWeeks = groupCrewVerification(review.findings, retainedCrewWindows)
   const bucket = review.buckets.find((item) => item.id === openBucket) ?? null
   const visible = review.findings.filter((finding) => {
     if (filter === 'violation' && finding.severity !== 'violation') return false
@@ -154,6 +164,28 @@ export function ComplianceReviewView({
           </button>
         ))}
       </div>
+      {crewWeeks.length > 0 ? (
+        <CrewVerification
+          weeks={crewWeeks}
+          onConfirm={(items) => {
+            setCrewWindows((current) => {
+              const seen = new Set(current.map(crewConfirmationKey))
+              const next = [...current]
+              for (const item of items) {
+                const key = crewConfirmationKey(item)
+                if (seen.has(key)) continue
+                seen.add(key)
+                next.push(item)
+              }
+              return next
+            })
+          }}
+          onRevoke={(items) => {
+            const drop = new Set(items.map(crewConfirmationKey))
+            setCrewWindows((current) => current.filter((item) => !drop.has(crewConfirmationKey(item))))
+          }}
+        />
+      ) : null}
       {selected?.note != null ? <p className="compliance-note">{selected.label}: {selected.note}</p> : null}
       {visible.length === 0 ? <p className="compliance-empty">Ve zvoleném filtru není žádné zjištění.</p> : null}
       <div className="compliance-cards">
@@ -287,6 +319,145 @@ function sameConfirmation(
   return left.startUtc === right.startUtc
     && left.endUtc === right.endUtc
     && left.sourceActivityIds.join(',') === right.sourceActivityIds.join(',')
+}
+
+function CrewVerification({
+  weeks,
+  onConfirm,
+  onRevoke,
+}: {
+  weeks: readonly CrewVerificationWeek[]
+  onConfirm: (items: readonly CrewIntervalConfirmation[]) => void
+  onRevoke: (items: readonly CrewIntervalConfirmation[]) => void
+}) {
+  const [openWeeks, setOpenWeeks] = useState<string[]>([])
+  const [openDays, setOpenDays] = useState<number[]>([])
+  return (
+    <section className="crew-verify" aria-label="Ověření režimu osádky">
+      <h2>Ověření režimu osádky</h2>
+      <p>
+        Potvrzení znamená, že druhý řidič byl během konkrétního nejistého intervalu přítomen.
+        Hromadné tlačítko potvrdí jen intervaly, které ještě potvrzené nejsou.
+      </p>
+      {weeks.map((week) => {
+        const open = openWeeks.includes(week.id)
+        return (
+          <article key={week.id} className="crew-verify-week">
+            <div className="crew-verify-row">
+              <button
+                type="button"
+                aria-expanded={open}
+                onClick={() => setOpenWeeks((current) => current.includes(week.id) ? current.filter((id) => id !== week.id) : [...current, week.id])}
+              >
+                {open ? 'Sbalit týden' : 'Rozbalit týden'} {week.rangeText}
+              </button>
+              <p>
+                {week.windowsToVerify} {windowsLabel(week.windowsToVerify)} k ověření, {week.intervalCount} {intervalsLabel(week.intervalCount)}, {week.confirmedDays} {daysLabel(week.confirmedDays)}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  const intervals = week.days.flatMap((day) => day.intervals)
+                  const items = intervals.map(asConfirmation)
+                  if (week.fullyConfirmed) onRevoke(items)
+                  else onConfirm(intervals.filter((interval) => !interval.confirmed).map(asConfirmation))
+                }}
+              >
+                {week.fullyConfirmed ? 'Zrušit potvrzení týdne' : 'Potvrdit celý týden'}
+              </button>
+            </div>
+            {open ? week.days.map((day) => (
+              <CrewVerificationDayRow
+                key={day.windowStartUtc}
+                day={day}
+                open={openDays.includes(day.windowStartUtc)}
+                onToggle={() => setOpenDays((current) => current.includes(day.windowStartUtc) ? current.filter((id) => id !== day.windowStartUtc) : [...current, day.windowStartUtc])}
+                onConfirm={onConfirm}
+                onRevoke={onRevoke}
+              />
+            )) : null}
+          </article>
+        )
+      })}
+    </section>
+  )
+}
+
+function CrewVerificationDayRow({
+  day,
+  open,
+  onToggle,
+  onConfirm,
+  onRevoke,
+}: {
+  day: CrewVerificationDay
+  open: boolean
+  onToggle: () => void
+  onConfirm: (items: readonly CrewIntervalConfirmation[]) => void
+  onRevoke: (items: readonly CrewIntervalConfirmation[]) => void
+}) {
+  const items = day.intervals.map(asConfirmation)
+  return (
+    <div className="crew-verify-day">
+      <div className="crew-verify-row">
+        <button type="button" aria-expanded={open} onClick={onToggle}>
+          {open ? 'Skrýt intervaly' : 'Zobrazit intervaly'} {day.dateText}
+        </button>
+        <p>{day.intervalCount} {intervalsLabel(day.intervalCount)}, celkem {day.durationText}, {day.status}</p>
+        <button
+          type="button"
+          onClick={() => {
+            if (day.status === 'potvrzeno') onRevoke(items)
+            else onConfirm(items)
+          }}
+        >
+          {day.status === 'potvrzeno' ? 'Zrušit potvrzení dne' : 'Potvrdit den'}
+        </button>
+      </div>
+      {open ? (
+        <div className="crew-verify-intervals">
+          {day.intervals.map((interval) => (
+            <div key={crewConfirmationKey(asConfirmation(interval))} className="crew-verify-interval">
+              <p>{interval.intervalText}</p>
+              <p>{interval.durationText}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  const item = asConfirmation(interval)
+                  if (interval.confirmed) onRevoke([item])
+                  else onConfirm([item])
+                }}
+              >
+                {interval.confirmed ? 'Zrušit' : 'Potvrdit'}
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function asConfirmation(interval: CrewVerificationInterval): CrewIntervalConfirmation {
+  return { windowStartUtc: interval.windowStartUtc, startUtc: interval.startUtc, endUtc: interval.endUtc }
+}
+
+function windowsLabel(count: number): string {
+  if (count === 1) return 'denní okno'
+  if (count >= 2 && count <= 4) return 'denní okna'
+  return 'denních oken'
+}
+
+function intervalsLabel(count: number): string {
+  if (count === 1) return 'nejistý interval'
+  if (count >= 2 && count <= 4) return 'nejisté intervaly'
+  return 'nejistých intervalů'
+}
+
+function daysLabel(count: number): string {
+  if (count === 1) return 'potvrzený den'
+  if (count >= 2 && count <= 4) return 'potvrzené dny'
+  return 'potvrzených dnů'
 }
 
 function FindingCard({

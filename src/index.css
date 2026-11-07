@@ -613,6 +613,21 @@ body {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
 }
+
+.crew-verify { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.crew-verify h2 { margin: 0; font-size: 16px; }
+.crew-verify-week,
+.crew-verify-day,
+.crew-verify-interval {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px;
+}
+.crew-verify-day { margin-top: 8px; }
+.crew-verify-intervals { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.crew-verify-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.crew-verify-row p,
+.crew-verify-interval p { margin: 0; }
 .compliance-confirm label { display: flex; gap: 8px; align-items: flex-start; }
 .compliance-card { border-left: 4px solid #94a3b8; }
 .compliance-card-violation { border-left-color: #b91c1c; }
