@@ -342,7 +342,7 @@ function CrewVerification({
       {weeks.map((week) => {
         const open = openWeeks.includes(week.id)
         return (
-          <article key={week.id} className="crew-verify-week">
+          <article key={week.id} className={`crew-verify-week ${crewTone(week.fullyConfirmed ? 'potvrzeno' : week.days.some((day) => day.status !== 'nepotvrzeno') ? 'částečně potvrzeno' : 'nepotvrzeno')}`}>
             <div className="crew-verify-row">
               <button
                 type="button"
@@ -438,6 +438,12 @@ function CrewVerificationDayRow({
   )
 }
 
+function crewTone(status: 'nepotvrzeno' | 'částečně potvrzeno' | 'potvrzeno'): string {
+  if (status === 'potvrzeno') return 'crew-verify-confirmed'
+  if (status === 'částečně potvrzeno') return 'crew-verify-partial'
+  return 'crew-verify-open'
+}
+
 function asConfirmation(interval: CrewVerificationInterval): CrewIntervalConfirmation {
   return { windowStartUtc: interval.windowStartUtc, startUtc: interval.startUtc, endUtc: interval.endUtc }
 }
@@ -527,12 +533,14 @@ function FindingCard({
   )
 }
 
-/** Barva karty přestávky podle přepočteného stavu, ne podle samotného zaškrtnutí. */
-function breakCardTone(finding: ComplianceFinding): 'violation' | 'uncertain' | 'confirmed' {
+/** Barva karty přestávky podle přepočteného stavu. Částečné potvrzení ještě není uznání. */
+function breakCardTone(finding: ComplianceFinding): 'violation' | 'uncertain' | 'partial' | 'confirmed' {
   const recognized = finding.technicalText.includes('status within_limit')
     && finding.technicalText.includes('evidence manual_crew_confirmation')
   if (recognized) return 'confirmed'
-  return finding.severity === 'violation' ? 'violation' : 'uncertain'
+  if (finding.severity === 'violation') return 'violation'
+  if (finding.crewBreakIntervals?.some((interval) => interval.confirmed)) return 'partial'
+  return 'uncertain'
 }
 
 function ConfirmedMark() {

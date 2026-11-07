@@ -623,6 +623,10 @@ body {
   border-radius: 8px;
   padding: 8px;
 }
+.crew-verify-week { border-left-width: 4px; }
+.crew-verify-open { border-left-color: #c2410c; }
+.crew-verify-partial { border-left-color: #ca8a04; }
+.crew-verify-confirmed { border-left-color: #15803d; }
 .crew-verify-day { margin-top: 8px; }
 .crew-verify-intervals { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .crew-verify-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
@@ -632,6 +636,7 @@ body {
 .compliance-card { border-left: 4px solid #94a3b8; }
 .compliance-card-violation { border-left-color: #b91c1c; }
 .compliance-card-uncertain { border-left-color: #c2410c; }
+.compliance-card-partial { border-left-color: #ca8a04; }
 .compliance-card-confirmed { border-left-color: #15803d; }
 
 .compliance-card header {
@@ -659,6 +664,7 @@ body {
 
 .compliance-dot-violation { background: #b91c1c; }
 .compliance-dot-uncertain { background: #c2410c; }
+.compliance-dot-partial { background: #ca8a04; }
 .compliance-dot-confirmed { background: #15803d; }
 .compliance-confirm-mark { color: #15803d; display: inline-flex; margin-left: auto; }
 

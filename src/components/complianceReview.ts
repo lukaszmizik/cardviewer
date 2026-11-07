@@ -413,18 +413,26 @@ function collectBreaks(
       technicalText: `status ${period.status}, evidence ${period.evidence}`,
       meterPercent: meter(period.drivingMs, DRIVING_LIMIT_MS),
       meterOver: violation,
-      crewBreakIntervals: violation ? undefined : crewIntervals(period, clockMode),
+      crewBreakIntervals: violation ? undefined : crewIntervals(period, confirmations, clockMode),
     })
   }
 }
 
-function crewIntervals(period: DrivingBreakPeriod, clockMode: ClockMode): ComplianceCrewInterval[] {
+function crewIntervals(
+  period: DrivingBreakPeriod,
+  confirmations: readonly CrewBreakConfirmation[],
+  clockMode: ClockMode,
+): ComplianceCrewInterval[] {
   return period.confirmableCrewBreaks.map((interval) => ({
     startUtc: interval.startUtc,
     endUtc: interval.endUtc,
     sourceActivityIds: [...interval.sourceActivityIds],
     intervalText: formatRange(interval.startUtc, interval.endUtc, clockMode),
-    confirmed: false,
+    confirmed: confirmations.some((confirmation) =>
+      confirmation.startUtc === interval.startUtc
+      && confirmation.endUtc === interval.endUtc
+      && confirmation.sourceActivityIds.join(',') === interval.sourceActivityIds.join(','),
+    ),
   }))
 }
 
