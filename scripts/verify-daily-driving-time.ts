@@ -176,12 +176,31 @@ test('nejednoznačné hranice odpočinků nemají jeden závěr', () => {
   assert.equal(period?.closed, false)
   assert.equal(period?.closingRest, null)
   assert.equal(period?.extensionNote, null)
+  assert.deepEqual(period?.drivingSpanMs, { lowMs: HOUR, highMs: 2 * HOUR })
   assert.ok(period?.uncertainties.includes('multiple_rest_boundaries'))
   assert.deepEqual(
     period?.boundaryAlternatives.map((item) => item.drivingMs),
     [HOUR, 2 * HOUR],
   )
   assert.equal(JSON.stringify(period).includes('přestupek'), false)
+})
+
+test('neznámý úsek v jedné alternativě nedovolí přesný rozsah součtů', () => {
+  const anchor = START + 11 * HOUR
+  const firstRest = anchor + HOUR
+  const [period] = periodsOf([
+    activity('open', 'rest', START, anchor),
+    activity('drive-1', 'driving', anchor, firstRest),
+    activity('short', 'rest', firstRest, firstRest + 9 * HOUR),
+    activity('gap', 'unknown', firstRest + 9 * HOUR, firstRest + 10 * HOUR),
+    activity('drive-2', 'driving', firstRest + 10 * HOUR, firstRest + 11 * HOUR),
+    activity('long', 'rest', firstRest + 11 * HOUR, firstRest + 22 * HOUR),
+  ])
+  assert.equal(period?.drivingSpanMs, null)
+  assert.equal(period?.drivingMs, null)
+  assert.equal(period?.result, 'insufficient_data')
+  assert.ok(period?.uncertainties.includes('unknown_interval'))
+  assert.ok((period?.boundaryAlternatives.length ?? 0) > 1)
 })
 
 test('dvě hranice se stejným řízením dají průběžný součet a dřívější nejednoznačnost ho nesmaže', () => {
@@ -209,10 +228,84 @@ test('dvě hranice se stejným řízením dají průběžný součet a dřívěj
   assert.equal(early?.drivingMs, null)
   assert.equal(early?.endUtc != null && early.endUtc < laterAnchor, true)
   const later = periods.find((item) => item.startUtc === laterAnchor)
-  assert.equal(later?.closed, false)
+  assert.equal(later?.closed, true)
   assert.equal(later?.drivingMs, 101 * MINUTE)
   assert.equal(later?.result, 'up_to_9h')
-  assert.equal(later?.closingRest, null)
+  assert.equal(later?.endUtc, longStart)
+  assert.deepEqual(later?.boundaryAlternatives, [])
+})
+
+test('26. 9. 2025 končí denní dobu řízení až začátkem devítihodinové části', () => {
+  const anchor = Date.parse('2025-09-26T09:14:00.000Z')
+  const firstPart = Date.parse('2025-09-26T11:18:00.000Z')
+  const drivingEnd = Date.parse('2025-09-26T16:21:00.000Z')
+  const period = periodsOf([
+    activity('open', 'rest', anchor - 20 * HOUR, anchor),
+    activity('drive', 'driving', anchor, anchor + 101 * MINUTE),
+    activity('before-split', 'work', anchor + 101 * MINUTE, firstPart),
+    activity('split', 'rest', firstPart, firstPart + 222 * MINUTE),
+    activity('between', 'availability', firstPart + 222 * MINUTE, drivingEnd),
+    activity('long', 'rest', drivingEnd, drivingEnd + 30 * HOUR),
+  ]).find((item) => item.startUtc === anchor)
+  assert.equal(period?.closed, true)
+  assert.equal(period?.endUtc, drivingEnd)
+  assert.equal(period?.drivingMs, 101 * MINUTE)
+  assert.equal(period?.result, 'up_to_9h')
+  assert.equal(period?.boundaryAlternatives.some((item) => item.closingStartUtc === firstPart), false)
+})
+
+test('18. 10. 2025 započte řízení mezi oběma částmi děleného odpočinku', () => {
+  const anchor = Date.parse('2025-10-18T13:10:00.000Z')
+  const firstPart = Date.parse('2025-10-18T14:28:00.000Z')
+  const between = Date.parse('2025-10-18T17:47:00.000Z')
+  const drivingEnd = Date.parse('2025-10-18T18:47:00.000Z')
+  const periods = periodsOf([
+    activity('open', 'rest', anchor - 20 * HOUR, anchor),
+    activity('drive-early', 'driving', anchor, anchor + 37 * MINUTE),
+    activity('before-rest', 'work', anchor + 37 * MINUTE, firstPart),
+    activity('split', 'rest', firstPart, between),
+    activity('drive-late', 'driving', between, between + 40 * MINUTE),
+    activity('before-long', 'work', between + 40 * MINUTE, drivingEnd),
+    activity('long', 'rest', drivingEnd, drivingEnd + 20 * HOUR),
+    activity('next-drive', 'driving', drivingEnd + 20 * HOUR, drivingEnd + 21 * HOUR),
+    activity('next-rest', 'rest', drivingEnd + 21 * HOUR, drivingEnd + 32 * HOUR),
+  ])
+  const period = periods.find((item) => item.startUtc === anchor)
+  const following = periods.find((item) => item.startUtc === drivingEnd + 20 * HOUR)
+  assert.equal(period?.closed, true)
+  assert.equal(period?.endUtc, drivingEnd)
+  assert.equal(period?.drivingMs, 77 * MINUTE)
+  assert.equal(period?.result, 'up_to_9h')
+  assert.equal(period?.boundaryAlternatives.some((item) => item.closingStartUtc === firstPart), false)
+  assert.deepEqual(period?.drivingSourceActivityIds, ['drive-early', 'drive-late'])
+  assert.equal(following?.drivingMs, HOUR)
+  assert.deepEqual(following?.drivingSourceActivityIds, ['next-drive'])
+})
+
+test('dělený odpočinek 3 + 9 hodin ponechá řízení mezi částmi v předchozím období', () => {
+  const anchor = START + 11 * HOUR
+  const firstPart = anchor + 2 * HOUR
+  const secondPart = firstPart + 3 * HOUR + 2 * HOUR
+  const restEnd = secondPart + 11 * HOUR
+  const periods = periodsOf([
+    activity('open', 'rest', START, anchor),
+    activity('before', 'driving', anchor, firstPart),
+    activity('split', 'rest', firstPart, firstPart + 3 * HOUR),
+    activity('between', 'driving', firstPart + 3 * HOUR, secondPart),
+    activity('long', 'rest', secondPart, restEnd),
+    activity('next', 'driving', restEnd, restEnd + HOUR),
+    activity('close', 'rest', restEnd + HOUR, restEnd + 12 * HOUR),
+  ])
+  const period = periods.find((item) => item.startUtc === anchor)
+  const following = periods.find((item) => item.startUtc === restEnd)
+  assert.equal(period?.endUtc, secondPart)
+  assert.equal(period?.drivingMs, 4 * HOUR)
+  assert.deepEqual(period?.drivingSourceActivityIds, ['before', 'between'])
+  assert.equal(period?.boundaryAlternatives.length, 0)
+  assert.equal(following?.drivingMs, HOUR)
+  assert.deepEqual(following?.drivingSourceActivityIds, ['next'])
+  const counted = new Set([...(period?.drivingSourceActivityIds ?? []), ...(following?.drivingSourceActivityIds ?? [])])
+  assert.deepEqual([...counted], ['before', 'between', 'next'])
 })
 
 test('uzavřený odpočinek ukončí období', () => {

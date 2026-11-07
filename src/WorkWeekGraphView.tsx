@@ -189,7 +189,7 @@ function DayDrivingTable({ days, dayStartUtc, dayEndUtc, clockMode }: { days: Da
               row.mark != null ? (
                 <div className="day-driving-headline">
                   <p className="day-driving-primary">{row.primary}</p>
-                  <p className={`day-driving-status day-driving-status-${row.tone}`}>
+                  <p className={`day-driving-status day-driving-status-${row.tone}${row.mark === 'open' ? ' day-driving-status-open' : ''}`}>
                     <StatusIcon tone={row.tone} mark={row.mark} />
                     <span>{row.statusText}</span>
                   </p>
@@ -259,14 +259,7 @@ function StatusIcon({ tone, mark }: { tone: DayDrivingTone; mark: DayDrivingMark
       </svg>
     )
   }
-  if (mark === 'progress') {
-    return (
-      <svg className="day-driving-status-icon" viewBox="0 0 16 16" aria-hidden="true">
-        <circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" strokeWidth="1.4" />
-        <path d="M8 4.8V8.2L10.2 9.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    )
-  }
+  if (mark === 'open') return null
   if (tone === 'clear') {
     return (
       <svg className="day-driving-status-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -961,8 +954,6 @@ function GraphBlock({
         </g>
       </svg>
       </GraphStage>
-      {isDayDetail && <DayDrivingTable days={days} dayStartUtc={visibleFirstDate} dayEndUtc={visibleLastEnd} clockMode={clockMode} />}
-      {isDayDetail && <WeeklyDrivingPanel days={days} dayEndUtc={visibleLastEnd} />}
       {showFooter && card && <CardInfoTable card={card} clockMode={clockMode} />}
       {showFooter &&
       (visibleDays.some((d) => d.activities.some((a) => !a.isManualEntry)) ||
@@ -1425,6 +1416,8 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 showFooter={false}
               />
             </DayGraphPan>
+            <DayDrivingTable days={days} dayStartUtc={focusedDayUtc} dayEndUtc={addDays(focusedDayUtc, 1, clockMode)} clockMode={clockMode} />
+            <WeeklyDrivingPanel days={days} dayEndUtc={addDays(focusedDayUtc, 1, clockMode)} />
           </section>
         ) : (
           <GraphSwipeNav

@@ -1528,6 +1528,11 @@ body {
   border-color: #bbf7d0;
 }
 
+.day-driving-status-open {
+  background: transparent;
+  border-style: dashed;
+}
+
 .day-driving-status-caution {
   color: #9a3412;
   background: #fff7ed;

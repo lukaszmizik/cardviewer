@@ -14,7 +14,7 @@ export type DayDrivingActivity = BreakActivity & {
 export type DayDrivingTone = 'clear' | 'caution' | 'exceeded' | 'undecided'
 
 /** Razítko doby řízení podle délky. Neznamená soulad se všemi ustanoveními nařízení. */
-export type DayDrivingMark = 'check' | 'alarm' | 'alert' | 'unknown' | 'progress'
+export type DayDrivingMark = 'check' | 'alarm' | 'alert' | 'unknown' | 'open'
 
 export type DayDrivingRow = {
   label: string
@@ -35,6 +35,7 @@ export type DayDrivingRow = {
 
 const UNRELIABLE = 'Nelze spolehlivě vyhodnotit.'
 const PERIOD_LABEL = 'Doba řízení v pracovním období'
+const NINE_HOURS = 9 * 60 * 60 * 1000
 const TEN_HOURS = 10 * 60 * 60 * 1000
 /** Delší odpočinek se v tabulce nevypisuje jako přestávka. Není to denní ani týdenní kategorie. */
 const CYCLE_REST_MS = 24 * 60 * 60 * 1000
@@ -185,22 +186,96 @@ function dailyRows(
   }
   return overlapping.map((period, index) => {
     const label = overlapping.length === 1 ? PERIOD_LABEL : `${PERIOD_LABEL} ${index + 1}`
-    const status = dailyStatus(period)
-    const duration = period.drivingMs == null ? '—' : lengthText(period.drivingMs)
-    const endUtc = period.endUtc
-    const detail = endUtc == null ? `od ${formatClockDateTime(period.startUtc, clockMode)}` : rangeText(period.startUtc, endUtc, clockMode)
+    const shown = drivingDisplay(period, clockMode)
     return {
       label,
-      primary: duration,
-      detail,
-      value: `${duration}. ${status.text}`,
-      tone: status.tone,
-      statusText: status.text,
-      mark: status.mark,
+      primary: shown.primary,
+      detail: shown.detail,
+      value: `${shown.primary}. ${shown.status.text}`,
+      tone: shown.status.tone,
+      statusText: shown.status.text,
+      mark: shown.status.mark,
       rule: 'article_6' as const,
       presentation: 'status' as const,
     }
   })
+}
+
+type LengthBand = 'up_to_9h' | 'over_9h_up_to_10h' | 'over_10h'
+type DrivingStamp = { text: string; tone: DayDrivingTone; mark: DayDrivingMark }
+
+function drivingDisplay(
+  period: DailyDrivingPeriod,
+  clockMode: ClockMode,
+): { primary: string; detail: string | null; status: DrivingStamp } {
+  const alternatives = [...period.boundaryAlternatives].sort((left, right) => left.closingStartUtc - right.closingStartUtc)
+  const span = period.drivingSpanMs
+  if (alternatives.length > 1 && span != null) {
+    const primary = span.lowMs === span.highMs ? lengthText(span.lowMs) : `${lengthText(span.lowMs)} – ${lengthText(span.highMs)}`
+    const bands = alternatives.map((alternative) => lengthBand(alternative.drivingMs))
+    const shared = bands[0] != null && bands.every((band) => band === bands[0])
+    if (shared && bands[0] != null) {
+      const lines = alternatives.map((alternative) => `${rangeText(period.startUtc, alternative.closingStartUtc, clockMode)}: ${lengthText(alternative.drivingMs)}`)
+      return { primary, detail: lines.join('; '), status: lengthStamp(bands[0], false) }
+    }
+    const lines = alternatives.map((alternative) => {
+      const band = lengthBand(alternative.drivingMs)
+      return `${rangeText(period.startUtc, alternative.closingStartUtc, clockMode)}: ${lengthText(alternative.drivingMs)}, ${bandPhrase(band)}`
+    })
+    return {
+      primary,
+      detail: `Varianty nemají stejnou délkovou kategorii. ${lines.join('; ')}.`,
+      status: unknownStamp(),
+    }
+  }
+  if (alternatives.length > 1 && period.uncertainties.includes('unknown_interval')) {
+    return {
+      primary: '—',
+      detail: 'Přesný rozsah součtů nelze určit, protože některá varianta obsahuje neznámý úsek.',
+      status: unknownStamp(),
+    }
+  }
+  const status = singleStamp(period)
+  const primary = period.drivingMs == null ? '—' : lengthText(period.drivingMs)
+  const endUtc = period.endUtc
+  const range = endUtc == null ? `od ${formatClockDateTime(period.startUtc, clockMode)}` : rangeText(period.startUtc, endUtc, clockMode)
+  const open = !period.closed && period.uncertainties.includes('closing_rest_missing') && status.text !== UNKNOWN_PERIOD
+  return {
+    primary,
+    detail: open ? `${range}. Dosavadní stav. Období není uzavřeno.` : range,
+    status,
+  }
+}
+
+function singleStamp(period: DailyDrivingPeriod): DrivingStamp {
+  if (period.result !== 'up_to_9h' && period.result !== 'over_9h_up_to_10h' && period.result !== 'over_10h') return unknownStamp()
+  return lengthStamp(period.result, !period.closed && period.result === 'up_to_9h')
+}
+
+function lengthStamp(band: LengthBand, openUnderNine: boolean): DrivingStamp {
+  if (band === 'up_to_9h') {
+    return openUnderNine
+      ? { text: 'Běžná', tone: 'clear', mark: 'open' }
+      : { text: 'Běžná', tone: 'clear', mark: 'check' }
+  }
+  if (band === 'over_9h_up_to_10h') return { text: 'Prodloužená', tone: 'caution', mark: 'alarm' }
+  return { text: 'Překročení', tone: 'exceeded', mark: 'alert' }
+}
+
+function unknownStamp(): DrivingStamp {
+  return { text: UNKNOWN_PERIOD, tone: 'undecided', mark: 'unknown' }
+}
+
+function bandPhrase(band: LengthBand): string {
+  if (band === 'up_to_9h') return 'do 9 h včetně'
+  if (band === 'over_9h_up_to_10h') return 'nad 9 h a do 10 h včetně'
+  return 'nad 10 h'
+}
+
+function lengthBand(durationMs: number): 'up_to_9h' | 'over_9h_up_to_10h' | 'over_10h' {
+  if (durationMs <= NINE_HOURS) return 'up_to_9h'
+  if (durationMs <= TEN_HOURS) return 'over_9h_up_to_10h'
+  return 'over_10h'
 }
 
 const UNKNOWN_PERIOD = 'Nelze určit'
@@ -217,22 +292,6 @@ function undecidedDailyRow(label: string): DayDrivingRow {
     rule: 'article_6',
     presentation: 'status',
   }
-}
-
-function dailyStatus(period: DailyDrivingPeriod): { text: string; tone: DayDrivingTone; mark: DayDrivingMark } {
-  if (!period.closed) {
-    if (period.drivingMs != null && period.drivingMs > TEN_HOURS && period.result === 'over_10h') {
-      return { text: 'Průběžně · Nad 10 h', tone: 'exceeded', mark: 'alert' }
-    }
-    if (period.drivingMs != null && period.result !== 'insufficient_data' && period.result !== 'ambiguous_boundaries') {
-      return { text: 'Průběžně', tone: 'caution', mark: 'progress' }
-    }
-    return { text: UNKNOWN_PERIOD, tone: 'undecided', mark: 'unknown' }
-  }
-  if (period.result === 'up_to_9h') return { text: 'Běžná', tone: 'clear', mark: 'check' }
-  if (period.result === 'over_9h_up_to_10h') return { text: 'Prodloužená', tone: 'caution', mark: 'alarm' }
-  if (period.result === 'over_10h') return { text: 'Nad 10 h', tone: 'exceeded', mark: 'alert' }
-  return { text: UNKNOWN_PERIOD, tone: 'undecided', mark: 'unknown' }
 }
 
 function dailyDrivingPeriods(activities: readonly DayDrivingActivity[]): DailyDrivingPeriod[] {

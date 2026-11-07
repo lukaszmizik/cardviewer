@@ -40,6 +40,12 @@ export type DailyDrivingPeriod = {
   startUtc: number
   endUtc: number | null
   drivingMs: number | null
+  /**
+   * Nejnižší a nejvyšší součet prokázaných alternativ téhož začátku.
+   * null, když neznámý úsek nebo nejasný začátek brání přesnému rozsahu.
+   * Není to vybraný závěr.
+   */
+  drivingSpanMs: { lowMs: number; highMs: number } | null
   openingRest: DailyDrivingRestBoundary | null
   closingRest: DailyDrivingRestBoundary | null
   result: DailyDrivingResult
@@ -131,6 +137,7 @@ function closedPeriod(
     startUtc: anchorUtc,
     endUtc,
     drivingMs: driven.ms,
+    drivingSpanMs: null,
     openingRest: opening,
     closingRest: closing,
     result,
@@ -166,21 +173,27 @@ function ambiguousPeriod(
     (max, item) => (max == null || item.closingStartUtc > max ? item.closingStartUtc : max),
     null,
   )
-  const sameDriving = alternatives.length > 0 && alternatives.every((item) => item.drivingMs === alternatives[0]!.drivingMs)
   const unknown = latest != null && hasUnknown(activities, anchorUtc, latest)
   const startKnown = !uncertainties.includes('unestablished_rest') && !uncertainties.includes('opening_rest_unmatched')
-  const provisional = sameDriving && !unknown && startKnown
-  const provisionalDriving = provisional ? drivingBetween(activities, anchorUtc, alternatives[0]!.closingStartUtc) : null
+  const proven = interpretations.every((item) => item.established)
+  if (!proven && !uncertainties.includes('unestablished_rest')) uncertainties.push('unestablished_rest')
+  if (unknown) uncertainties.push('unknown_interval')
+  const comparable = startKnown && proven && !unknown && alternatives.length > 1
+  const lowMs = comparable ? Math.min(...alternatives.map((item) => item.drivingMs)) : null
+  const highMs = comparable ? Math.max(...alternatives.map((item) => item.drivingMs)) : null
+  const sameDriving = comparable && lowMs === highMs
+  const sharedDriving = sameDriving ? drivingBetween(activities, anchorUtc, earliest ?? anchorUtc) : null
   return {
     startUtc: anchorUtc,
     endUtc: earliest,
-    drivingMs: provisionalDriving?.ms ?? null,
+    drivingMs: sharedDriving?.ms ?? null,
+    drivingSpanMs: lowMs == null || highMs == null ? null : { lowMs, highMs },
     openingRest: opening,
     closingRest: null,
-    result: provisionalDriving != null ? classify(provisionalDriving.ms) : unknown ? 'insufficient_data' : 'ambiguous_boundaries',
+    result: unknown ? 'insufficient_data' : 'ambiguous_boundaries',
     extensionNote: null,
     uncertainties,
-    drivingSourceActivityIds: provisionalDriving?.ids ?? [],
+    drivingSourceActivityIds: comparable && latest != null ? drivingBetween(activities, anchorUtc, latest).ids : [],
     boundaryAlternatives: alternatives.sort((left, right) => left.closingStartUtc - right.closingStartUtc),
     closed: false,
   }
@@ -202,6 +215,7 @@ function openPeriod(
     startUtc: anchorUtc,
     endUtc: null,
     drivingMs: startKnown ? driven.ms : null,
+    drivingSpanMs: null,
     openingRest: opening,
     closingRest: null,
     result: startKnown ? classify(driven.ms) : 'insufficient_data',
@@ -219,18 +233,29 @@ function classify(drivingMs: number): DailyDrivingResult {
   return 'over_10h'
 }
 
+/**
+ * U děleného odpočinku 3 + 9 hodin denní dobu řízení ukončuje začátek druhé části.
+ * První část sama hranicí není. Souvislý odpočinek má jedinou část, takže hranice zůstává její začátek.
+ */
 function closingStart(interpretation: DailyChainInterpretation | null): number | null {
-  return interpretation?.parts[0]?.startUtc ?? null
+  return completingPart(interpretation)?.startUtc ?? null
 }
 
 function closingBoundary(interpretation: DailyChainInterpretation): DailyDrivingRestBoundary {
-  const first = interpretation.parts[0]!
-  const last = interpretation.parts[interpretation.parts.length - 1]!
+  const completing = completingPart(interpretation)!
   return {
-    startUtc: first.startUtc,
-    endUtc: last.endUtc,
+    startUtc: completing.startUtc,
+    endUtc: completing.endUtc,
     sourceActivityIds: unique(interpretation.parts.flatMap((part) => part.sourceActivityIds)),
   }
+}
+
+function completingPart(
+  interpretation: DailyChainInterpretation | null,
+): { startUtc: number; endUtc: number } | null {
+  const parts = interpretation?.parts
+  if (parts == null || parts.length === 0) return null
+  return parts[parts.length - 1]!
 }
 
 function closingUnestablished(closing: DailyDrivingRestBoundary, candidates: readonly RestCandidate[]): boolean {
