@@ -1496,6 +1496,63 @@ body {
   color: #991b1b;
 }
 
+.weekly-rest-panel {
+  margin: 8px 0 4px;
+  padding: 10px 14px 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.weekly-rest-title,
+.weekly-rest-section,
+.weekly-rest-note,
+.weekly-rest-line,
+.weekly-rest-status {
+  margin: 0;
+}
+
+.weekly-rest-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.weekly-rest-section {
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.weekly-rest-note,
+.weekly-rest-line {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #64748b;
+}
+
+.weekly-rest-line {
+  color: #0f172a;
+}
+
+.weekly-rest-status {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+  color: #334155;
+}
+
+.weekly-rest-block {
+  padding: 6px 0;
+}
+
+.weekly-rest-block + .weekly-rest-block,
+.weekly-rest-snapshot + .weekly-rest-snapshot {
+  border-top: 1px solid #eef2f6;
+}
+
 .day-driving-row {
   display: grid;
   grid-template-columns: minmax(11rem, 18rem) minmax(0, 1fr);

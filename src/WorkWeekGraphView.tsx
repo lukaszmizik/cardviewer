@@ -61,6 +61,7 @@ import { CardInfoTable } from './components/CardInfoTable'
 import { buildDayDrivingRows, type DayDrivingActivity, type DayDrivingMark, type DayDrivingTone } from './components/dayDrivingTable'
 import { buildFortnightDrivingRow } from './components/fortnightDrivingPanel'
 import { buildWeeklyDrivingPanel } from './components/weeklyDrivingPanel'
+import { buildWeeklyRestPanel } from './components/weeklyRestPanel'
 import { CardHistoryTables } from './components/CardHistoryTables'
 import { bestDailyDistance, type DailyDistanceRecord } from './utils/weekDistance'
 import { GraphStage } from './components/GraphStage'
@@ -274,6 +275,76 @@ function FortnightDrivingRow({ days, dayEndUtc }: { days: DayData[]; dayEndUtc: 
           {note}
         </p>
       ))}
+    </section>
+  )
+}
+
+function WeeklyRestPanel({ days, weekStartUtc, clockMode }: { days: DayData[]; weekStartUtc: number; clockMode: ClockMode }) {
+  const activities = days.flatMap((day) =>
+    day.activities.map((activity, index) => ({
+      id: `${day.dateUtc}:${activity.startMs}:${activity.endMs}:${activity.slot ?? 1}:${index}`,
+      kind: graphActivityKind(activity.type),
+      startUtc: activity.startMs,
+      endUtc: activity.endMs,
+      durationMinutes: activity.durationMinutes,
+      isManualEntry: activity.isManualEntry === true,
+      isCrew: activity.isCrew === true,
+      slot: activity.slot ?? 1,
+    })),
+  )
+  const panel = buildWeeklyRestPanel({ activities, displayedWeekStartUtc: weekStartUtc, clockMode })
+  return (
+    <section className="weekly-rest-panel" aria-label={panel.title}>
+      <h3 className="weekly-rest-title">{panel.title}</h3>
+      <p className="weekly-rest-note">{panel.basisText}</p>
+      <p className="weekly-rest-note">{panel.historyNote}</p>
+      <h4 className="weekly-rest-section">Rozhodné odpočinky</h4>
+      {panel.emptyRestsText != null ? <p className="weekly-rest-note">{panel.emptyRestsText}</p> : null}
+      {panel.rests.map((rest) => (
+        <div className="weekly-rest-block" key={rest.sourceNodeId}>
+          <p className="weekly-rest-line">{rest.summary}</p>
+          {rest.assignmentText != null ? <p className="weekly-rest-note">{rest.assignmentText}</p> : null}
+          {rest.noCompensationText != null ? <p className="weekly-rest-note">{rest.noCompensationText}</p> : null}
+          {rest.compensation != null ? (
+            <>
+              <p className="weekly-rest-line">{rest.compensation.requiredText}</p>
+              <p className="weekly-rest-status" data-status={rest.compensation.status}>
+                {rest.compensation.statusText}
+              </p>
+              {rest.compensation.takenLines.map((line) => (
+                <p className="weekly-rest-line" key={line}>
+                  {line}
+                </p>
+              ))}
+              {rest.compensation.uncertaintyText != null ? <p className="weekly-rest-note">{rest.compensation.uncertaintyText}</p> : null}
+            </>
+          ) : null}
+        </div>
+      ))}
+      <h4 className="weekly-rest-section">{panel.snapshotTitle}</h4>
+      <p className="weekly-rest-note">{panel.snapshotNote}</p>
+      {panel.snapshotEmptyText != null ? <p className="weekly-rest-note">{panel.snapshotEmptyText}</p> : null}
+      {panel.snapshotItems.map((item) => (
+        <div className="weekly-rest-snapshot" key={item.obligationId}>
+          <p className="weekly-rest-line">{item.summary}</p>
+          <p className="weekly-rest-line">{item.requiredText}</p>
+          <p className="weekly-rest-status" data-status={item.status}>
+            {item.statusText}
+          </p>
+        </div>
+      ))}
+      <h4 className="weekly-rest-section">{panel.outlookTitle}</h4>
+      {panel.outlook == null ? (
+        <p className="weekly-rest-note">K závěru týdne nezbývá náhrada s určeným termínem.</p>
+      ) : (
+        <>
+          <p className="weekly-rest-line">{panel.outlook.remainingText}</p>
+          {panel.outlook.nearestDeadlineText != null ? <p className="weekly-rest-line">{panel.outlook.nearestDeadlineText}</p> : null}
+          <p className="weekly-rest-note">{panel.outlook.attachmentText}</p>
+          {panel.outlook.combinationText != null ? <p className="weekly-rest-note">{panel.outlook.combinationText}</p> : null}
+          <p className="weekly-rest-note">{panel.outlook.cautionText}</p>
+        </>
+      )}
     </section>
   )
 }
@@ -1476,6 +1547,8 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
           narrowViewport={narrowViewport}
           onDayOpen={focusDay}
         />
+
+        <WeeklyRestPanel days={days} weekStartUtc={displayWeekStartMs} clockMode={clockMode} />
 
         {(() => {
           const visibleFirstDate = displayWeekStartMs
