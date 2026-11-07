@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import type { CrewIntervalConfirmation } from '../analysis/crewDailyRest.ts'
 import { acceptCrewBreakConfirmation, type CrewBreakConfirmation } from '../analysis/drivingBreaks.ts'
 import { DiagnosticReview } from './DiagnosticReview.tsx'
-import { buildComplianceDiagnostic, buildComplianceReview, crewConfirmationKey, groupCrewVerification, retainCrewConfirmations, type ComplianceCrewInterval, type ComplianceFinding, type CompliancePeriodMode, type CompliancePeriodRequest, type ComplianceSeverity, type CrewVerificationDay, type CrewVerificationInterval, type CrewVerificationWeek } from './complianceReview.ts'
+import { buildComplianceDiagnostic, buildComplianceReview, crewConfirmationKey, groupCrewBreaks, groupCrewVerification, retainCrewConfirmations, type ComplianceCrewInterval, type ComplianceFinding, type CompliancePeriodMode, type CompliancePeriodRequest, type ComplianceSeverity, type CrewBreakGroupDay, type CrewBreakGroupInterval, type CrewBreakGroupWeek, type CrewVerificationDay, type CrewVerificationInterval, type CrewVerificationWeek } from './complianceReview.ts'
 import type { ClockMode } from '../lib/clock.ts'
 import type { Activity, DriverCardData } from '../types/tacho.ts'
 
@@ -47,6 +47,7 @@ export function ComplianceReviewView({
     setCrewWindows(retainedCrewWindows)
   }
   const crewWeeks = groupCrewVerification(review.findings, retainedCrewWindows)
+  const breakWeeks = groupCrewBreaks(review.findings)
   const bucket = review.buckets.find((item) => item.id === openBucket) ?? null
   const visible = review.findings.filter((finding) => {
     if (filter === 'violation' && finding.severity !== 'violation') return false
@@ -183,6 +184,25 @@ export function ComplianceReviewView({
           onRevoke={(items) => {
             const drop = new Set(items.map(crewConfirmationKey))
             setCrewWindows((current) => current.filter((item) => !drop.has(crewConfirmationKey(item))))
+          }}
+        />
+      ) : null}
+      {breakWeeks.length > 0 ? (
+        <BreakVerification
+          weeks={breakWeeks}
+          onConfirm={(items) => {
+            setConfirmations((current) => {
+              const next = [...current]
+              for (const interval of items) {
+                if (next.some((item) => sameConfirmation(item, interval))) continue
+                const accepted = acceptCrewBreakConfirmation(interval, { secondDriverDrove: true, didNotAssist: true })
+                if (accepted != null) next.push(accepted)
+              }
+              return next
+            })
+          }}
+          onRevoke={(items) => {
+            setConfirmations((current) => current.filter((item) => !items.some((interval) => sameConfirmation(item, interval))))
           }}
         />
       ) : null}
@@ -436,6 +456,140 @@ function CrewVerificationDayRow({
       ) : null}
     </div>
   )
+}
+
+function BreakVerification({
+  weeks,
+  onConfirm,
+  onRevoke,
+}: {
+  weeks: readonly CrewBreakGroupWeek[]
+  onConfirm: (items: readonly CrewBreakGroupInterval[]) => void
+  onRevoke: (items: readonly CrewBreakGroupInterval[]) => void
+}) {
+  const [openWeeks, setOpenWeeks] = useState<string[]>([])
+  const [openDays, setOpenDays] = useState<string[]>([])
+  return (
+    <section className="crew-verify" aria-label="Přestávky v režimu osádky">
+      <h2>Přestávky v režimu osádky</h2>
+      <p>
+        Potvrzení znamená, že vozidlo řídil druhý řidič a během přestávky jsem mu nepomáhal při řízení.
+        Hromadné tlačítko potvrdí jen intervaly, které ještě potvrzené nejsou.
+      </p>
+      {weeks.map((week) => {
+        const open = openWeeks.includes(week.id)
+        const intervals = week.days.flatMap((day) => day.listings.flatMap((listing) => listing.intervals))
+        return (
+          <article key={week.id} className={`crew-verify-week ${crewTone(week.fullyConfirmed ? 'potvrzeno' : intervals.some((interval) => interval.confirmed) ? 'částečně potvrzeno' : 'nepotvrzeno')}`}>
+            <div className="crew-verify-row">
+              <button
+                type="button"
+                aria-expanded={open}
+                onClick={() => setOpenWeeks((current) => current.includes(week.id) ? current.filter((id) => id !== week.id) : [...current, week.id])}
+              >
+                {open ? 'Sbalit týden' : 'Rozbalit týden'} {week.rangeText}
+              </button>
+              <p>
+                {week.breaksToVerify} {breakLabel(week.breaksToVerify)} k ověření, {week.intervalCount} {breakIntervalLabel(week.intervalCount)}, {week.confirmedBreaks} {confirmedBreakLabel(week.confirmedBreaks)}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (week.fullyConfirmed) onRevoke(intervals)
+                  else onConfirm(intervals.filter((interval) => !interval.confirmed))
+                }}
+              >
+                {week.fullyConfirmed ? 'Zrušit potvrzení týdne' : 'Potvrdit celý týden'}
+              </button>
+            </div>
+            {open ? week.days.map((day) => (
+              <BreakDayRow
+                key={day.id}
+                day={day}
+                open={openDays.includes(day.id)}
+                onToggle={() => setOpenDays((current) => current.includes(day.id) ? current.filter((id) => id !== day.id) : [...current, day.id])}
+                onConfirm={onConfirm}
+                onRevoke={onRevoke}
+              />
+            )) : null}
+          </article>
+        )
+      })}
+    </section>
+  )
+}
+
+function BreakDayRow({
+  day,
+  open,
+  onToggle,
+  onConfirm,
+  onRevoke,
+}: {
+  day: CrewBreakGroupDay
+  open: boolean
+  onToggle: () => void
+  onConfirm: (items: readonly CrewBreakGroupInterval[]) => void
+  onRevoke: (items: readonly CrewBreakGroupInterval[]) => void
+}) {
+  const intervals = day.listings.flatMap((listing) => listing.intervals)
+  return (
+    <div className="crew-verify-day">
+      <div className="crew-verify-row">
+        <button type="button" aria-expanded={open} onClick={onToggle}>
+          {open ? 'Skrýt přestávky' : 'Zobrazit přestávky'} {day.dateText}
+        </button>
+        <p>{day.intervalCount} {breakIntervalLabel(day.intervalCount)}, celkem {day.durationText}, {day.status}</p>
+        <button
+          type="button"
+          onClick={() => {
+            if (day.status === 'potvrzeno') onRevoke(intervals)
+            else onConfirm(intervals)
+          }}
+        >
+          {day.status === 'potvrzeno' ? 'Zrušit potvrzení dne' : 'Potvrdit den'}
+        </button>
+      </div>
+      {open ? day.listings.map((listing) => (
+        <div key={listing.id} className="crew-verify-intervals">
+          <p>{listing.intervalText}</p>
+          {listing.intervals.map((interval) => (
+            <div key={`${interval.startUtc}:${interval.endUtc}:${interval.sourceActivityIds.join(',')}`} className="crew-verify-interval">
+              <p>{interval.intervalText}</p>
+              <p>{interval.durationText}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (interval.confirmed) onRevoke([interval])
+                  else onConfirm([interval])
+                }}
+              >
+                {interval.confirmed ? 'Zrušit' : 'Potvrdit'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )) : null}
+    </div>
+  )
+}
+
+function breakLabel(count: number): string {
+  if (count === 1) return 'přestávka'
+  if (count >= 2 && count <= 4) return 'přestávky'
+  return 'přestávek'
+}
+
+function breakIntervalLabel(count: number): string {
+  if (count === 1) return 'interval'
+  if (count >= 2 && count <= 4) return 'intervaly'
+  return 'intervalů'
+}
+
+function confirmedBreakLabel(count: number): string {
+  if (count === 1) return 'potvrzená přestávka'
+  if (count >= 2 && count <= 4) return 'potvrzené přestávky'
+  return 'potvrzených přestávek'
 }
 
 function crewTone(status: 'nepotvrzeno' | 'částečně potvrzeno' | 'potvrzeno'): string {

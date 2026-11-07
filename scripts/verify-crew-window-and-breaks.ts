@@ -12,7 +12,7 @@ import { DAILY_WINDOW_MS, intersectRestWithDailyWindow } from '../src/analysis/r
 import { CREW_WINDOW_MS, type CrewIntervalConfirmation } from '../src/analysis/crewDailyRest.ts'
 import { classifyRestCandidates, type RestCandidate } from '../src/analysis/restCandidates.ts'
 import { findRestIntervals } from '../src/analysis/restIntervals.ts'
-import { buildComplianceReview, groupCrewVerification, retainCrewConfirmations } from '../src/components/complianceReview.ts'
+import { buildComplianceReview, groupCrewBreaks, groupCrewVerification, retainCrewConfirmations } from '../src/components/complianceReview.ts'
 import type { Activity } from '../src/types/tacho.ts'
 
 const HOUR = 60 * 60 * 1000
@@ -525,7 +525,52 @@ test('potvrzení nejistých úseků otevře jen 30hodinové okno a přestávku n
   assert.equal(view.includes('Potvrdit den'), true)
   assert.equal(view.includes('Zrušit potvrzení dne'), true)
   assert.equal(view.includes('Potvrzuji, že druhý řidič byl během uvedených intervalů přítomen.'), false)
+  assert.equal(view.includes('Přestávky v režimu osádky'), true)
 })
+
+test('přestávky v osádce se řadí po týdnech a dnech', () => {
+  const weeks = groupCrewBreaks([
+    breakFinding('break:a', 'Přestávka v režimu osádky', Date.parse('2025-09-22T17:40:00.000Z'), '22.09.2025 19:40 – 23.09.2025 08:12', [
+      breakInterval(Date.parse('2025-09-22T18:00:00.000Z'), 15, true),
+      breakInterval(Date.parse('2025-09-22T20:00:00.000Z'), 30, false),
+    ]),
+    breakFinding('break:b', 'Přestávka v režimu osádky', Date.parse('2025-09-23T06:00:00.000Z'), '23.09.2025 08:00 – 23.09.2025 12:00', [
+      breakInterval(Date.parse('2025-09-23T08:00:00.000Z'), 20, false),
+    ]),
+    breakFinding('break:ignored', 'Přestávka v řízení', Date.parse('2025-09-22T12:00:00.000Z'), 'mimo', []),
+    breakFinding('break:c', 'Přestávka uznaná ručním potvrzením', Date.parse('2025-09-30T07:35:00.000Z'), '30.09.2025 09:35 – 01.10.2025 05:56', [
+      breakInterval(Date.parse('2025-09-30T08:00:00.000Z'), 45, true),
+    ]),
+  ])
+  assert.deepEqual(weeks.map((week) => week.rangeText), ['22. 09. 2025 – 28. 09. 2025', '29. 09. 2025 – 05. 10. 2025'])
+  assert.deepEqual(weeks[0]?.days.map((day) => day.dateText), ['22. 09. 2025', '23. 09. 2025'])
+  assert.equal(weeks[0]?.days[0]?.status, 'částečně potvrzeno')
+  assert.equal(weeks[0]?.days[0]?.listings.length, 1)
+  assert.equal(weeks[0]?.breaksToVerify, 2)
+  assert.equal(weeks[0]?.fullyConfirmed, false)
+  assert.equal(weeks[1]?.confirmedBreaks, 1)
+  assert.equal(weeks[1]?.fullyConfirmed, true)
+})
+
+function breakFinding(
+  id: string,
+  title: string,
+  startUtc: number,
+  intervalText: string,
+  crewBreakIntervals: { startUtc: number; endUtc: number; sourceActivityIds: string[]; intervalText: string; confirmed: boolean }[],
+) {
+  return { id, title, startUtc, intervalText, crewBreakIntervals }
+}
+
+function breakInterval(startUtc: number, minutes: number, confirmed: boolean) {
+  return {
+    startUtc,
+    endUtc: startUtc + minutes * 60 * 1000,
+    sourceActivityIds: [`act-${startUtc}`],
+    intervalText: `${minutes} min`,
+    confirmed,
+  }
+}
 
 function card(id: string, kind: Activity['kind'], startUtc: number, endUtc: number, isCrew: boolean, isManualEntry = false, slot: 1 | 2 = 1): Activity {
   return {

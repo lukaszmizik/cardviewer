@@ -823,6 +823,112 @@ export function groupCrewVerification(
     .sort((left, right) => left.id.localeCompare(right.id))
 }
 
+export type CrewBreakGroupInterval = {
+  startUtc: number
+  endUtc: number
+  sourceActivityIds: string[]
+  intervalText: string
+  durationText: string
+  confirmed: boolean
+}
+
+export type CrewBreakListing = {
+  id: string
+  intervalText: string
+  intervals: CrewBreakGroupInterval[]
+}
+
+export type CrewBreakGroupDay = {
+  id: string
+  dateText: string
+  sortUtc: number
+  intervalCount: number
+  durationText: string
+  status: CrewVerificationStatus
+  listings: CrewBreakListing[]
+}
+
+export type CrewBreakGroupWeek = {
+  id: string
+  rangeText: string
+  breaksToVerify: number
+  intervalCount: number
+  confirmedBreaks: number
+  fullyConfirmed: boolean
+  days: CrewBreakGroupDay[]
+}
+
+const CREW_BREAK_TITLES = new Set(['Přestávka v režimu osádky', 'Přestávka uznaná ručním potvrzením'])
+
+/** Týden pondělí–neděle a den podle začátku výpisu v Europe/Prague. */
+export function groupCrewBreaks(
+  findings: readonly Pick<ComplianceFinding, 'id' | 'title' | 'startUtc' | 'intervalText' | 'crewBreakIntervals'>[],
+): CrewBreakGroupWeek[] {
+  const weeks = new Map<string, CrewBreakGroupWeek>()
+  const days = new Map<string, CrewBreakGroupDay>()
+  for (const finding of findings) {
+    const intervals = finding.crewBreakIntervals
+    if (intervals == null || intervals.length === 0 || !CREW_BREAK_TITLES.has(finding.title)) continue
+    const monday = pragueMonday(finding.startUtc)
+    const date = pragueCalendar(finding.startUtc)
+    const dayId = `${monday.id}:${date.year}-${pad(date.month)}-${pad(date.day)}`
+    const listing: CrewBreakListing = {
+      id: finding.id,
+      intervalText: finding.intervalText,
+      intervals: [...intervals]
+        .sort((left, right) => left.startUtc - right.startUtc || left.endUtc - right.endUtc)
+        .map((interval) => ({
+          startUtc: interval.startUtc,
+          endUtc: interval.endUtc,
+          sourceActivityIds: [...interval.sourceActivityIds],
+          intervalText: interval.intervalText,
+          durationText: czechDuration(interval.endUtc - interval.startUtc),
+          confirmed: interval.confirmed,
+        })),
+    }
+    const day = days.get(dayId) ?? {
+      id: dayId,
+      dateText: pragueDateText(finding.startUtc),
+      sortUtc: finding.startUtc,
+      intervalCount: 0,
+      durationText: '',
+      status: 'nepotvrzeno',
+      listings: [],
+    }
+    day.listings.push(listing)
+    day.sortUtc = Math.min(day.sortUtc, finding.startUtc)
+    days.set(dayId, day)
+    const week = weeks.get(monday.id) ?? {
+      id: monday.id,
+      rangeText: `${monday.startText} – ${monday.endText}`,
+      breaksToVerify: 0,
+      intervalCount: 0,
+      confirmedBreaks: 0,
+      fullyConfirmed: false,
+      days: [],
+    }
+    if (!week.days.includes(day)) week.days.push(day)
+    weeks.set(monday.id, week)
+  }
+  for (const week of weeks.values()) {
+    for (const day of week.days) {
+      const intervals = day.listings.flatMap((listing) => listing.intervals)
+      const confirmedCount = intervals.filter((interval) => interval.confirmed).length
+      day.intervalCount = intervals.length
+      day.durationText = czechDuration(intervals.reduce((sum, interval) => sum + (interval.endUtc - interval.startUtc), 0))
+      day.status = confirmedCount === 0 ? 'nepotvrzeno' : confirmedCount === intervals.length ? 'potvrzeno' : 'částečně potvrzeno'
+      day.listings.sort((left, right) => left.intervals[0]!.startUtc - right.intervals[0]!.startUtc)
+    }
+    week.days.sort((left, right) => left.sortUtc - right.sortUtc)
+    const listings = week.days.flatMap((day) => day.listings)
+    week.intervalCount = listings.reduce((sum, listing) => sum + listing.intervals.length, 0)
+    week.confirmedBreaks = listings.filter((listing) => listing.intervals.every((interval) => interval.confirmed)).length
+    week.breaksToVerify = listings.length - week.confirmedBreaks
+    week.fullyConfirmed = week.breaksToVerify === 0
+  }
+  return [...weeks.values()].sort((left, right) => left.id.localeCompare(right.id))
+}
+
 /** Po přepočtu zůstane jen přesná shoda se stejným oknem. Duplicity odpadnou. */
 export function retainCrewConfirmations(
   current: readonly CrewIntervalConfirmation[],
