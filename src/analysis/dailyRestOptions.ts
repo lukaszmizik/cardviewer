@@ -1,4 +1,5 @@
 import type { RestCandidate } from './restCandidates'
+import { CREW_WINDOW_MS } from './crewDailyRest.ts'
 import {
   DAILY_WINDOW_MS,
   intersectRestWithDailyWindow,
@@ -45,15 +46,18 @@ type MeasuredCandidate = {
 export function findDailyRestOptions(
   candidates: readonly RestCandidate[],
   windowStartUtc: number,
+  windowMs: number = DAILY_WINDOW_MS,
 ): DailyRestOption[] {
-  const measured = candidates.map((candidate) => measure(candidate, windowStartUtc))
-  const windowEndUtc = windowStartUtc + DAILY_WINDOW_MS
+  const measured = candidates.map((candidate) => measure(candidate, windowStartUtc, windowMs))
+  const windowEndUtc = windowStartUtc + windowMs
   const options: DailyRestOption[] = []
 
   for (const item of measured) {
     if (item.intersection.reaches11h) options.push(continuous('continuous_regular', item))
     else if (item.intersection.reaches9h) options.push(continuous('continuous_reduced', item))
   }
+
+  if (windowMs === CREW_WINDOW_MS) return options
 
   for (const first of measured) {
     if (first.overlapMs < THREE_HOURS) continue
@@ -74,8 +78,8 @@ export function findDailyRestOptions(
   return options
 }
 
-function measure(candidate: RestCandidate, windowStartUtc: number): MeasuredCandidate {
-  const intersection = intersectRestWithDailyWindow(candidate, windowStartUtc)
+function measure(candidate: RestCandidate, windowStartUtc: number, windowMs: number): MeasuredCandidate {
+  const intersection = intersectRestWithDailyWindow(candidate, windowStartUtc, windowMs)
   const overlapMs =
     intersection.intersectionStartUtc == null || intersection.intersectionEndUtc == null
       ? 0

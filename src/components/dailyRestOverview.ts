@@ -132,8 +132,8 @@ function windowRow(
   unknowns: readonly RecordedUnknownInterval[],
   shown: Set<string>,
 ): DailyRestOverviewRow {
-  const windowDetail = { label: 'Posuzované období', value: intervalLabel(node.windowStartUtc, node.windowEndUtc) }
-  const crewDetails = crewPeriodDetails(node.windowStartUtc, node.windowEndUtc, activities)
+  const windowDetail = { label: 'Posuzované období', value: `${intervalLabel(node.windowStartUtc, node.windowEndUtc)} (${node.windowMode === 'crew_30h' ? '30 h' : '24 h'})` }
+  const crewDetails = crewPeriodDetails(node, activities)
   const candidateDetails = crewCandidateDetails(node.windowStartUtc, activities, unknowns)
   const crew = crewDetails.length > 0
   if (node.status === 'history_incomplete' || node.status === 'insufficient_data') {
@@ -151,7 +151,7 @@ function windowRow(
         {
           label: 'Vysvětlení',
           value: node.status === 'history_incomplete'
-            ? 'Záznam končí dříve, než toto 24hodinové období skončí.'
+            ? `Záznam končí dříve, než toto ${node.windowMode === 'crew_30h' ? '30hodinové' : '24hodinové'} období skončí.`
             : 'V období je neznámý úsek. Neznámý úsek není odpočinek a z období nelze rozhodnout.',
         },
         ...crewDetails,
@@ -168,14 +168,20 @@ function windowRow(
       dateUtc: dateLabel(node.windowStartUtc),
       atUtc: node.windowStartUtc,
       restSummary: summaryOfRests(rests),
-      result: crew ? CREW_UNSATISFIED : 'Nesplněné 24hodinové období',
+      result: node.windowMode === 'crew_30h'
+        ? 'Nesplněné 30hodinové období osádky'
+        : crew
+          ? CREW_UNSATISFIED
+          : 'Nesplněné 24hodinové období',
       tone: toneOfRests(rests),
       attention: true,
       details: [
         windowDetail,
         {
           label: 'Vysvětlení',
-          value: crew
+          value: node.windowMode === 'crew_30h'
+            ? 'Použito 30hodinové okno. Požadavek je souvislý odpočinek alespoň 9 hodin. Nejednoznačný odpočinek tím není prokázaný. Nejde o pravomocně zjištěný přestupek.'
+            : crew
             ? 'Výpočet používá 24hodinové období pro jednoho řidiče. Režim osádky posouzen není. Nejde o pravomocně zjištěný přestupek.'
             : continues
               ? 'Odpočinek pokračuje za konec období. Toto období tím není splněné. Nejde o pravomocně zjištěný přestupek.'
@@ -510,8 +516,14 @@ function cardRemovedInWork(candidate: CrewDailyCandidate, activities: readonly R
   )
 }
 
-function crewPeriodDetails(startUtc: number, endUtc: number, activities: readonly RecordedActivity[]): OverviewDetail[] {
-  const crew = activities.some((activity) => activity.isCrew && activity.startUtc < endUtc && activity.endUtc > startUtc)
+function crewPeriodDetails(node: DailyChainNode, activities: readonly RecordedActivity[]): OverviewDetail[] {
+  if (node.windowMode === 'crew_30h') {
+    return [
+      { label: 'Režim osádky', value: 'Použito 30hodinové okno. Záznam příznaku osádky pokrývá pracovní úsek po první hodině. Kandidátní výpočet zůstává samostatně a není právní posouzení přítomnosti druhého řidiče.' },
+      { label: 'Omezení příznaku', value: CREW_LIMIT },
+    ]
+  }
+  const crew = activities.some((activity) => activity.isCrew && activity.startUtc < node.windowEndUtc && activity.endUtc > node.windowStartUtc)
   if (!crew) return []
   return [
     { label: 'Režim osádky', value: CREW_WARNING },

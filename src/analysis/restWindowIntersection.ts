@@ -19,14 +19,15 @@ export type RestWindowIntersection = {
 }
 
 /**
- * Průnik [candidate.startUtc, candidate.endUtc) s oknem [windowStartUtc, windowStartUtc + 24 h).
- * Počátek okna musí dodat volající. Devět a jedenáct hodin jsou jen délky průniku.
+ * Průnik [candidate.startUtc, candidate.endUtc) s oknem [windowStartUtc, windowStartUtc + délka).
+ * Počátek i délku okna musí dodat volající. Bez délky zůstává 24 hodin. Devět a jedenáct hodin jsou jen délky průniku.
  */
 export function intersectRestWithDailyWindow(
   candidate: RestCandidate,
   windowStartUtc: number,
+  windowMs: number = DAILY_WINDOW_MS,
 ): RestWindowIntersection {
-  const windowEndUtc = windowStartUtc + DAILY_WINDOW_MS
+  const windowEndUtc = windowStartUtc + windowMs
   const intersectionStartUtc = Math.max(candidate.startUtc, windowStartUtc)
   const intersectionEndUtc = Math.min(candidate.endUtc, windowEndUtc)
   const overlapMs = intersectionEndUtc - intersectionStartUtc

@@ -82,6 +82,24 @@ type RestPiece = {
  * Kandidátní 30hodinové období od konce předchozího odpočinku.
  * Součet kratších odpočinků devět hodin nenahrazuje. Neznámý úsek odpočinek není.
  */
+/**
+ * 30hodinové okno se použije jen při souvislém záznamu příznaku osádky
+ * v pracovním úseku po první hodině. Jediný příznak ani neúplný úsek nestačí.
+ * Není to důkaz, že druhý řidič vozidlo řídil.
+ */
+export function decideCrewDailyWindow(input: {
+  windowStartUtc: number
+  activities: readonly CrewActivity[]
+  unknownIntervals?: readonly CrewUnknown[]
+}): { applies: boolean; crewRecord: CrewRecordCourse } {
+  const assessed = assessCrewDailyWindow(input)
+  const crewSeen = assessed.recording === 'recorded' || assessed.recording === 'partial'
+  return {
+    applies: crewSeen && assessed.crewRecord === 'crew_record_consistent',
+    crewRecord: assessed.crewRecord,
+  }
+}
+
 export function assessCrewDailyWindow(input: {
   windowStartUtc: number
   activities: readonly CrewActivity[]

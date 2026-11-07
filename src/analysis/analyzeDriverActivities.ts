@@ -175,12 +175,13 @@ export function analyzeDriverActivities(request: ActivityAnalysisRequest): Activ
   const daily: DailyAnalysis =
     anchorUtc == null
       ? { status: 'requires_input', missing: ['daily_anchor'] }
-      : assessedDaily(anchorUtc, explicitAnchor, restCandidates, unknownIntervals, recordEndUtc)
+      : assessedDaily(anchorUtc, explicitAnchor, restCandidates, unknownIntervals, recordEndUtc, activities)
   const boundaryPairDaily = diagnoseBoundaryPairDaily(
     weeklyAssignment,
     restCandidates,
     unknownIntervals,
     recordEndUtc,
+    activities,
   )
 
   return {
@@ -236,13 +237,14 @@ function diagnoseBoundaryPairDaily(
   candidates: readonly RestCandidate[],
   unknownIntervals: readonly UnrecordedInterval[],
   recordEndUtc: number | null,
+  activities: readonly Activity[],
 ): BoundaryPairDailyDiagnostic {
   const pair = assignment.boundaryPair
   if (pair.status !== 'pair') return { status: 'not_run', reason: 'boundary_pair_undecided' }
   const first = assignment.nodes.find((node) => node.id === pair.nodeIds[0])
   const second = assignment.nodes.find((node) => node.id === pair.nodeIds[1])
   if (first == null || second == null) return { status: 'not_run', reason: 'boundary_pair_undecided' }
-  const chain = buildDailyRestChain(first.endUtc, candidates, unknownIntervals, recordEndUtc)
+  const chain = buildDailyRestChain(first.endUtc, candidates, unknownIntervals, recordEndUtc, activities)
   return {
     status: 'diagnostic',
     basis: 'technical_boundary_proposal',
@@ -307,14 +309,15 @@ function assessedDaily(
   candidates: readonly RestCandidate[],
   unknownIntervals: readonly UnrecordedInterval[],
   recordEndUtc: number | null,
+  activities: readonly Activity[],
 ): DailyAnalysis {
-  const chain = buildDailyRestChain(anchorUtc, candidates, unknownIntervals, recordEndUtc)
+  const chain = buildDailyRestChain(anchorUtc, candidates, unknownIntervals, recordEndUtc, activities)
   return {
     status: 'assessed',
     anchorUtc,
     anchorOrigin: explicitAnchor ? 'explicit' : 'proven_rest_end',
     chain,
-    segments: resumeAfterStoppedWindow(chain, candidates, unknownIntervals, recordEndUtc),
+    segments: resumeAfterStoppedWindow(chain, candidates, unknownIntervals, recordEndUtc, activities),
   }
 }
 
@@ -327,6 +330,7 @@ function resumeAfterStoppedWindow(
   candidates: readonly RestCandidate[],
   unknownIntervals: readonly UnrecordedInterval[],
   recordEndUtc: number | null,
+  activities: readonly Activity[],
 ): DailyAnalysisSegment[] {
   const segments: DailyAnalysisSegment[] = []
   const usedAnchors = new Set<number>([chain.startAnchorUtc])
@@ -345,7 +349,7 @@ function resumeAfterStoppedWindow(
     if (next == null) break
     usedAnchors.add(next.endUtc)
     previousAnchor = next.endUtc
-    const resumed = buildDailyRestChain(next.endUtc, candidates, unknownIntervals, recordEndUtc)
+    const resumed = buildDailyRestChain(next.endUtc, candidates, unknownIntervals, recordEndUtc, activities)
     segments.push({
       kind: 'analysis_gap',
       startUtc: stopped.windowEndUtc,

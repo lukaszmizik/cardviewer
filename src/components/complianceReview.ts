@@ -3,7 +3,7 @@ import { assessConsecutiveWeeks, type ConsecutiveWeekPeriod } from '../analysis/
 import { assessDailyDrivingTime, assessWeeklyDrivingExtensions, utcWeekStart, WEEKLY_EXTENSION_LIMIT, type DailyDrivingPeriod } from '../analysis/dailyDrivingTime.ts'
 import { buildDailyRestChain, type DailyChainNode } from '../analysis/dailyRestChain.ts'
 import { buildDiagnosticExport, deriveDiagnosticCases, derivePeriodDiagnostics } from '../analysis/diagnosticCases.ts'
-import { assessDrivingBreaks, DRIVING_LIMIT_MS, type DrivingBreakPeriod } from '../analysis/drivingBreaks.ts'
+import { assessDrivingBreaks, DRIVING_LIMIT_MS, type CrewBreakConfirmation, type DrivingBreakPeriod } from '../analysis/drivingBreaks.ts'
 import { assessAdjacentFortnightDrivingTimes, assessFortnightDrivingTime, FORTNIGHT_DRIVING_LIMIT_MS } from '../analysis/fortnightDrivingTime.ts'
 import { classifyRestCandidates } from '../analysis/restCandidates.ts'
 import { findRestIntervals } from '../analysis/restIntervals.ts'
@@ -38,6 +38,16 @@ export type ComplianceFinding = {
   /** Podíl vůči limitu v procentech, nejvýše 100. Null, když graf nedává smysl. */
   meterPercent: number | null
   meterOver: boolean
+  /** Intervaly pohotovosti, které lze v této relaci potvrdit nebo jejichž potvrzení lze zrušit. */
+  crewBreakIntervals?: ComplianceCrewInterval[]
+}
+
+export type ComplianceCrewInterval = {
+  startUtc: number
+  endUtc: number
+  sourceActivityIds: string[]
+  intervalText: string
+  confirmed: boolean
 }
 
 export type ComplianceDay = {
@@ -92,6 +102,8 @@ export type ComplianceReview = {
   summaryText: string
   /** Kontroly, které stávající analytika záměrně neuzavírá. Nejsou to porušení. */
   unevaluatedNotes: string[]
+  /** Skutečně použitá denní okna osádky v zobrazeném období. Nejsou to přestupky. */
+  dailyWindowNotes: string[]
   days: ComplianceDay[]
   findings: ComplianceFinding[]
   watches: ComplianceWatch[]
@@ -110,6 +122,8 @@ export function buildComplianceReview(input: {
   clockMode?: ClockMode
   /** Bez hodnoty zůstává posledních 56 dnů a dnešek. */
   period?: CompliancePeriodRequest
+  /** Potvrzení pohotovosti v osádce. Jen pro přestávky a jen pro toto volání. */
+  confirmedCrewBreaks?: readonly CrewBreakConfirmation[]
 }): ComplianceReview {
   const clockMode = input.clockMode ?? 'local'
   const todayStart = dayStartMs(input.nowUtc, clockMode)
@@ -122,12 +136,12 @@ export function buildComplianceReview(input: {
   const record = recordSpan(activities)
   const coveredThrough = Math.min(input.nowUtc, periodEndUtc)
   const dataComplete = days.length > 0 && record != null && record.startUtc <= periodStartUtc && record.endUtc >= coveredThrough && !hasUnknown(activities, periodStartUtc, periodEndUtc)
-  const prepared = prepare(activities)
+  const prepared = prepare(activities, input.confirmedCrewBreaks ?? [])
   const findings: ComplianceFinding[] = []
   const weekDriving = weekDrivingStatuses(activities, periodStartUtc, periodEndUtc)
   const consecutive = consecutivePeriods(prepared, record)
 
-  collectBreaks(prepared.breaks, days, periodStartUtc, periodEndUtc, clockMode, findings)
+  collectBreaks(prepared.breaks, days, periodStartUtc, periodEndUtc, clockMode, findings, input.confirmedCrewBreaks ?? [])
   collectDailyDriving(prepared.daily, days, periodStartUtc, periodEndUtc, clockMode, findings)
   collectWeekly(weekDriving, days, periodStartUtc, periodEndUtc, findings)
   collectFortnight(activities, days, periodStartUtc, periodEndUtc, findings)
@@ -183,6 +197,7 @@ export function buildComplianceReview(input: {
     completenessText: completenessText(dataComplete, requested.note, reviewDays.length === 0),
     summaryText: summaryText(violationCount, uncertaintyCount, dataComplete, periodOpen),
     unevaluatedNotes,
+    dailyWindowNotes: dailyWindowNotes(prepared.nodes, periodStartUtc, periodEndUtc, clockMode),
     days: reviewDays,
     findings,
     watches,
@@ -295,7 +310,7 @@ function summaryText(violations: number, uncertainties: number, dataComplete: bo
   return 'Jsou tu prokázaná porušení z dokončených kontrol.'
 }
 
-function prepare(activities: readonly Activity[]) {
+function prepare(activities: readonly Activity[], confirmations: readonly CrewBreakConfirmation[]) {
   const unknownIntervals = activities
     .filter((activity) => activity.kind === 'unknown')
     .map((activity) => ({ startUtc: activity.startUtc, endUtc: activity.endUtc }))
@@ -305,13 +320,13 @@ function prepare(activities: readonly Activity[]) {
     .filter((candidate) => candidate.established && candidate.durationMs >= ELEVEN_HOURS)
     .filter((candidate) => !unknownIntervals.some((interval) => overlaps(candidate.startUtc, candidate.endUtc, interval.startUtc, interval.endUtc)))
     .sort((left, right) => left.endUtc - right.endUtc)[0]?.endUtc
-  const chain = anchor == null ? null : buildDailyRestChain(anchor, candidates, unknownIntervals, recordEndUtc)
+  const chain = anchor == null ? null : buildDailyRestChain(anchor, candidates, unknownIntervals, recordEndUtc, activities)
   const daily = chain == null ? [] : assessDailyDrivingTime({ activities, candidates, chains: [chain] })
   return {
     candidates,
     unknownIntervals,
     recordEndUtc,
-    breaks: assessDrivingBreaks(activities),
+    breaks: assessDrivingBreaks(activities, confirmations),
     daily,
     nodes: chain?.nodes ?? [],
   }
@@ -334,9 +349,32 @@ function collectBreaks(
   periodEndUtc: number,
   clockMode: ClockMode,
   findings: ComplianceFinding[],
+  confirmations: readonly CrewBreakConfirmation[],
 ) {
   for (const period of periods) {
     if (!overlaps(period.startUtc, period.endUtc, periodStartUtc, periodEndUtc)) continue
+    if (period.evidence === 'manual_crew_confirmation' && period.status === 'within_limit') {
+      const mapDayUtc = placeDay(period.qualifyingBreak?.completedAtUtc ?? period.startUtc, period.startUtc, period.endUtc, days)
+      if (mapDayUtc == null) continue
+      findings.push({
+        id: `break-confirmed:${period.startUtc}`,
+        severity: 'uncertain',
+        title: 'Přestávka uznaná ručním potvrzením',
+        intervalText: formatRange(period.startUtc, period.endUtc, clockMode),
+        startUtc: period.startUtc,
+        endUtc: period.endUtc,
+        mapDayUtc,
+        actualText: durationText(period.drivingMs),
+        limitText: '4 h 30 min',
+        deltaText: 'Výsledek nepochází jen z tachografu',
+        explanation: 'Tachograf tuto přestávku sám neuzavřel. Platí jen potvrzené intervaly pohotovosti v této otevřené relaci. Denní a týdenní odpočinky se tím nemění.',
+        technicalText: `status ${period.status}, evidence ${period.evidence}`,
+        meterPercent: meter(period.drivingMs, DRIVING_LIMIT_MS),
+        meterOver: false,
+        crewBreakIntervals: confirmedIntervals(period, confirmations, clockMode),
+      })
+      continue
+    }
     if (period.status !== 'exceeded' && period.status !== 'crew_break_unconfirmed') continue
     const violation = period.status === 'exceeded'
     const anchor = period.limitReachedUtc ?? period.startUtc
@@ -355,12 +393,40 @@ function collectBreaks(
       deltaText: violation ? overText(period.drivingMs, DRIVING_LIMIT_MS) : 'Záleží na uznání přestávky v osádce',
       explanation: violation
         ? 'Souvislé řízení překročilo 4 hodiny 30 minut bez prokázané přestávky.'
-        : 'Karta nedokládá, že vozidlo řídil jiný řidič a že šlo o přestávku. Není to prokázané porušení.',
-      technicalText: `status ${period.status}`,
+        : 'Karta nedokládá, že vozidlo řídil jiný řidič a že šlo o přestávku. Není to prokázané porušení. Potvrzení platí jen pro zvolený interval a jen do obnovení stránky.',
+      technicalText: `status ${period.status}, evidence ${period.evidence}`,
       meterPercent: meter(period.drivingMs, DRIVING_LIMIT_MS),
       meterOver: violation,
+      crewBreakIntervals: violation ? undefined : crewIntervals(period, clockMode),
     })
   }
+}
+
+function crewIntervals(period: DrivingBreakPeriod, clockMode: ClockMode): ComplianceCrewInterval[] {
+  return period.confirmableCrewBreaks.map((interval) => ({
+    startUtc: interval.startUtc,
+    endUtc: interval.endUtc,
+    sourceActivityIds: [...interval.sourceActivityIds],
+    intervalText: formatRange(interval.startUtc, interval.endUtc, clockMode),
+    confirmed: false,
+  }))
+}
+
+function confirmedIntervals(
+  period: DrivingBreakPeriod,
+  confirmations: readonly CrewBreakConfirmation[],
+  clockMode: ClockMode,
+): ComplianceCrewInterval[] {
+  const used = new Set(period.qualifyingBreak?.sourceActivityIds ?? [])
+  return confirmations
+    .filter((confirmation) => confirmation.sourceActivityIds.some((id) => used.has(id)))
+    .map((confirmation) => ({
+      startUtc: confirmation.startUtc,
+      endUtc: confirmation.endUtc,
+      sourceActivityIds: [...confirmation.sourceActivityIds],
+      intervalText: formatRange(confirmation.startUtc, confirmation.endUtc, clockMode),
+      confirmed: true,
+    }))
 }
 
 function collectDailyDriving(
@@ -622,14 +688,40 @@ function collectDailyWindows(
       endUtc: node.windowEndUtc,
       mapDayUtc,
       actualText: 'Odpočinek v okně není prokázaný',
-      limitText: '11 h nebo uznané zkrácení',
+      limitText: node.windowMode === 'crew_30h' ? '9 h v okně 30 h' : '11 h nebo uznané zkrácení v okně 24 h',
       deltaText: 'Nelze určit nedostatek',
-      explanation: '24hodinové okno nesplnil prokázaný odpočinek. Samo o sobě to není označené jako přestupek.',
-      technicalText: `status ${node.status}`,
+      explanation: windowExplanation(node),
+      technicalText: `status ${node.status}, window ${node.windowMode}`,
       meterPercent: null,
       meterOver: false,
     })
   }
+}
+
+function windowExplanation(node: DailyChainNode): string {
+  const anchor = node.anchorEstablished ? '' : ' Kotva tohoto okna nepochází z prokázaného odpočinku.'
+  if (node.windowMode === 'crew_30h') {
+    return `Použito 30hodinové okno. Záznam příznaku osádky pokrývá pracovní úsek po první hodině, proto se posuzuje souvislý odpočinek alespoň 9 hodin. Samo o sobě to není označené jako přestupek.${anchor}`
+  }
+  const withheld = node.crewRecord === 'crew_record_interrupted' || node.crewRecord === 'crew_record_unknown'
+    ? ' 30hodinové okno se nepoužilo, protože záznam osádky po první hodině není souvislý nebo úplný.'
+    : ''
+  return `Použito 24hodinové okno pro jednoho řidiče. Požadavek je běžný nebo uznaný zkrácený denní odpočinek. Samo o sobě to není označené jako přestupek.${withheld}${anchor}`
+}
+
+function dailyWindowNotes(
+  nodes: readonly DailyChainNode[],
+  periodStartUtc: number,
+  periodEndUtc: number,
+  clockMode: ClockMode,
+): string[] {
+  return nodes
+    .filter((node) => node.windowMode === 'crew_30h' && overlaps(node.windowStartUtc, node.windowEndUtc, periodStartUtc, periodEndUtc))
+    .map((node) => {
+      const ambiguous = node.interpretations.some((item) => item.qualifiesWindow && !item.established)
+      const doubt = ambiguous ? ' Nejednoznačný odpočinek zůstává neprokázaný.' : ''
+      return `${formatRange(node.windowStartUtc, node.windowEndUtc, clockMode)}: použito okno 30 h. Záznam osádky pokrývá pracovní úsek po první hodině, proto platí souvislý odpočinek alespoň 9 hodin.${doubt}`
+    })
 }
 
 function collectCompensation(

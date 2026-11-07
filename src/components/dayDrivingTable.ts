@@ -331,7 +331,7 @@ function dailyDrivingPeriods(activities: readonly DayDrivingActivity[]): DailyDr
     .sort((left, right) => left.startUtc - right.startUtc || left.endUtc - right.endUtc)[0]?.endUtc
   if (anchorUtc == null) return []
   const recordEndUtc = recordSpan(activities)?.endUtc ?? null
-  const chain = buildDailyRestChain(anchorUtc, candidates, unknownIntervals, recordEndUtc)
+  const chain = buildDailyRestChain(anchorUtc, candidates, unknownIntervals, recordEndUtc, mapped)
   return assessDailyDrivingTime({ activities: mapped, candidates, chains: [chain] })
 }
 

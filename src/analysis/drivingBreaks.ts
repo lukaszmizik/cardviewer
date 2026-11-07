@@ -15,6 +15,23 @@ export type QualifyingDrivingBreak = {
   sourceActivityIds: string[]
 }
 
+/** Ruční potvrzení jednoho intervalu pohotovosti. Bez obou podmínek se nepoužije. */
+export type CrewBreakConfirmation = {
+  startUtc: number
+  endUtc: number
+  sourceActivityIds: readonly string[]
+  secondDriverDrove: true
+  didNotAssist: true
+}
+
+export type DrivingBreakEvidence = 'tachograph' | 'manual_crew_confirmation'
+
+export type ConfirmableCrewBreak = {
+  startUtc: number
+  endUtc: number
+  sourceActivityIds: string[]
+}
+
 /**
  * Jeden úsek součtu řízení. Překročení není přestupek.
  * `crew_break_unconfirmed` znamená, že limit vychází jinak, pokud by se pohotovost v osádce uznala jako přestávka.
@@ -29,6 +46,10 @@ export type DrivingBreakPeriod = {
   limitReachedUtc: number | null
   drivingSourceActivityIds: string[]
   qualifyingBreak: QualifyingDrivingBreak | null
+  /** `manual_crew_confirmation` platí jen pro potvrzené intervaly pohotovosti, ne pro celý výpočet z karty. */
+  evidence: DrivingBreakEvidence
+  /** Pohotovost v osádce, jejíž potvrzení může změnit tento úsek. Prázdné, když už o výsledku nerozhoduje. */
+  confirmableCrewBreaks: ConfirmableCrewBreak[]
 }
 
 export type BreakActivity = {
@@ -64,19 +85,53 @@ type OpenPeriod = {
  * nebo v tomtéž úseku nejdřív odpočinek alespoň 15 minut a až po něm alespoň 30 minut.
  * Pohotovost a jiná práce prokázaný součet nevynulují. Neznámý úsek před rozhodnutím není překročení.
  * Pohotovost s příznakem osádky může být přestávkou ve vozidle řízeném jiným řidičem, jen pokud řidič nepomáhá.
- * Karta druhé z těchto podmínek nedokládá, proto taková pohotovost není kvalifikovaná přestávka.
+ * Karta druhé z těchto podmínek nedokládá, proto nepotvrzená pohotovost není kvalifikovaná přestávka.
  * Pokud by její uznání udrželo řízení v limitu, výsledek zůstane `crew_break_unconfirmed`.
+ * Potvrzení platí jen pro pohotovost s příznakem osádky a oběma podmínkami. Řízení, práci a neznámý úsek nemění.
  */
-export function assessDrivingBreaks(activities: readonly BreakActivity[]): DrivingBreakPeriod[] {
-  return collect(activities, false).map((period) => {
-    if (period.status !== 'exceeded') return period
-    const hypothetical = collect(clip(activities, period.startUtc, period.endUtc), true)
-    if (hypothetical.length === 0 || hypothetical.some((item) => item.status !== 'within_limit')) return period
-    return { ...period, status: 'crew_break_unconfirmed', limitReachedUtc: null }
+export function assessDrivingBreaks(
+  activities: readonly BreakActivity[],
+  confirmations: readonly CrewBreakConfirmation[] = [],
+): DrivingBreakPeriod[] {
+  const accepted = usableConfirmations(activities, confirmations)
+  return collect(activities, accepted).map((period) => {
+    const evidence = evidenceOf(period.qualifyingBreak, accepted)
+    if (period.status !== 'exceeded') return { ...period, evidence, confirmableCrewBreaks: [] }
+    const hypothetical = collect(clip(activities, period.startUtc, period.endUtc), [], true)
+    if (hypothetical.length === 0 || hypothetical.some((item) => item.status !== 'within_limit')) {
+      return { ...period, evidence: 'tachograph', confirmableCrewBreaks: [] }
+    }
+    return {
+      ...period,
+      status: 'crew_break_unconfirmed',
+      limitReachedUtc: null,
+      evidence: 'tachograph',
+      confirmableCrewBreaks: confirmableBreaks(activities, period.startUtc, period.endUtc),
+    }
   })
 }
 
-function collect(activities: readonly BreakActivity[], acceptCrewAvailability: boolean): DrivingBreakPeriod[] {
+/** Obě podmínky musí být pravdivé. Jinak se interval do výpočtu nedostane. */
+export function acceptCrewBreakConfirmation(
+  interval: { startUtc: number; endUtc: number; sourceActivityIds: readonly string[] },
+  conditions: { secondDriverDrove: boolean; didNotAssist: boolean },
+): CrewBreakConfirmation | null {
+  if (!conditions.secondDriverDrove || !conditions.didNotAssist) return null
+  if (interval.endUtc <= interval.startUtc || interval.sourceActivityIds.length === 0) return null
+  return {
+    startUtc: interval.startUtc,
+    endUtc: interval.endUtc,
+    sourceActivityIds: interval.sourceActivityIds,
+    secondDriverDrove: true,
+    didNotAssist: true,
+  }
+}
+
+function collect(
+  activities: readonly BreakActivity[],
+  confirmations: readonly CrewBreakConfirmation[],
+  acceptAllCrewAvailability = false,
+): DrivingBreakPeriod[] {
   const periods: DrivingBreakPeriod[] = []
   let open: OpenPeriod | null = null
 
@@ -96,11 +151,13 @@ function collect(activities: readonly BreakActivity[], acceptCrewAvailability: b
       limitReachedUtc: status === 'exceeded' ? open.limitReachedUtc : null,
       drivingSourceActivityIds: open.drivingSourceActivityIds,
       qualifyingBreak,
+      evidence: 'tachograph',
+      confirmableCrewBreaks: [],
     })
     open = null
   }
 
-  for (const segment of timeline(activities, acceptCrewAvailability)) {
+  for (const segment of timeline(activities, confirmations, acceptAllCrewAvailability)) {
     if (segment.mode === 'driving') {
       open = ensure(open, segment.startUtc)
       const before = open.drivingMs
@@ -169,7 +226,62 @@ function clip(activities: readonly BreakActivity[], startUtc: number, endUtc: nu
   })
 }
 
-function timeline(activities: readonly BreakActivity[], acceptCrewAvailability: boolean): Segment[] {
+function usableConfirmations(
+  activities: readonly BreakActivity[],
+  confirmations: readonly CrewBreakConfirmation[],
+): CrewBreakConfirmation[] {
+  const byId = new Map(activities.map((activity) => [activity.id, activity]))
+  return confirmations.filter((confirmation) => {
+    if (confirmation.secondDriverDrove !== true || confirmation.didNotAssist !== true) return false
+    if (confirmation.endUtc <= confirmation.startUtc || confirmation.sourceActivityIds.length === 0) return false
+    return confirmation.sourceActivityIds.every((id) => {
+      const activity = byId.get(id)
+      return activity != null
+        && activity.kind === 'availability'
+        && activity.isCrew === true
+        && activity.startUtc < confirmation.endUtc
+        && activity.endUtc > confirmation.startUtc
+    })
+  })
+}
+
+function evidenceOf(qualifyingBreak: QualifyingDrivingBreak | null, confirmations: readonly CrewBreakConfirmation[]): DrivingBreakEvidence {
+  if (qualifyingBreak == null) return 'tachograph'
+  const confirmed = new Set(confirmations.flatMap((confirmation) => confirmation.sourceActivityIds))
+  return qualifyingBreak.sourceActivityIds.some((id) => confirmed.has(id)) ? 'manual_crew_confirmation' : 'tachograph'
+}
+
+function confirmableBreaks(activities: readonly BreakActivity[], startUtc: number, endUtc: number): ConfirmableCrewBreak[] {
+  return activities
+    .filter((activity) => activity.kind === 'availability' && activity.isCrew === true)
+    .filter((activity) => activity.endUtc - activity.startUtc >= BREAK_FIRST_MS)
+    .filter((activity) => activity.startUtc < endUtc && activity.endUtc > startUtc)
+    .map((activity) => ({
+      startUtc: Math.max(activity.startUtc, startUtc),
+      endUtc: Math.min(activity.endUtc, endUtc),
+      sourceActivityIds: [activity.id],
+    }))
+    .filter((interval) => interval.endUtc - interval.startUtc >= BREAK_FIRST_MS)
+}
+
+function confirmationCovers(
+  startUtc: number,
+  endUtc: number,
+  activityIds: readonly string[],
+  confirmations: readonly CrewBreakConfirmation[],
+): boolean {
+  return confirmations.some((confirmation) =>
+    confirmation.startUtc <= startUtc
+    && confirmation.endUtc >= endUtc
+    && activityIds.every((id) => confirmation.sourceActivityIds.includes(id)),
+  )
+}
+
+function timeline(
+  activities: readonly BreakActivity[],
+  confirmations: readonly CrewBreakConfirmation[],
+  acceptAllCrewAvailability: boolean,
+): Segment[] {
   const usable = activities
     .filter((activity) => activity.endUtc > activity.startUtc)
     .sort((left, right) => left.startUtc - right.startUtc || left.endUtc - right.endUtc || left.id.localeCompare(right.id))
@@ -189,8 +301,8 @@ function timeline(activities: readonly BreakActivity[], acceptCrewAvailability: 
     const rest = overlapping.filter((activity) => activity.kind === 'rest')
     const work = overlapping.filter((activity) => activity.kind === 'work')
     const availability = overlapping.filter((activity) => activity.kind === 'availability')
-    const crewAvailability =
-      acceptCrewAvailability && work.length === 0 && availability.length > 0 && availability.every((activity) => activity.isCrew === true)
+    const crewAvailability = work.length === 0 && availability.length > 0 && availability.every((activity) => activity.isCrew === true)
+      && (acceptAllCrewAvailability || confirmationCovers(startUtc, endUtc, availability.map((activity) => activity.id), confirmations))
     const chosen = unknown.length > 0 ? unknown : driving.length > 0 ? driving : rest.length > 0 ? rest : crewAvailability ? availability : []
     const mode: Mode =
       unknown.length > 0 ? 'unknown' : driving.length > 0 ? 'driving' : rest.length > 0 || crewAvailability ? 'rest' : 'other'

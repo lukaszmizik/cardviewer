@@ -225,6 +225,9 @@ test('dva úplné předěly sečtou zkrácené denní odpočinky, neúplné nech
         anchorUtc: fromUtc,
         windowStartUtc: fromUtc,
         windowEndUtc: fromUtc + 24 * HOUR,
+        windowMode: 'single_driver_24h',
+        crewRecord: null,
+        anchorEstablished: true,
         status: 'evaluated',
         interpretations: [
           {
@@ -233,6 +236,7 @@ test('dva úplné předěly sečtou zkrácené denní odpočinky, neúplné nech
             qualifiesWindow: true,
             established: true,
             nextAnchorUtc: toUtc,
+            nextAnchorEstablished: true,
             reducedDelta: 1,
             weeklyRolePossible: false,
             parts: [],
@@ -243,6 +247,9 @@ test('dva úplné předěly sečtou zkrácené denní odpočinky, neúplné nech
         anchorUtc: toUtc,
         windowStartUtc: toUtc,
         windowEndUtc: toUtc + 24 * HOUR,
+        windowMode: 'single_driver_24h',
+        crewRecord: null,
+        anchorEstablished: true,
         status: 'window_unsatisfied',
         interpretations: [],
       },
@@ -310,6 +317,9 @@ function reducedNode(anchorUtc: number, nextAnchorUtc: number, source: string, e
     anchorUtc,
     windowStartUtc: anchorUtc,
     windowEndUtc: anchorUtc + 24 * HOUR,
+    windowMode: 'single_driver_24h',
+    crewRecord: null,
+    anchorEstablished: true,
     status: 'evaluated',
     interpretations: [
       {
@@ -318,6 +328,7 @@ function reducedNode(anchorUtc: number, nextAnchorUtc: number, source: string, e
         qualifiesWindow: true,
         established,
         nextAnchorUtc,
+        nextAnchorEstablished: established,
         reducedDelta: 1,
         weeklyRolePossible: false,
         parts: [
@@ -340,6 +351,9 @@ function endNode(anchorUtc: number): DailyChainNode {
     anchorUtc,
     windowStartUtc: anchorUtc,
     windowEndUtc: anchorUtc + 24 * HOUR,
+    windowMode: 'single_driver_24h',
+    crewRecord: null,
+    anchorEstablished: true,
     status: 'window_unsatisfied',
     interpretations: [],
   }
