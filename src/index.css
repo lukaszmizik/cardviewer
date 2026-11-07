@@ -539,6 +539,7 @@ body {
 }
 
 .compliance-clock select,
+.compliance-clock input,
 .compliance-filters button,
 .compliance-open-day {
   margin-left: 8px;
@@ -576,6 +577,8 @@ body {
 .compliance-day-clear { background: #bbf7d0; }
 .compliance-day-incomplete { background: #e2e8f0; color: #64748b; }
 .compliance-day.is-selected { border-color: #0f172a; }
+.compliance-map-buckets { grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); }
+.compliance-bucket { aspect-ratio: auto; min-height: 2.4rem; padding: 4px 6px; font-size: 11px; }
 
 .compliance-card,
 .compliance-watch-card {
@@ -629,6 +632,18 @@ body {
 .compliance-cards,
 .compliance-watch { display: flex; flex-direction: column; gap: 8px; }
 
+.compliance-note { color: #475569; font-size: 0.92rem; }
+.compliance-diagnostic { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.compliance-diagnostic pre {
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px;
+}
 .compliance-technical { margin-top: 18px; }
 
 .diagnostic-review {

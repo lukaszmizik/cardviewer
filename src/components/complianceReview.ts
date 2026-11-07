@@ -1,14 +1,18 @@
-import { assessDailyDrivingTime, assessWeeklyDrivingExtensions, utcWeekStart, type DailyDrivingPeriod } from '../analysis/dailyDrivingTime.ts'
+import { analyzeDriverActivities } from '../analysis/analyzeDriverActivities.ts'
+import { assessConsecutiveWeeks, type ConsecutiveWeekPeriod } from '../analysis/consecutiveWeeks.ts'
+import { assessDailyDrivingTime, assessWeeklyDrivingExtensions, utcWeekStart, WEEKLY_EXTENSION_LIMIT, type DailyDrivingPeriod } from '../analysis/dailyDrivingTime.ts'
 import { buildDailyRestChain, type DailyChainNode } from '../analysis/dailyRestChain.ts'
+import { buildDiagnosticExport, deriveDiagnosticCases, derivePeriodDiagnostics } from '../analysis/diagnosticCases.ts'
 import { assessDrivingBreaks, DRIVING_LIMIT_MS, type DrivingBreakPeriod } from '../analysis/drivingBreaks.ts'
 import { assessAdjacentFortnightDrivingTimes, assessFortnightDrivingTime, FORTNIGHT_DRIVING_LIMIT_MS } from '../analysis/fortnightDrivingTime.ts'
 import { classifyRestCandidates } from '../analysis/restCandidates.ts'
 import { findRestIntervals } from '../analysis/restIntervals.ts'
-import { assessWeeklyDrivingTime, WEEKLY_DRIVING_LIMIT_MS } from '../analysis/weeklyDrivingTime.ts'
+import { assessWeeklyDrivingTime, WEEKLY_DRIVING_LIMIT_MS, type WeeklyDrivingStatus } from '../analysis/weeklyDrivingTime.ts'
 import { classifyWeeklyRestCandidates } from '../analysis/weeklyRest.ts'
+import { buildWeeklyRestAssignment } from '../analysis/weeklyRestAssignment.ts'
 import { assessWeeklyRestCompensationTaken } from '../analysis/weeklyRestCompensationTaken.ts'
-import { addDays, dayStartMs, formatClockDate, formatClockDateTime, type ClockMode } from '../lib/clock.ts'
-import type { Activity } from '../types/tacho.ts'
+import { addDays, dayStartMs, formatClockDate, formatClockDateTime, formatWeekRange, weekStartMs, type ClockMode } from '../lib/clock.ts'
+import type { Activity, DriverCardData } from '../types/tacho.ts'
 
 const HOUR_MS = 60 * 60 * 1000
 const WEEK_MS = 7 * 24 * HOUR_MS
@@ -41,6 +45,8 @@ export type ComplianceDay = {
   label: string
   severity: ComplianceSeverity
   findingIds: string[]
+  /** Proč den není zelený. Null jen u dne, jehož spuštěné kontroly vyšly bez porušení. */
+  note: string | null
 }
 
 export type ComplianceWatch = {
@@ -50,16 +56,42 @@ export type ComplianceWatch = {
   deadlineText: string | null
 }
 
+export type CompliancePeriodMode = 'recent' | 'history' | 'custom'
+
+/** Období zobrazení. Výpočty dál používají celou historii aktivit. */
+export type CompliancePeriodRequest =
+  | { mode: 'recent' }
+  | { mode: 'history' }
+  | { mode: 'custom'; fromUtc: number; toUtc: number }
+
+export type ComplianceMapMode = 'days' | 'weeks' | 'months'
+
+export type ComplianceBucket = {
+  id: string
+  label: string
+  startUtc: number
+  endUtc: number
+  severity: ComplianceSeverity
+  dayStarts: number[]
+}
+
 export type ComplianceReview = {
+  periodMode: CompliancePeriodMode
   periodStartUtc: number
   periodEndUtc: number
   periodText: string
+  /** Dny po dnešku nebo neplatný rozsah. Není to porušení. */
+  rangeNote: string | null
+  mapMode: ComplianceMapMode
+  buckets: ComplianceBucket[]
   violationCount: number
   uncertaintyCount: number
   dataComplete: boolean
   completenessText: string
   /** Věta o výsledku. Nikdy netvrdí „bez přestupků“, když kontrola nebo data nejsou uzavřené. */
   summaryText: string
+  /** Kontroly, které stávající analytika záměrně neuzavírá. Nejsou to porušení. */
+  unevaluatedNotes: string[]
   days: ComplianceDay[]
   findings: ComplianceFinding[]
   watches: ComplianceWatch[]
@@ -76,71 +108,185 @@ export function buildComplianceReview(input: {
   activities: readonly Activity[]
   nowUtc: number
   clockMode?: ClockMode
+  /** Bez hodnoty zůstává posledních 56 dnů a dnešek. */
+  period?: CompliancePeriodRequest
 }): ComplianceReview {
   const clockMode = input.clockMode ?? 'local'
   const todayStart = dayStartMs(input.nowUtc, clockMode)
-  const periodStartUtc = addDays(todayStart, -(PERIOD_DAYS - 1), clockMode)
-  const periodEndUtc = addDays(todayStart, 1, clockMode)
-  const days = daySlots(periodStartUtc, clockMode)
-  const activities = input.activities.filter((activity) => activity.endUtc > activity.startUtc)
+  const activitiesForSpan = input.activities.filter((activity) => activity.endUtc > activity.startUtc)
+  const requested = resolveDisplayPeriod(input.period ?? { mode: 'recent' }, clockMode, input.nowUtc, recordSpan(activitiesForSpan))
+  const periodStartUtc = requested.startUtc
+  const periodEndUtc = requested.endUtc
+  const days = daySlots(periodStartUtc, periodEndUtc, clockMode)
+  const activities = activitiesForSpan
   const record = recordSpan(activities)
-  const dataComplete = record != null && record.startUtc <= periodStartUtc && record.endUtc >= input.nowUtc && !hasUnknown(activities, periodStartUtc, periodEndUtc)
+  const coveredThrough = Math.min(input.nowUtc, periodEndUtc)
+  const dataComplete = days.length > 0 && record != null && record.startUtc <= periodStartUtc && record.endUtc >= coveredThrough && !hasUnknown(activities, periodStartUtc, periodEndUtc)
   const prepared = prepare(activities)
   const findings: ComplianceFinding[] = []
-  const uncertainDays = new Set<number>()
-  const incompleteDays = new Set<number>()
+  const weekDriving = weekDrivingStatuses(activities, periodStartUtc, periodEndUtc)
+  const consecutive = consecutivePeriods(prepared, record)
 
   collectBreaks(prepared.breaks, days, periodStartUtc, periodEndUtc, clockMode, findings)
   collectDailyDriving(prepared.daily, days, periodStartUtc, periodEndUtc, clockMode, findings)
-  collectWeekly(activities, days, periodStartUtc, periodEndUtc, findings)
+  collectWeekly(weekDriving, days, periodStartUtc, periodEndUtc, findings)
   collectFortnight(activities, days, periodStartUtc, periodEndUtc, findings)
+  collectExtensions(prepared.daily, activities, days, periodStartUtc, periodEndUtc, findings)
   collectDailyWindows(prepared.nodes, days, periodStartUtc, periodEndUtc, clockMode, findings)
+  collectWeeklyRests(consecutive, record?.endUtc ?? null, days, periodStartUtc, periodEndUtc, findings)
   const compensation = compensationReport(prepared)
   collectCompensation(compensation, days, periodStartUtc, periodEndUtc, input.nowUtc, clockMode, findings)
   const watches = watchItems(compensation, prepared.daily, activities, input.nowUtc)
-
-  for (const day of days) {
-    if (!dayCovered(day, activities, record)) incompleteDays.add(day.startUtc)
-  }
-  markOpenToday(prepared, todayStart, periodEndUtc, incompleteDays)
+  const notes = explainDays(days, activities, record, prepared, todayStart, periodEndUtc, weekDriving, consecutive)
+  const unevaluatedNotes = [
+    'Limit tří zkrácených denních odpočinků se neposuzuje. Analytika ho uzavře až z vybraných týdenních odpočinků a ten výběr karta neobsahuje.',
+  ]
 
   const dayFindings = new Map<number, ComplianceFinding[]>()
   for (const finding of findings) {
     const list = dayFindings.get(finding.mapDayUtc) ?? []
     list.push(finding)
     dayFindings.set(finding.mapDayUtc, list)
-    if (finding.severity === 'uncertain') uncertainDays.add(finding.mapDayUtc)
   }
 
   const reviewDays = days.map((day) => {
     const related = dayFindings.get(day.startUtc) ?? []
-    const severity = daySeverity(related, incompleteDays.has(day.startUtc))
+    const note = notes.get(day.startUtc) ?? null
+    const severity = daySeverity(related, note != null)
     return {
       dayStartUtc: day.startUtc,
       label: formatClockDate(day.startUtc, clockMode),
       severity,
       findingIds: related.map((finding) => finding.id),
+      note: severity === 'clear' ? null : note,
     }
   })
 
   const violationCount = findings.filter((finding) => finding.severity === 'violation').length
   const uncertaintyCount = findings.filter((finding) => finding.severity === 'uncertain').length
   const periodOpen = reviewDays.some((day) => day.severity === 'incomplete' || day.severity === 'uncertain')
+  const mapMode = mapModeOf(reviewDays.length)
+  const lastDay = reviewDays[reviewDays.length - 1]
   return {
+    periodMode: requested.mode,
     periodStartUtc,
     periodEndUtc,
-    periodText: `${formatClockDate(periodStartUtc, clockMode)} – ${formatClockDate(input.nowUtc, clockMode)}`,
+    periodText: reviewDays.length === 0
+      ? 'Bez zobrazených dnů'
+      : `${reviewDays[0]!.label} – ${lastDay!.label}`,
+    rangeNote: requested.note,
+    mapMode,
+    buckets: mapMode === 'days' ? [] : buildBuckets(reviewDays, mapMode, clockMode),
     violationCount,
     uncertaintyCount,
     dataComplete,
-    completenessText: dataComplete
-      ? 'Karta pokrývá celé kontrolované období.'
-      : 'Karta nepokrývá celé kontrolované období. Chybějící dny nejsou vyhodnocené.',
+    completenessText: completenessText(dataComplete, requested.note, reviewDays.length === 0),
     summaryText: summaryText(violationCount, uncertaintyCount, dataComplete, periodOpen),
+    unevaluatedNotes,
     days: reviewDays,
     findings,
     watches,
   }
+}
+
+function completenessText(dataComplete: boolean, rangeNote: string | null, empty: boolean): string {
+  if (empty && rangeNote != null) return rangeNote
+  const base = dataComplete
+    ? 'Karta pokrývá celé kontrolované období.'
+    : 'Karta nepokrývá celé kontrolované období. Chybějící dny nejsou vyhodnocené.'
+  return rangeNote == null ? base : `${base} ${rangeNote}`
+}
+
+function resolveDisplayPeriod(
+  request: CompliancePeriodRequest,
+  clockMode: ClockMode,
+  nowUtc: number,
+  record: { startUtc: number; endUtc: number } | null,
+): { mode: CompliancePeriodMode; startUtc: number; endUtc: number; note: string | null } {
+  const todayStart = dayStartMs(nowUtc, clockMode)
+  const tomorrow = addDays(todayStart, 1, clockMode)
+  if (request.mode === 'history') {
+    if (record == null) return { mode: 'history', startUtc: todayStart, endUtc: tomorrow, note: 'V datech není žádný záznam.' }
+    return { mode: 'history', startUtc: dayStartMs(record.startUtc, clockMode), endUtc: tomorrow, note: null }
+  }
+  if (request.mode === 'custom') {
+    if (!Number.isFinite(request.fromUtc) || !Number.isFinite(request.toUtc)) {
+      return { mode: 'custom', startUtc: tomorrow, endUtc: tomorrow, note: 'Vlastní období potřebuje platné datum od a do.' }
+    }
+    let startUtc = dayStartMs(request.fromUtc, clockMode)
+    let lastDay = dayStartMs(request.toUtc, clockMode)
+    if (lastDay < startUtc) {
+      const swap = startUtc
+      startUtc = lastDay
+      lastDay = swap
+    }
+    if (startUtc >= tomorrow) {
+      return { mode: 'custom', startUtc: tomorrow, endUtc: tomorrow, note: 'Vybrané období je až po dnešku. Budoucí dny se nehodnotí.' }
+    }
+    const clipped = lastDay >= tomorrow
+    if (clipped) lastDay = todayStart
+    return {
+      mode: 'custom',
+      startUtc,
+      endUtc: addDays(lastDay, 1, clockMode),
+      note: clipped ? 'Dny po dnešku se nehodnotí.' : null,
+    }
+  }
+  return {
+    mode: 'recent',
+    startUtc: addDays(todayStart, -(PERIOD_DAYS - 1), clockMode),
+    endUtc: tomorrow,
+    note: null,
+  }
+}
+
+function mapModeOf(dayCount: number): ComplianceMapMode {
+  if (dayCount <= 62) return 'days'
+  if (dayCount <= 366) return 'weeks'
+  return 'months'
+}
+
+function buildBuckets(days: readonly ComplianceDay[], mode: Exclude<ComplianceMapMode, 'days'>, clockMode: ClockMode): ComplianceBucket[] {
+  const groups = new Map<string, ComplianceDay[]>()
+  for (const day of days) {
+    const id = mode === 'weeks' ? `week:${weekStartMs(day.dayStartUtc, clockMode)}` : monthId(day.dayStartUtc, clockMode)
+    const list = groups.get(id) ?? []
+    list.push(day)
+    groups.set(id, list)
+  }
+  return [...groups].map(([id, group]) => {
+    const first = group[0]!
+    const last = group[group.length - 1]!
+    return {
+      id,
+      label: mode === 'weeks' ? formatWeekRange(weekStartMs(first.dayStartUtc, clockMode), clockMode) : monthLabel(first.dayStartUtc, clockMode),
+      startUtc: first.dayStartUtc,
+      endUtc: addDays(last.dayStartUtc, 1, clockMode),
+      severity: group.reduce<ComplianceSeverity>((worst, day) => (severityRank(day.severity) > severityRank(worst) ? day.severity : worst), 'clear'),
+      dayStarts: group.map((day) => day.dayStartUtc),
+    }
+  })
+}
+
+function monthId(ms: number, clockMode: ClockMode): string {
+  const date = new Date(ms)
+  const year = clockMode === 'utc' ? date.getUTCFullYear() : date.getFullYear()
+  const month = (clockMode === 'utc' ? date.getUTCMonth() : date.getMonth()) + 1
+  return `month:${year}-${month}`
+}
+
+function monthLabel(ms: number, clockMode: ClockMode): string {
+  const date = new Date(ms)
+  const year = clockMode === 'utc' ? date.getUTCFullYear() : date.getFullYear()
+  const month = (clockMode === 'utc' ? date.getUTCMonth() : date.getMonth()) + 1
+  return `${String(month).padStart(2, '0')}.${year}`
+}
+
+function severityRank(severity: ComplianceSeverity): number {
+  if (severity === 'violation') return 4
+  if (severity === 'uncertain') return 3
+  if (severity === 'incomplete') return 2
+  return 1
 }
 
 function summaryText(violations: number, uncertainties: number, dataComplete: boolean, periodOpen: boolean): string {
@@ -273,18 +419,38 @@ function collectDailyDriving(
   }
 }
 
+type WeekDrivingRow = {
+  weekStartUtc: number
+  weekEndUtc: number
+  status: WeeklyDrivingStatus
+  drivingMs: number
+}
+
+function weekDrivingStatuses(activities: readonly Activity[], periodStartUtc: number, periodEndUtc: number): WeekDrivingRow[] {
+  if (activities.length === 0) return []
+  const first = utcWeekStart(Math.min(...activities.map((activity) => activity.startUtc)))
+  const last = utcWeekStart(periodEndUtc - 1)
+  const rows: WeekDrivingRow[] = []
+  for (let week = first; week <= last; week += WEEK_MS) {
+    const result = assessWeeklyDrivingTime({ activities, weekStartUtc: week })
+    rows.push({
+      weekStartUtc: result.weekStartUtc,
+      weekEndUtc: result.weekEndUtc,
+      status: result.status,
+      drivingMs: result.drivingMs,
+    })
+  }
+  return rows.filter((row) => overlaps(row.weekStartUtc, row.weekEndUtc, periodStartUtc, periodEndUtc))
+}
+
 function collectWeekly(
-  activities: readonly Activity[],
+  rows: readonly WeekDrivingRow[],
   days: readonly DaySlot[],
   periodStartUtc: number,
   periodEndUtc: number,
   findings: ComplianceFinding[],
 ) {
-  if (activities.length === 0) return
-  const first = utcWeekStart(Math.min(...activities.map((activity) => activity.startUtc)))
-  const last = utcWeekStart(periodEndUtc - 1)
-  for (let week = first; week <= last; week += WEEK_MS) {
-    const result = assessWeeklyDrivingTime({ activities, weekStartUtc: week })
+  for (const result of rows) {
     if (!overlaps(result.weekStartUtc, result.weekEndUtc, periodStartUtc, periodEndUtc)) continue
     if (result.status !== 'over_56h') continue
     const mapDayUtc = placeDay(result.weekStartUtc, result.weekStartUtc, result.weekEndUtc, days)
@@ -304,6 +470,99 @@ function collectWeekly(
       technicalText: `status ${result.status}`,
       meterPercent: meter(result.drivingMs, WEEKLY_DRIVING_LIMIT_MS),
       meterOver: true,
+    })
+  }
+}
+
+function collectExtensions(
+  periods: readonly DailyDrivingPeriod[],
+  activities: readonly Activity[],
+  days: readonly DaySlot[],
+  periodStartUtc: number,
+  periodEndUtc: number,
+  findings: ComplianceFinding[],
+) {
+  const record = recordSpan(activities)
+  if (record == null) return
+  const first = utcWeekStart(record.startUtc)
+  const last = utcWeekStart(periodEndUtc - 1)
+  for (let week = first; week <= last; week += WEEK_MS) {
+    const result = assessWeeklyDrivingExtensions({
+      periods,
+      weekStartUtc: week,
+      recordStartUtc: record.startUtc,
+      recordEndUtc: record.endUtc,
+    })
+    if (!overlaps(result.weekStartUtc, result.weekEndUtc, periodStartUtc, periodEndUtc)) continue
+    if (result.status !== 'counted' || result.used == null || result.used <= WEEKLY_EXTENSION_LIMIT) continue
+    const mapDayUtc = placeDay(result.weekStartUtc, result.weekStartUtc, result.weekEndUtc, days)
+    if (mapDayUtc == null) continue
+    findings.push({
+      id: `extensions:${result.weekStartUtc}`,
+      severity: 'violation',
+      title: 'Prodloužení denní doby řízení',
+      intervalText: `${formatClockDateTime(result.weekStartUtc, 'utc')} – ${formatClockDateTime(result.weekEndUtc, 'utc')} UTC`,
+      startUtc: result.weekStartUtc,
+      endUtc: result.weekEndUtc,
+      mapDayUtc,
+      actualText: `${result.used} nad 9 hodin`,
+      limitText: `${WEEKLY_EXTENSION_LIMIT}`,
+      deltaText: `O ${result.used - WEEKLY_EXTENSION_LIMIT} víc`,
+      explanation: 'V týdnu od pondělí 00:00 UTC jsou víc než dvě vyhodnocené doby řízení nad 9 hodin. Neuzavřený počet se sem nepočítá.',
+      technicalText: `status ${result.status}, used ${result.used}`,
+      meterPercent: meter(result.used, WEEKLY_EXTENSION_LIMIT),
+      meterOver: true,
+    })
+  }
+}
+
+function consecutivePeriods(prepared: ReturnType<typeof prepare>, record: { startUtc: number; endUtc: number } | null): ConsecutiveWeekPeriod[] {
+  const visible = prepared.candidates.filter((candidate) => prepared.recordEndUtc == null || candidate.endUtc < prepared.recordEndUtc)
+  const assignment = buildWeeklyRestAssignment({
+    candidates: classifyWeeklyRestCandidates(visible),
+    unknownIntervals: prepared.unknownIntervals,
+    recordEndUtc: prepared.recordEndUtc,
+  })
+  return assessConsecutiveWeeks({
+    assignment,
+    unknownIntervals: prepared.unknownIntervals,
+    recordSpan: record,
+  }).periods
+}
+
+function collectWeeklyRests(
+  periods: readonly ConsecutiveWeekPeriod[],
+  recordEndUtc: number | null,
+  days: readonly DaySlot[],
+  periodStartUtc: number,
+  periodEndUtc: number,
+  findings: ComplianceFinding[],
+) {
+  for (const period of periods) {
+    if (!overlaps(period.earlierWeek.startUtc, period.laterWeek.endUtc, periodStartUtc, periodEndUtc)) continue
+    const closed = recordEndUtc != null && recordEndUtc >= period.laterWeek.endUtc
+    const failed = period.status === 'not_satisfied_basic_rule' && closed
+    const ambiguous = period.status === 'ambiguous'
+    if (!failed && !ambiguous) continue
+    const mapDayUtc = placeDay(period.laterWeek.startUtc, period.earlierWeek.startUtc, period.laterWeek.endUtc, days)
+    if (mapDayUtc == null) continue
+    findings.push({
+      id: `weekly-rest:${period.earlierWeek.startUtc}`,
+      severity: 'uncertain',
+      title: failed ? 'Týdenní odpočinky dvou týdnů' : 'Týdenní odpočinky dvou týdnů nejsou jednoznačné',
+      intervalText: `${formatClockDateTime(period.earlierWeek.startUtc, 'utc')} – ${formatClockDateTime(period.laterWeek.endUtc, 'utc')} UTC`,
+      startUtc: period.earlierWeek.startUtc,
+      endUtc: period.laterWeek.endUtc,
+      mapDayUtc,
+      actualText: failed ? 'Základní pravidlo nevyšlo' : 'Víc přiřazení',
+      limitText: 'Dva běžné, nebo jeden běžný a jeden zkrácený',
+      deltaText: 'Není to prokázané porušení',
+      explanation: failed
+        ? 'Základní pravidlo dvou sousedních týdnů nevyšlo. Modul z toho nedělá prokázané porušení a zvláštní režim se neposuzuje.'
+        : 'Přiřazení odpočinků ke týdnům se liší. Není to prokázané porušení.',
+      technicalText: `status ${period.status}`,
+      meterPercent: null,
+      meterOver: false,
     })
   }
 }
@@ -449,6 +708,86 @@ function watchItems(
   return watches
 }
 
+function explainDays(
+  days: readonly DaySlot[],
+  activities: readonly Activity[],
+  record: { startUtc: number; endUtc: number } | null,
+  prepared: ReturnType<typeof prepare>,
+  todayStart: number,
+  todayEnd: number,
+  weekDriving: readonly WeekDrivingRow[],
+  consecutive: readonly ConsecutiveWeekPeriod[],
+): Map<number, string> {
+  const notes = new Map<number, string[]>()
+  const add = (dayStartUtc: number, text: string) => {
+    const list = notes.get(dayStartUtc) ?? []
+    if (!list.includes(text)) list.push(text)
+    notes.set(dayStartUtc, list)
+  }
+  const periodStartUtc = days[0]?.startUtc ?? todayStart
+  const extensions = extensionRows(prepared.daily, activities, periodStartUtc, todayEnd)
+  for (const day of days) {
+    if (!dayCovered(day, activities, record)) add(day.startUtc, 'Den není celý v záznamu.')
+    if (day.startUtc === todayStart && todayIsOpen(prepared, todayStart, todayEnd)) add(day.startUtc, 'Dnešní kontrola ještě není uzavřená.')
+    const weekStarts = new Set([utcWeekStart(day.startUtc), utcWeekStart(day.endUtc - 1)])
+    for (const weekStart of weekStarts) {
+      const driving = weekDriving.find((row) => row.weekStartUtc === weekStart)
+      if (driving?.status === 'incomplete') add(day.startUtc, 'Týdenní doba řízení tohoto týdne není uzavřená.')
+      if (driving?.status === 'insufficient_data') add(day.startUtc, 'Týdenní doba řízení tohoto týdne nemá úplná data.')
+      const extension = extensions.find((row) => row.weekStartUtc === weekStart)
+      if (extension?.status === 'undecided') add(day.startUtc, 'Počet prodloužení nad 9 hodin v tomto týdnu není uzavřený.')
+    }
+    const covering = consecutive.filter((period) => overlaps(period.earlierWeek.startUtc, period.laterWeek.endUtc, day.startUtc, day.endUtc))
+    if (dayCovered(day, activities, record) && covering.length === 0) add(day.startUtc, 'Kontrola týdenních odpočinků se tohoto dne nedotkla.')
+    for (const period of covering) {
+      if (period.status === 'satisfied' || period.status === 'ambiguous') continue
+      if (period.status === 'not_satisfied_basic_rule' && record != null && record.endUtc >= period.laterWeek.endUtc) continue
+      if (period.status === 'insufficient_data') add(day.startUtc, 'Kontrola dvou sousedních týdnů pro tento den nemá dost údajů.')
+      else if (period.status === 'not_satisfied_basic_rule') add(day.startUtc, 'Kontrola dvou sousedních týdnů pro tento den není uzavřená.')
+      else add(day.startUtc, 'Skladba týdenních odpočinků se pro tento den neuzavřela.')
+    }
+    for (const node of prepared.nodes) {
+      if (!overlaps(node.windowStartUtc, node.windowEndUtc, day.startUtc, day.endUtc)) continue
+      if (node.status === 'history_incomplete') add(day.startUtc, 'Denní odpočinek tohoto dne není uzavřený.')
+      if (node.status === 'insufficient_data') add(day.startUtc, 'Denní odpočinek tohoto dne nemá úplná data.')
+    }
+    if (prepared.breaks.some((period) => period.status === 'insufficient_data' && overlaps(period.startUtc, period.endUtc, day.startUtc, day.endUtc))) {
+      add(day.startUtc, 'Přestávky v řízení tohoto dne nemají úplná data.')
+    }
+    if (prepared.daily.some((period) => period.result === 'insufficient_data' && overlaps(period.startUtc, period.endUtc ?? period.startUtc, day.startUtc, day.endUtc))) {
+      add(day.startUtc, 'Denní doba řízení tohoto dne nemá úplná data.')
+    }
+  }
+  return new Map([...notes].map(([dayStartUtc, list]) => [dayStartUtc, list.slice(0, 3).join(' ')]))
+}
+
+function extensionRows(periods: readonly DailyDrivingPeriod[], activities: readonly Activity[], periodStartUtc: number, periodEndUtc: number) {
+  const record = recordSpan(activities)
+  if (record == null) return []
+  const first = utcWeekStart(Math.min(record.startUtc, periodStartUtc))
+  const last = utcWeekStart(periodEndUtc - 1)
+  const rows = []
+  for (let week = first; week <= last; week += WEEK_MS) {
+    rows.push(assessWeeklyDrivingExtensions({
+      periods,
+      weekStartUtc: week,
+      recordStartUtc: record.startUtc,
+      recordEndUtc: record.endUtc,
+    }))
+  }
+  return rows
+}
+
+function todayIsOpen(prepared: ReturnType<typeof prepare>, todayStart: number, todayEnd: number): boolean {
+  const openBreak = prepared.breaks.some(
+    (period) => period.status === 'within_limit' && period.qualifyingBreak == null && overlaps(period.startUtc, period.endUtc, todayStart, todayEnd),
+  )
+  const openDriving = prepared.daily.some(
+    (period) => !period.closed && period.endUtc != null && overlaps(period.startUtc, period.endUtc, todayStart, todayEnd) && period.result !== 'over_10h',
+  )
+  return openBreak || openDriving
+}
+
 function dayCovered(day: DaySlot, activities: readonly Activity[], record: { startUtc: number; endUtc: number } | null): boolean {
   if (record == null || day.endUtc <= record.startUtc || day.startUtc >= record.endUtc) return false
   if (activities.some((activity) => activity.kind === 'unknown' && overlaps(activity.startUtc, activity.endUtc, day.startUtc, day.endUtc))) return false
@@ -465,14 +804,6 @@ function dayCovered(day: DaySlot, activities: readonly Activity[], record: { sta
   return cursor >= end
 }
 
-function markOpenToday(prepared: ReturnType<typeof prepare>, todayStart: number, todayEnd: number, incompleteDays: Set<number>) {
-  const openBreak = prepared.breaks.some(
-    (period) => period.status === 'within_limit' && period.qualifyingBreak == null && overlaps(period.startUtc, period.endUtc, todayStart, todayEnd),
-  )
-  const openDriving = prepared.daily.some((period) => !period.closed && period.endUtc != null && overlaps(period.startUtc, period.endUtc, todayStart, todayEnd) && period.result !== 'over_10h')
-  if (openBreak || openDriving) incompleteDays.add(todayStart)
-}
-
 function daySeverity(findings: readonly ComplianceFinding[], incomplete: boolean): ComplianceSeverity {
   if (findings.some((finding) => finding.severity === 'violation')) return 'violation'
   if (findings.some((finding) => finding.severity === 'uncertain')) return 'uncertain'
@@ -487,11 +818,14 @@ function placeDay(preferredUtc: number, startUtc: number, endUtc: number, days: 
   return overlap?.startUtc ?? null
 }
 
-function daySlots(periodStartUtc: number, clockMode: ClockMode): DaySlot[] {
+function daySlots(periodStartUtc: number, periodEndUtc: number, clockMode: ClockMode): DaySlot[] {
   const days: DaySlot[] = []
-  for (let index = 0; index < PERIOD_DAYS; index += 1) {
-    const startUtc = addDays(periodStartUtc, index, clockMode)
-    days.push({ startUtc, endUtc: addDays(startUtc, 1, clockMode) })
+  let cursor = periodStartUtc
+  while (cursor < periodEndUtc && days.length < 4000) {
+    const endUtc = addDays(cursor, 1, clockMode)
+    if (endUtc <= cursor) break
+    days.push({ startUtc: cursor, endUtc })
+    cursor = endUtc
   }
   return days
 }
@@ -532,4 +866,59 @@ function durationText(durationMs: number): string {
 
 function formatRange(startUtc: number, endUtc: number, clockMode: ClockMode): string {
   return `${formatClockDateTime(startUtc, clockMode)} – ${formatClockDateTime(endUtc, clockMode)}`
+}
+
+/** Technický výstup až na vyžádání. Neobsahuje jméno ani číslo karty. */
+export function buildComplianceDiagnostic(input: {
+  activities: readonly Activity[]
+  nowUtc: number
+  clockMode?: ClockMode
+  period?: CompliancePeriodRequest
+}) {
+  const review = buildComplianceReview(input)
+  const card: DriverCardData = {
+    cardNumber: '',
+    firstName: '',
+    surname: '',
+    lastWithdrawalUtc: null,
+    activities: input.activities.map((activity) => ({ ...activity, registration: undefined })),
+    locations: [],
+    violations: [],
+  }
+  const analysis = analyzeDriverActivities({ card })
+  return {
+    period: {
+      startUtc: review.periodStartUtc,
+      endUtc: review.periodEndUtc,
+      mode: review.periodMode,
+      text: review.periodText,
+      clockMode: input.clockMode ?? 'local',
+      legalWeekClock: 'monday_00_00_utc' as const,
+      rangeNote: review.rangeNote,
+      mapMode: review.mapMode,
+    },
+    evaluation: {
+      dataComplete: review.dataComplete,
+      completenessText: review.completenessText,
+      summaryText: review.summaryText,
+      violationCount: review.violationCount,
+      uncertaintyCount: review.uncertaintyCount,
+      unevaluatedNotes: review.unevaluatedNotes,
+      days: review.days.map((day) => ({ dayStartUtc: day.dayStartUtc, severity: day.severity, note: day.note })),
+      findings: review.findings.map((finding) => ({
+        id: finding.id,
+        severity: finding.severity,
+        technicalText: finding.technicalText,
+        explanation: finding.explanation,
+      })),
+    },
+    diagnostic: buildDiagnosticExport(
+      deriveDiagnosticCases(analysis),
+      derivePeriodDiagnostics(analysis),
+      {},
+      new Date(input.nowUtc).toISOString(),
+      analysis.weeklyAssignment,
+      analysis.consecutiveWeeks,
+    ),
+  }
 }
