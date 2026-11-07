@@ -500,6 +500,137 @@ body {
   color: #0f172a;
 }
 
+.compliance-review {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.compliance-toolbar,
+.compliance-stats,
+.compliance-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+}
+
+.compliance-period,
+.compliance-summary,
+.compliance-empty,
+.compliance-stats p,
+.compliance-watch p,
+.compliance-card p {
+  margin: 0;
+}
+
+.compliance-period,
+.compliance-summary {
+  font-size: 14px;
+  font-weight: 650;
+  color: #0f172a;
+}
+
+.compliance-stats p,
+.compliance-clock {
+  font-size: 13px;
+  color: #334155;
+}
+
+.compliance-clock select,
+.compliance-filters button,
+.compliance-open-day {
+  margin-left: 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+}
+
+.compliance-filters button.is-active {
+  background: #0f172a;
+  color: #fff;
+}
+
+.compliance-map {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(2.1rem, 1fr));
+  gap: 4px;
+}
+
+.compliance-day {
+  aspect-ratio: 1;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #0f172a;
+  font-size: 10px;
+  padding: 0;
+}
+
+.compliance-day-violation { background: #fecaca; }
+.compliance-day-uncertain { background: #fed7aa; }
+.compliance-day-clear { background: #bbf7d0; }
+.compliance-day-incomplete { background: #e2e8f0; color: #64748b; }
+.compliance-day.is-selected { border-color: #0f172a; }
+
+.compliance-card,
+.compliance-watch-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.compliance-card { border-left: 4px solid #94a3b8; }
+.compliance-card-violation { border-left-color: #b91c1c; }
+.compliance-card-uncertain { border-left-color: #c2410c; }
+
+.compliance-card header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.compliance-card h3,
+.compliance-watch h2,
+.compliance-watch-card h3 {
+  margin: 0;
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.compliance-watch h2 { font-size: 16px; margin-bottom: 6px; }
+
+.compliance-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #94a3b8;
+}
+
+.compliance-dot-violation { background: #b91c1c; }
+.compliance-dot-uncertain { background: #c2410c; }
+
+.compliance-values { font-variant-numeric: tabular-nums; font-weight: 650; }
+
+.compliance-meter {
+  height: 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.compliance-meter div { height: 100%; background: #15803d; }
+.compliance-meter.is-over div { background: #b91c1c; }
+
+.compliance-cards,
+.compliance-watch { display: flex; flex-direction: column; gap: 8px; }
+
+.compliance-technical { margin-top: 18px; }
+
 .diagnostic-review {
   display: flex;
   flex-direction: column;
