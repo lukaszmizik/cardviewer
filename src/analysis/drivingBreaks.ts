@@ -6,7 +6,7 @@ export const BREAK_FULL_MS = 45 * 60 * 1000
 export const BREAK_FIRST_MS = 15 * 60 * 1000
 export const BREAK_SECOND_MS = 30 * 60 * 1000
 
-export type DrivingBreakStatus = 'within_limit' | 'exceeded' | 'insufficient_data'
+export type DrivingBreakStatus = 'within_limit' | 'exceeded' | 'insufficient_data' | 'crew_break_unconfirmed'
 
 export type QualifyingDrivingBreak = {
   kind: 'continuous_45' | 'split_15_30'
@@ -17,7 +17,8 @@ export type QualifyingDrivingBreak = {
 
 /**
  * Jeden úsek součtu řízení. Překročení není přestupek.
- * `isCrew` se nečte a výjimka pro osádku se neposuzuje.
+ * `crew_break_unconfirmed` znamená, že limit vychází jinak, pokud by se pohotovost v osádce uznala jako přestávka.
+ * Karta takovou přestávku neprokazuje.
  */
 export type DrivingBreakPeriod = {
   status: DrivingBreakStatus
@@ -35,6 +36,8 @@ export type BreakActivity = {
   kind: ActivityKind
   startUtc: number
   endUtc: number
+  /** Příznak osádky z karty. Sám o sobě nedokládá řízení druhého řidiče. */
+  isCrew?: boolean
 }
 
 type Mode = 'unknown' | 'driving' | 'rest' | 'other'
@@ -57,11 +60,23 @@ type OpenPeriod = {
 }
 
 /**
- * Sečte řízení do 4 h 30 min. Vynuluje je jen souvislý odpočinek alespoň 45 minut,
+ * Sečte řízení do 4 h 30 min. Prokázaně ho vynuluje jen souvislý odpočinek alespoň 45 minut,
  * nebo v tomtéž úseku nejdřív odpočinek alespoň 15 minut a až po něm alespoň 30 minut.
- * Pohotovost a jiná práce součet nevynulují. Neznámý úsek před rozhodnutím není překročení.
+ * Pohotovost a jiná práce prokázaný součet nevynulují. Neznámý úsek před rozhodnutím není překročení.
+ * Pohotovost s příznakem osádky může být přestávkou ve vozidle řízeném jiným řidičem, jen pokud řidič nepomáhá.
+ * Karta druhé z těchto podmínek nedokládá, proto taková pohotovost není kvalifikovaná přestávka.
+ * Pokud by její uznání udrželo řízení v limitu, výsledek zůstane `crew_break_unconfirmed`.
  */
 export function assessDrivingBreaks(activities: readonly BreakActivity[]): DrivingBreakPeriod[] {
+  return collect(activities, false).map((period) => {
+    if (period.status !== 'exceeded') return period
+    const hypothetical = collect(clip(activities, period.startUtc, period.endUtc), true)
+    if (hypothetical.length === 0 || hypothetical.some((item) => item.status !== 'within_limit')) return period
+    return { ...period, status: 'crew_break_unconfirmed', limitReachedUtc: null }
+  })
+}
+
+function collect(activities: readonly BreakActivity[], acceptCrewAvailability: boolean): DrivingBreakPeriod[] {
   const periods: DrivingBreakPeriod[] = []
   let open: OpenPeriod | null = null
 
@@ -85,7 +100,7 @@ export function assessDrivingBreaks(activities: readonly BreakActivity[]): Drivi
     open = null
   }
 
-  for (const segment of timeline(activities)) {
+  for (const segment of timeline(activities, acceptCrewAvailability)) {
     if (segment.mode === 'driving') {
       open = ensure(open, segment.startUtc)
       const before = open.drivingMs
@@ -145,7 +160,16 @@ function ensure(open: OpenPeriod | null, atUtc: number): OpenPeriod {
   }
 }
 
-function timeline(activities: readonly BreakActivity[]): Segment[] {
+function clip(activities: readonly BreakActivity[], startUtc: number, endUtc: number): BreakActivity[] {
+  return activities.flatMap((activity) => {
+    const start = Math.max(activity.startUtc, startUtc)
+    const end = Math.min(activity.endUtc, endUtc)
+    if (end <= start) return []
+    return [{ ...activity, startUtc: start, endUtc: end }]
+  })
+}
+
+function timeline(activities: readonly BreakActivity[], acceptCrewAvailability: boolean): Segment[] {
   const usable = activities
     .filter((activity) => activity.endUtc > activity.startUtc)
     .sort((left, right) => left.startUtc - right.startUtc || left.endUtc - right.endUtc || left.id.localeCompare(right.id))
@@ -163,8 +187,13 @@ function timeline(activities: readonly BreakActivity[]): Segment[] {
     const unknown = overlapping.filter((activity) => activity.kind === 'unknown')
     const driving = overlapping.filter((activity) => activity.kind === 'driving')
     const rest = overlapping.filter((activity) => activity.kind === 'rest')
-    const chosen = unknown.length > 0 ? unknown : driving.length > 0 ? driving : rest
-    const mode: Mode = unknown.length > 0 ? 'unknown' : driving.length > 0 ? 'driving' : rest.length > 0 ? 'rest' : 'other'
+    const work = overlapping.filter((activity) => activity.kind === 'work')
+    const availability = overlapping.filter((activity) => activity.kind === 'availability')
+    const crewAvailability =
+      acceptCrewAvailability && work.length === 0 && availability.length > 0 && availability.every((activity) => activity.isCrew === true)
+    const chosen = unknown.length > 0 ? unknown : driving.length > 0 ? driving : rest.length > 0 ? rest : crewAvailability ? availability : []
+    const mode: Mode =
+      unknown.length > 0 ? 'unknown' : driving.length > 0 ? 'driving' : rest.length > 0 || crewAvailability ? 'rest' : 'other'
     slices.push({
       mode,
       startUtc,

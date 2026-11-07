@@ -59,6 +59,7 @@ import {
 import { TimeScaleSelect } from './components/TimeScaleSelect'
 import { CardInfoTable } from './components/CardInfoTable'
 import { buildDayDrivingRows, type DayDrivingActivity, type DayDrivingMark, type DayDrivingTone } from './components/dayDrivingTable'
+import { buildFortnightDrivingRow } from './components/fortnightDrivingPanel'
 import { buildWeeklyDrivingPanel } from './components/weeklyDrivingPanel'
 import { CardHistoryTables } from './components/CardHistoryTables'
 import { bestDailyDistance, type DailyDistanceRecord } from './utils/weekDistance'
@@ -242,6 +243,34 @@ function WeeklyDrivingPanel({ days, dayEndUtc }: { days: DayData[]; dayEndUtc: n
       <p className="weekly-driving-limit">Limit 56 h</p>
       {panel.notes.map((note) => (
         <p className={note.startsWith('Překročení') ? 'weekly-driving-warning' : 'weekly-driving-note'} key={note}>
+          {note}
+        </p>
+      ))}
+    </section>
+  )
+}
+
+function FortnightDrivingRow({ days, dayEndUtc }: { days: DayData[]; dayEndUtc: number }) {
+  const activities = days.flatMap((day) =>
+    day.activities.map((activity, index) => ({
+      id: `${day.dateUtc}:${activity.startMs}:${activity.endMs}:${index}`,
+      kind: graphActivityKind(activity.type),
+      startUtc: activity.startMs,
+      endUtc: activity.endMs,
+      durationMinutes: Math.round((activity.endMs - activity.startMs) / 60_000),
+      slot: 1 as const,
+    })),
+  )
+  const row = buildFortnightDrivingRow({ activities, dayEndUtc })
+  return (
+    <section className="fortnight-driving-row" aria-label={row.title}>
+      <h3 className="fortnight-driving-title">{row.title}</h3>
+      <p className="fortnight-driving-range">{row.rangeText}</p>
+      <p className="fortnight-driving-value">{row.valueText}</p>
+      <p className="fortnight-driving-limit">Limit 90 h</p>
+      <p className={`fortnight-driving-status fortnight-driving-status-${row.tone}`}>{row.statusText}</p>
+      {row.notes.map((note) => (
+        <p className="fortnight-driving-note" key={note}>
           {note}
         </p>
       ))}
@@ -1418,6 +1447,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
             </DayGraphPan>
             <DayDrivingTable days={days} dayStartUtc={focusedDayUtc} dayEndUtc={addDays(focusedDayUtc, 1, clockMode)} clockMode={clockMode} />
             <WeeklyDrivingPanel days={days} dayEndUtc={addDays(focusedDayUtc, 1, clockMode)} />
+            <FortnightDrivingRow days={days} dayEndUtc={addDays(focusedDayUtc, 1, clockMode)} />
           </section>
         ) : (
           <GraphSwipeNav

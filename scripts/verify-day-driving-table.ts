@@ -91,15 +91,14 @@ test('neznámý úsek nedovolí prokázané překročení', () => {
   assert.equal(JSON.stringify(rows).includes('překročen'), false)
 })
 
-test('režim osádky zůstane nevyhodnocenou výjimkou', () => {
+test('příznak osádky na jízdě sám o sobě neskryje prokázané překročení', () => {
   const rows = buildDayDrivingRows({
     dayStartUtc: START,
     dayEndUtc: START + DAY,
     activities: [activity('drive', 'driving', START + 6 * HOUR, START + 11 * HOUR, true)],
   })
-  assert.equal(value(rows, 'Výsledek přestávek v řízení'), 'Nelze spolehlivě vyhodnotit.')
+  assert.equal(value(rows, 'Výsledek přestávek v řízení'), 'Limit 4 h 30 min překročen.')
   assert.equal(JSON.stringify(rows).includes('přestupek'), false)
-  assert.equal(JSON.stringify(rows).includes('překročen'), false)
 })
 
 test('odpočinek 824 h 51 min resetuje řízení a není přestávka', () => {
@@ -123,7 +122,7 @@ test('odpočinek 824 h 51 min resetuje řízení a není přestávka', () => {
   assert.equal(periods[2]?.startUtc, restEnd)
 
   const shown = buildDayDrivingRows({ activities, dayStartUtc: day, dayEndUtc: day + DAY })
-  assert.equal(value(shown, 'Bezpečnostní přestávky'), '45 min (10:00–10:45)')
+  assert.equal(value(shown, 'Bezpečnostní přestávky'), '45 min (10:00–10:45), 45 min (21:23–22:08)')
   assert.equal(value(shown, 'Ukončení cyklu řízení'), undefined)
   assert.equal(JSON.stringify(shown).includes('824'), false)
   assert.equal(JSON.stringify(shown).includes('29.09.2024'), false)
@@ -199,13 +198,19 @@ test('nedostatek údajů a nevyhodnocená osádka mají šedý stav', () => {
   const crew = buildDayDrivingRows({
     dayStartUtc: START,
     dayEndUtc: START + DAY,
-    activities: [activity('drive', 'driving', START + 6 * HOUR, START + 11 * HOUR, true)],
+    activities: [
+      activity('drive-1', 'driving', START + 8 * HOUR, START + 12 * HOUR, true),
+      activity('wait', 'availability', START + 12 * HOUR, START + 12 * HOUR + 45 * MINUTE, true),
+      activity('drive-2', 'driving', START + 13 * HOUR, START + 14 * HOUR, true),
+    ],
   })
   assert.equal(tone(unknown, 'Výsledek přestávek v řízení'), 'undecided')
+  assert.equal(value(unknown, 'Výsledek přestávek v řízení'), 'Nelze spolehlivě vyhodnotit.')
   assert.equal(tone(crew, 'Výsledek přestávek v řízení'), 'undecided')
-  assert.notEqual(tone(crew, 'Výsledek přestávek v řízení'), 'exceeded')
+  assert.equal(value(crew, 'Výsledek přestávek v řízení'), 'Závisí na uznání přestávky v režimu osádky.')
+  assert.notEqual(tone(crew, 'Výsledek přestávek v řízení'), 'clear')
   assert.equal(JSON.stringify(crew).includes('přestupek'), false)
-  assert.equal(JSON.stringify(crew).includes('překročen'), false)
+  assert.equal(JSON.stringify(crew).includes('V limitu'), false)
 })
 
 test('kalendářní součet řízení není součástí vyhodnocení', () => {
@@ -486,4 +491,33 @@ test('neznámý úsek po známém začátku zůstane nerozhodnutý', () => {
   assert.equal(row?.statusText, 'Nelze určit')
   assert.equal(row?.mark, 'unknown')
   assert.equal(JSON.stringify(row).includes('Průběžně'), false)
+})
+
+test('7. a 8. 3. 2026 ukáže 45 minut po jízdě v osádce a limit 4 h 30 min', () => {
+  const driveStart = Date.parse('2026-03-07T20:01:00.000Z')
+  const driveEnd = Date.parse('2026-03-07T23:36:00.000Z')
+  const restStart = Date.parse('2026-03-08T02:09:00.000Z')
+  const activities = [
+    activity('drive', 'driving', driveStart, driveEnd, true),
+    activity('long', 'rest', restStart, restStart + 30 * HOUR),
+  ]
+  const [period] = assessDrivingBreaks(activities)
+  assert.equal(period?.status, 'within_limit')
+  assert.equal(period?.drivingMs, 3 * HOUR + 35 * MINUTE)
+  assert.equal(period?.qualifyingBreak?.kind, 'continuous_45')
+  assert.equal(period?.qualifyingBreak?.startUtc, restStart)
+  assert.equal(period?.qualifyingBreak?.completedAtUtc, restStart + 45 * MINUTE)
+
+  const march7 = Date.parse('2026-03-06T23:00:00.000Z')
+  const march8 = Date.parse('2026-03-07T23:00:00.000Z')
+  const first = buildDayDrivingRows({ activities, dayStartUtc: march7, dayEndUtc: march8, clockMode: 'local' })
+  const second = buildDayDrivingRows({ activities, dayStartUtc: march8, dayEndUtc: march8 + DAY, clockMode: 'local' })
+  for (const rows of [first, second]) {
+    assert.equal(value(rows, 'Bezpečnostní přestávky'), '45 min (03:09–03:54)')
+    assert.equal(value(rows, 'Výsledek přestávek v řízení'), 'V limitu 4 h 30 min.')
+    assert.equal(tone(rows, 'Výsledek přestávek v řízení'), 'clear')
+    assert.equal(value(rows, 'Nejdelší úsek řízení mezi přestávkami'), '3 h 35 min')
+    assert.equal(JSON.stringify(rows).includes('Nelze spolehlivě vyhodnotit.'), false)
+    assert.equal(JSON.stringify(rows).includes('09:09'), false)
+  }
 })

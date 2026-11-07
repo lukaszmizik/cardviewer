@@ -11,8 +11,8 @@ const HOUR = 60 * 60 * 1000
 const MINUTE = 60 * 1000
 const START = Date.parse('2026-06-01T06:00:00.000Z')
 
-function activity(id: string, kind: BreakActivity['kind'], startUtc: number, endUtc: number): BreakActivity {
-  return { id, kind, startUtc, endUtc }
+function activity(id: string, kind: BreakActivity['kind'], startUtc: number, endUtc: number, isCrew = false): BreakActivity {
+  return { id, kind, startUtc, endUtc, isCrew }
 }
 
 test('přesně 4 hodiny 30 minut je ještě v limitu', () => {
@@ -192,4 +192,56 @@ test('překryv řízení ve dvou slotech se nepočítá dvakrát', () => {
   assert.equal(period?.status, 'within_limit')
   assert.equal(period?.drivingMs, DRIVING_LIMIT_MS)
   assert.deepEqual(period?.drivingSourceActivityIds, ['slot-1', 'slot-2'])
+})
+
+test('pohotovost v osádce není prokázaná přestávka, ale změní výsledek na neuzavřený', () => {
+  const [period] = assessDrivingBreaks([
+    activity('drive-1', 'driving', START, START + 4 * HOUR, true),
+    activity('wait', 'availability', START + 4 * HOUR, START + 4 * HOUR + 45 * MINUTE, true),
+    activity('drive-2', 'driving', START + 5 * HOUR, START + 6 * HOUR, true),
+  ])
+  assert.equal(period?.status, 'crew_break_unconfirmed')
+  assert.equal(period?.qualifyingBreak, null)
+  assert.equal(period?.limitReachedUtc, null)
+  assert.equal(period?.drivingMs, 5 * HOUR)
+  assert.notEqual(period?.status, 'within_limit')
+  assert.notEqual(period?.status, 'exceeded')
+})
+
+test('15 a 30 minut pohotovosti v osádce cyklus prokazatelně neobnoví', () => {
+  const periods = assessDrivingBreaks([
+    activity('drive-1', 'driving', START, START + 2 * HOUR, true),
+    activity('first', 'availability', START + 2 * HOUR, START + 2 * HOUR + 15 * MINUTE, true),
+    activity('drive-2', 'driving', START + 3 * HOUR, START + 5 * HOUR, true),
+    activity('second', 'availability', START + 5 * HOUR, START + 5 * HOUR + 30 * MINUTE, true),
+    activity('drive-3', 'driving', START + 6 * HOUR, START + 7 * HOUR, true),
+  ])
+  assert.equal(periods.length, 1)
+  assert.equal(periods[0]?.status, 'crew_break_unconfirmed')
+  assert.equal(periods[0]?.qualifyingBreak, null)
+  assert.equal(periods[0]?.drivingMs, 5 * HOUR)
+})
+
+test('pohotovost bez doložené osádky po 4 h 30 min přestávku nepotvrdí', () => {
+  const [period] = assessDrivingBreaks([
+    activity('drive-1', 'driving', START, START + DRIVING_LIMIT_MS),
+    activity('wait', 'availability', START + DRIVING_LIMIT_MS, START + DRIVING_LIMIT_MS + 45 * MINUTE),
+    activity('drive-2', 'driving', START + DRIVING_LIMIT_MS + 45 * MINUTE, START + DRIVING_LIMIT_MS + 75 * MINUTE),
+  ])
+  assert.equal(period?.status, 'exceeded')
+  assert.equal(period?.qualifyingBreak, null)
+  assert.notEqual(period?.status, 'within_limit')
+})
+
+test('práce uprostřed pohotovosti v osádce nepřerušenou přestávku nesplní', () => {
+  const [period] = assessDrivingBreaks([
+    activity('drive-1', 'driving', START, START + DRIVING_LIMIT_MS, true),
+    activity('wait-1', 'availability', START + DRIVING_LIMIT_MS, START + DRIVING_LIMIT_MS + 22 * MINUTE, true),
+    activity('help', 'work', START + DRIVING_LIMIT_MS + 22 * MINUTE, START + DRIVING_LIMIT_MS + 28 * MINUTE, true),
+    activity('wait-2', 'availability', START + DRIVING_LIMIT_MS + 28 * MINUTE, START + DRIVING_LIMIT_MS + 51 * MINUTE, true),
+    activity('drive-2', 'driving', START + DRIVING_LIMIT_MS + HOUR, START + DRIVING_LIMIT_MS + 90 * MINUTE, true),
+  ])
+  assert.equal(period?.status, 'exceeded')
+  assert.equal(period?.qualifyingBreak, null)
+  assert.equal(period?.drivingSourceActivityIds.includes('help'), false)
 })

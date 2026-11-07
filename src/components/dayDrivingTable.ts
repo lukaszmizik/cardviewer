@@ -34,6 +34,8 @@ export type DayDrivingRow = {
 }
 
 const UNRELIABLE = 'Nelze spolehlivě vyhodnotit.'
+const CREW_BREAK = 'Závisí na uznání přestávky v režimu osádky.'
+const CREW_DETAIL = 'Karta nedokládá, že vozidlo řídil jiný řidič a že řidič během přestávky nepomáhal.'
 const PERIOD_LABEL = 'Doba řízení v pracovním období'
 const NINE_HOURS = 9 * 60 * 60 * 1000
 const TEN_HOURS = 10 * 60 * 60 * 1000
@@ -70,12 +72,12 @@ export function buildDayDrivingRows(input: {
       presentation: 'metric',
     },
   ]
-  const tone = resultTone(relevant, input.activities)
-  const result = resultText(relevant, input.activities)
+  const tone = resultTone(relevant)
+  const result = resultText(relevant)
   rows.push({
     label: 'Výsledek přestávek v řízení',
     primary: result,
-    detail: tone === 'caution' ? 'Cyklus řízení není uzavřen.' : null,
+    detail: resultDetail(relevant, tone),
     value: result,
     tone,
     statusText: result,
@@ -101,23 +103,27 @@ export function buildDayDrivingRows(input: {
   return rows
 }
 
-function resultTone(periods: readonly DrivingBreakPeriod[], activities: readonly DayDrivingActivity[]): DayDrivingTone {
-  const crew = periods.some((period) =>
-    activities.some((activity) => activity.isCrew === true && overlaps(activity.startUtc, activity.endUtc, period.startUtc, period.endUtc)),
-  )
-  if (crew || periods.some((period) => period.status === 'insufficient_data')) return 'undecided'
+function resultTone(periods: readonly DrivingBreakPeriod[]): DayDrivingTone {
+  if (periods.some((period) => period.status === 'insufficient_data')) return 'undecided'
   if (periods.some((period) => period.status === 'exceeded')) return 'exceeded'
+  if (periods.some((period) => period.status === 'crew_break_unconfirmed')) return 'undecided'
   const decided = evaluated(periods)
   if (decided.length === 0) return 'undecided'
   if (decided.some((period) => period.qualifyingBreak == null)) return 'caution'
   return 'clear'
 }
 
-function resultText(periods: readonly DrivingBreakPeriod[], activities: readonly DayDrivingActivity[]): string {
-  const crew = periods.some((period) => activities.some((activity) => activity.isCrew === true && overlaps(activity.startUtc, activity.endUtc, period.startUtc, period.endUtc)))
-  if (crew || periods.some((period) => period.status === 'insufficient_data')) return UNRELIABLE
+function resultText(periods: readonly DrivingBreakPeriod[]): string {
+  if (periods.some((period) => period.status === 'insufficient_data')) return UNRELIABLE
   if (periods.some((period) => period.status === 'exceeded')) return 'Limit 4 h 30 min překročen.'
+  if (periods.some((period) => period.status === 'crew_break_unconfirmed')) return CREW_BREAK
   return 'V limitu 4 h 30 min.'
+}
+
+function resultDetail(periods: readonly DrivingBreakPeriod[], tone: DayDrivingTone): string | null {
+  if (periods.some((period) => period.status === 'crew_break_unconfirmed')) return CREW_DETAIL
+  if (tone === 'caution') return 'Cyklus řízení není uzavřen.'
+  return null
 }
 
 function breakLines(
@@ -130,8 +136,7 @@ function breakLines(
   const ranges: string[] = []
   for (const period of periods) {
     if (period.qualifyingBreak == null) continue
-    for (const [startUtc, endUtc] of breakSpans(period.qualifyingBreak, activities)) {
-      if (endUtc - startUtc > CYCLE_REST_MS) continue
+    for (const [startUtc, endUtc] of breakWindows(period.qualifyingBreak, activities)) {
       const length = lengthText(endUtc - startUtc)
       const range = rangeText(startUtc, endUtc, clockMode)
       lengths.push(length)
@@ -155,6 +160,26 @@ function breakSpans(item: QualifyingDrivingBreak, activities: readonly DayDrivin
     else merged.push([startUtc, endUtc])
   }
   return merged.length > 0 ? merged : [[item.startUtc, item.completedAtUtc]]
+}
+
+/** U odpočinku delšího než 24 hodin zobrazí jen úsek, kterým se přestávka dokončila. */
+function breakWindows(item: QualifyingDrivingBreak, activities: readonly DayDrivingActivity[]): Array<[number, number]> {
+  const windows: Array<[number, number]> = []
+  for (const [startUtc, endUtc] of breakSpans(item, activities)) {
+    if (endUtc - startUtc <= CYCLE_REST_MS) {
+      pushWindow(windows, startUtc, endUtc)
+      continue
+    }
+    const clipStart = Math.max(startUtc, item.startUtc)
+    const clipEnd = Math.min(endUtc, item.completedAtUtc)
+    if (clipEnd > clipStart && clipEnd - clipStart <= CYCLE_REST_MS) pushWindow(windows, clipStart, clipEnd)
+  }
+  return windows
+}
+
+function pushWindow(windows: Array<[number, number]>, startUtc: number, endUtc: number) {
+  if (windows.some((window) => window[0] === startUtc && window[1] === endUtc)) return
+  windows.push([startUtc, endUtc])
 }
 
 function rangeText(startUtc: number, endUtc: number, clockMode: ClockMode): string {
