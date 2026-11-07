@@ -43,6 +43,22 @@ function emptyRow(columns: number) {
   )
 }
 
+function formatPlate(value: string): string {
+  const compact = value.replace(/\s+/g, '').toUpperCase()
+  if (/^[0-9A-Z]{7}$/.test(compact)) return `${compact.slice(0, 3)} ${compact.slice(3)}`
+  return value.trim()
+}
+
+function PlateMark({ plate }: { plate: string }) {
+  const label = formatPlate(plate)
+  return (
+    <span className="cz-plate" aria-label={label}>
+      <span className="cz-plate-band" aria-hidden="true" />
+      <span className="cz-plate-text">{label}</span>
+    </span>
+  )
+}
+
 function vehicleDetail(use: VehicleUse): string {
   const parts: string[] = []
   if (use.registrationNation) parts.push(`Stát registrace ${use.registrationNation}`)
@@ -62,7 +78,7 @@ function vehicleRows(uses: VehicleUse[], weekStart: number, weekEnd: number, mod
       return (
         <Fragment key={`${use.registration}-${use.fromUtc}`}>
           <tr className="card-history-vehicle-main">
-            <td className="card-history-plate">{use.registration}</td>
+            <td className="card-history-plate"><PlateMark plate={use.registration} /></td>
             <td>{formatClockDateTime(use.fromUtc, mode)}</td>
             <td>{formatClockDateTime(use.toUtc, mode)}</td>
             <td>{formatKm(use.kilometers)}</td>

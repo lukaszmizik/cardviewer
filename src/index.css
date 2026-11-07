@@ -1503,6 +1503,32 @@ body {
   font-weight: 700;
 }
 
+.cz-plate {
+  display: inline-flex;
+  align-items: stretch;
+  margin: 2px 0 4px;
+  background: #fff;
+  color: #111;
+  border: 1.5px solid #111;
+  border-radius: 4px;
+  overflow: hidden;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.cz-plate-band {
+  width: 7px;
+  background: #003399;
+}
+
+.cz-plate-text {
+  padding: 4px 7px 3px 6px;
+  font-family: Arial, "Segoe UI", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
 .card-history-vehicle-extra td {
   padding-top: 0;
   padding-bottom: 6px;
