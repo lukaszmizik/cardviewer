@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import type { CrewIntervalConfirmation } from '../analysis/crewDailyRest.ts'
 import { acceptCrewBreakConfirmation, type CrewBreakConfirmation } from '../analysis/drivingBreaks.ts'
 import { DiagnosticReview } from './DiagnosticReview.tsx'
-import { buildComplianceDiagnostic, buildComplianceReview, crewConfirmationKey, groupCrewBreaks, groupCrewVerification, retainCrewConfirmations, type ComplianceCrewInterval, type ComplianceFinding, type CompliancePeriodMode, type CompliancePeriodRequest, type ComplianceSeverity, type CrewBreakGroupDay, type CrewBreakGroupInterval, type CrewBreakGroupWeek, type CrewVerificationDay, type CrewVerificationInterval, type CrewVerificationWeek } from './complianceReview.ts'
+import { buildComplianceDiagnostic, buildComplianceReview, crewConfirmationKey, groupCrewBreaks, groupCrewVerification, retainCrewConfirmations, type ComplianceFinding, type CompliancePeriodMode, type CompliancePeriodRequest, type ComplianceSeverity, type CrewBreakGroupDay, type CrewBreakGroupInterval, type CrewBreakGroupWeek, type CrewVerificationDay, type CrewVerificationInterval, type CrewVerificationWeek } from './complianceReview.ts'
 import type { ClockMode } from '../lib/clock.ts'
 import type { Activity, DriverCardData } from '../types/tacho.ts'
 
@@ -214,12 +214,6 @@ export function ComplianceReviewView({
             key={finding.id}
             finding={finding}
             onOpenDay={onOpenDay}
-            onConfirm={(confirmation) => {
-              setConfirmations((current) => current.some((item) => sameConfirmation(item, confirmation)) ? current : [...current, confirmation])
-            }}
-            onRevoke={(interval) => {
-              setConfirmations((current) => current.filter((item) => !sameConfirmation(item, interval)))
-            }}
           />
         ))}
       </div>
@@ -623,13 +617,9 @@ function daysLabel(count: number): string {
 function FindingCard({
   finding,
   onOpenDay,
-  onConfirm,
-  onRevoke,
 }: {
   finding: ComplianceFinding
   onOpenDay?: (atUtc: number) => void
-  onConfirm: (confirmation: CrewBreakConfirmation) => void
-  onRevoke: (interval: ComplianceCrewInterval) => void
 }) {
   const tone = breakCardTone(finding)
   return (
@@ -650,30 +640,6 @@ function FindingCard({
       ) : null}
       <p>{finding.deltaText}</p>
       <p>{finding.explanation}</p>
-      {finding.crewBreakIntervals?.map((interval) => {
-        const key = `${interval.startUtc}:${interval.endUtc}:${interval.sourceActivityIds.join(',')}`
-        return (
-          <fieldset key={key} className="compliance-confirm">
-            <legend>{interval.intervalText}</legend>
-            <label>
-              <input
-                type="checkbox"
-                checked={interval.confirmed}
-                onChange={(event) => {
-                  if (event.target.checked) {
-                    const accepted = acceptCrewBreakConfirmation(interval, { secondDriverDrove: true, didNotAssist: true })
-                    if (accepted != null) onConfirm(accepted)
-                    return
-                  }
-                  onRevoke(interval)
-                }}
-              />
-              Potvrzuji přestávku v režimu osádky.
-            </label>
-            <p>Vozidlo řídil druhý řidič a během přestávky jsem mu nepomáhal při řízení.</p>
-          </fieldset>
-        )
-      })}
       {onOpenDay != null ? (
         <button type="button" className="compliance-open-day" onClick={() => onOpenDay(finding.mapDayUtc)}>
           Otevřít den v grafu
