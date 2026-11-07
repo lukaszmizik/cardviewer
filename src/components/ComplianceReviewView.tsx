@@ -300,7 +300,6 @@ function FindingCard({
   onConfirm: (confirmation: CrewBreakConfirmation) => void
   onRevoke: (interval: ComplianceCrewInterval) => void
 }) {
-  const [checks, setChecks] = useState<Record<string, { drove: boolean; assist: boolean }>>({})
   return (
     <article className={`compliance-card compliance-card-${finding.severity}`}>
       <header>
@@ -320,37 +319,25 @@ function FindingCard({
       <p>{finding.explanation}</p>
       {finding.crewBreakIntervals?.map((interval) => {
         const key = `${interval.startUtc}:${interval.endUtc}:${interval.sourceActivityIds.join(',')}`
-        const state = checks[key] ?? { drove: false, assist: false }
-        const accepted = acceptCrewBreakConfirmation(interval, { secondDriverDrove: state.drove, didNotAssist: state.assist })
         return (
           <fieldset key={key} className="compliance-confirm">
             <legend>{interval.intervalText}</legend>
-            {interval.confirmed ? (
-              <button type="button" onClick={() => onRevoke(interval)}>Zrušit potvrzení</button>
-            ) : (
-              <>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={state.drove}
-                    onChange={(event) => setChecks((current) => ({ ...current, [key]: { ...state, drove: event.target.checked } }))}
-                  />
-                  Během intervalu vozidlo řídil druhý řidič.
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={state.assist}
-                    onChange={(event) => setChecks((current) => ({ ...current, [key]: { ...state, assist: event.target.checked } }))}
-                  />
-                  Během intervalu jsem druhému řidiči nepomáhal při řízení.
-                </label>
-                <button type="button" disabled={accepted == null} onClick={() => { if (accepted != null) onConfirm(accepted) }}>
-                  Potvrdit interval
-                </button>
-                <p>Potvrzení platí jen pro tento interval a jen do obnovení stránky. Do technického výstupu se neukládá.</p>
-              </>
-            )}
+            <label>
+              <input
+                type="checkbox"
+                checked={interval.confirmed}
+                onChange={(event) => {
+                  if (event.target.checked) {
+                    const accepted = acceptCrewBreakConfirmation(interval, { secondDriverDrove: true, didNotAssist: true })
+                    if (accepted != null) onConfirm(accepted)
+                    return
+                  }
+                  onRevoke(interval)
+                }}
+              />
+              Potvrzuji přestávku v režimu osádky.
+            </label>
+            <p>Vozidlo řídil druhý řidič a během přestávky jsem mu nepomáhal při řízení.</p>
           </fieldset>
         )
       })}
