@@ -300,11 +300,13 @@ function FindingCard({
   onConfirm: (confirmation: CrewBreakConfirmation) => void
   onRevoke: (interval: ComplianceCrewInterval) => void
 }) {
+  const tone = breakCardTone(finding)
   return (
-    <article className={`compliance-card compliance-card-${finding.severity}`}>
+    <article className={`compliance-card compliance-card-${tone}`}>
       <header>
-        <span className={`compliance-dot compliance-dot-${finding.severity}`} aria-hidden="true" />
+        <span className={`compliance-dot compliance-dot-${tone}`} aria-hidden="true" />
         <h3>{finding.title}</h3>
+        {tone === 'confirmed' ? <ConfirmedMark /> : null}
       </header>
       <p>{finding.intervalText}</p>
       <p className="compliance-values">
@@ -351,6 +353,25 @@ function FindingCard({
         <p>{finding.technicalText}</p>
       </details>
     </article>
+  )
+}
+
+/** Barva karty přestávky podle přepočteného stavu, ne podle samotného zaškrtnutí. */
+function breakCardTone(finding: ComplianceFinding): 'violation' | 'uncertain' | 'confirmed' {
+  const recognized = finding.technicalText.includes('status within_limit')
+    && finding.technicalText.includes('evidence manual_crew_confirmation')
+  if (recognized) return 'confirmed'
+  return finding.severity === 'violation' ? 'violation' : 'uncertain'
+}
+
+function ConfirmedMark() {
+  return (
+    <span className="compliance-confirm-mark" aria-hidden="true">
+      <svg viewBox="0 0 16 16" width="16" height="16">
+        <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M4.5 8.2 7 10.5 11.5 5.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
   )
 }
 

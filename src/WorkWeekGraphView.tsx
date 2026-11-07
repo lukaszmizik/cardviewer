@@ -618,8 +618,6 @@ function WorkWeekGraphLegend({
 type GraphBlockProps = {
   days: DayData[]
   countryMarkers: CountryMarker[]
-  manualEntryBuffer?: ManualEntrySegment[]
-  lastWithdrawalUtc?: number | null
   loadUnloadEvents?: VehicleLoadUnloadEvent[]
   ferryTrainEvents?: FerryTrainEvent[]
   outModeEvents?: OutModeEvent[]
@@ -628,27 +626,6 @@ type GraphBlockProps = {
   blockId: string
   title?: string
   dayNames: string[]
-  t: {
-    workWeek: {
-      activityLabels: Record<string, string>
-      activityTypes: Record<string, string>
-      workShiftDuration: string
-      workShiftRest: string
-      manualRecordsTitle: string
-      tachographRecordsTitle: string
-      lastWithdrawalLabel: string
-      manualDataLabel: string
-      shiftMarkerLabel: string
-      loadUnloadSection: string
-      ferryTrainSection: string
-      outModeSection: string
-      activation: string
-      deactivation: string
-      outModeStartMark: string
-      outModeEndMark: string
-    }
-    manualEntry: { load: string; unload: string; loadUnload: string }
-  }
   clockMode: ClockMode
   card?: DriverCardData | null
   detailActive: boolean
@@ -682,8 +659,6 @@ function useNarrowViewport(): boolean {
 function GraphBlock({
   days,
   countryMarkers,
-  manualEntryBuffer,
-  lastWithdrawalUtc,
   loadUnloadEvents = [],
   ferryTrainEvents = [],
   outModeEvents = [],
@@ -692,7 +667,6 @@ function GraphBlock({
   blockId,
   title,
   dayNames,
-  t,
   clockMode,
   card,
   detailActive,
@@ -1055,16 +1029,65 @@ function GraphBlock({
       </svg>
       </GraphStage>
       {showFooter && card && <CardInfoTable card={card} clockMode={clockMode} />}
-      {showFooter &&
-      (visibleDays.some((d) => d.activities.some((a) => !a.isManualEntry)) ||
-        (manualEntryBuffer ?? []).some((seg) => {
-          const ms = manualSegmentMs(seg, clockMode)
-          return ms >= visibleFirstDate && ms < visibleLastEnd
-        }) ||
-        (lastWithdrawalUtc != null && lastWithdrawalUtc >= visibleFirstDate && lastWithdrawalUtc < visibleLastEnd) ||
-        visibleLoadUnload.length > 0 ||
-        ferryTrainEvents.some((ev) => ev.minuteStartUtc >= visibleFirstDate && ev.minuteStartUtc < visibleLastEnd) ||
-        visibleOutMode.length > 0) && (
+      {showFooter && card && (
+        <CardHistoryTables card={card} weekStartMs={displayWeekStartMs} clockMode={clockMode} />
+      )}
+    </div>
+  )
+}
+
+function formatFaultTime(ms: number, mode: ClockMode): string {
+  return formatClockDateTime(ms, mode)
+}
+
+function DayGraphRecordTables({
+  day,
+  rangeStartUtc,
+  rangeEndUtc,
+  manualEntryBuffer,
+  lastWithdrawalUtc,
+  loadUnloadEvents,
+  ferryTrainEvents,
+  outModeEvents,
+  recordedGpsLocations,
+  symbolMap,
+  clockMode,
+}: {
+  day: DayData | undefined
+  rangeStartUtc: number
+  rangeEndUtc: number
+  manualEntryBuffer?: ManualEntrySegment[]
+  lastWithdrawalUtc?: number | null
+  loadUnloadEvents: VehicleLoadUnloadEvent[]
+  ferryTrainEvents: FerryTrainEvent[]
+  outModeEvents: OutModeEvent[]
+  recordedGpsLocations: RecordedGpsLocation[]
+  symbolMap?: SymbolMap | null
+  clockMode: ClockMode
+}) {
+  const { t } = useLanguage()
+  const inRange = (ms: number) => ms >= rangeStartUtc && ms < rangeEndUtc
+  const activities = (day?.activities ?? []).filter((act) => act.endMs > rangeStartUtc && act.startMs < rangeEndUtc)
+  const manualSegments = (manualEntryBuffer ?? []).filter((seg) => inRange(manualSegmentMs(seg, clockMode)))
+  const withdrawalVisible = lastWithdrawalUtc != null && inRange(lastWithdrawalUtc)
+  const visibleLoadUnload = loadUnloadEvents.filter((event) => inRange(event.minuteStartUtc))
+  const visibleFerry = ferryTrainEvents.filter((event) => inRange(event.minuteStartUtc))
+  const visibleOutMode = outModeEvents.filter((event) => inRange(event.minuteStartUtc))
+  const tachoActivities = activities.filter((act) => !act.isManualEntry).sort((left, right) => left.startMs - right.startMs)
+  const showRecords =
+    tachoActivities.length > 0 ||
+    manualSegments.length > 0 ||
+    withdrawalVisible ||
+    visibleLoadUnload.length > 0 ||
+    visibleFerry.length > 0 ||
+    visibleOutMode.length > 0
+  const locations = recordedGpsLocations.filter((record) => inRange(record.minuteStartUtc)).sort((left, right) => left.minuteStartUtc - right.minuteStartUtc)
+  const manualColumnEmpty =
+    manualSegments.length === 0 && !withdrawalVisible && visibleLoadUnload.length === 0 && visibleFerry.length === 0 && visibleOutMode.length === 0
+
+  return (
+    <>
+      {showRecords && (
         <div className="work-week-graph-table-wrapper">
           <table className="work-week-graph-table">
             <thead>
@@ -1076,16 +1099,13 @@ function GraphBlock({
             <tbody>
               <tr>
                 <td className="work-week-graph-table-cell">
-                  {lastWithdrawalUtc != null && lastWithdrawalUtc >= visibleFirstDate && lastWithdrawalUtc < visibleLastEnd && (
+                  {withdrawalVisible && lastWithdrawalUtc != null && (
                     <div className="work-week-graph-manual-item">
                       <strong>{t.workWeek.lastWithdrawalLabel}</strong>{' '}
                       {formatTimestamp(lastWithdrawalUtc, clockMode)}
                     </div>
                   )}
-                  {manualEntryBuffer != null && manualEntryBuffer.some((seg) => {
-                    const ms = manualSegmentMs(seg, clockMode)
-                    return ms >= visibleFirstDate && ms < visibleLastEnd
-                  }) && (
+                  {manualSegments.length > 0 && (
                     <>
                       <strong>{t.workWeek.manualDataLabel}</strong>
                       <div className="work-week-graph-manual-list">
@@ -1094,18 +1114,15 @@ function GraphBlock({
                             | { kind: 'country'; ms: number; seg: ManualEntrySegment }
                             | { kind: 'activity'; ms: number; act: ParsedActivity }
                           const rows: ManualRow[] = []
-                          for (const seg of manualEntryBuffer) {
+                          for (const seg of manualSegments) {
                             if (seg.activityId !== 'START_COUNTRY' && seg.activityId !== 'END_COUNTRY') continue
-                            const ms = manualSegmentMs(seg, clockMode)
-                            if (ms < visibleFirstDate || ms >= visibleLastEnd) continue
-                            rows.push({ kind: 'country', ms, seg })
+                            rows.push({ kind: 'country', ms: manualSegmentMs(seg, clockMode), seg })
                           }
-                          for (const act of visibleDays.flatMap((day) => day.activities)) {
+                          for (const act of activities) {
                             if (!act.isManualEntry) continue
-                            if (act.endMs <= visibleFirstDate || act.startMs >= visibleLastEnd) continue
                             rows.push({ kind: 'activity', ms: act.startMs, act })
                           }
-                          rows.sort((a, b) => a.ms - b.ms || (a.kind === 'country' ? 0 : 1) - (b.kind === 'country' ? 0 : 1))
+                          rows.sort((left, right) => left.ms - right.ms || (left.kind === 'country' ? 0 : 1) - (right.kind === 'country' ? 0 : 1))
                           return rows.map((row, index) => {
                             if (row.kind === 'country') {
                               const label = t.workWeek.activityLabels[row.seg.activityId] ?? ACTIVITY_LABELS[row.seg.activityId] ?? row.seg.activityId
@@ -1144,11 +1161,11 @@ function GraphBlock({
                       </div>
                     </>
                   )}
-                  {ferryTrainEvents.some((ev) => ev.minuteStartUtc >= visibleFirstDate && ev.minuteStartUtc < visibleLastEnd) && (
+                  {visibleFerry.length > 0 && (
                     <>
                       <strong>{t.workWeek.ferryTrainSection}</strong>
                       <div className="work-week-graph-manual-list">
-                        {ferryTrainEvents.filter((ev) => ev.minuteStartUtc >= visibleFirstDate && ev.minuteStartUtc < visibleLastEnd).map((ev, i) => {
+                        {visibleFerry.map((ev, i) => {
                           const label = ev.type === 'activation' ? 'trajekt' : 'konec trajektu'
                           const symbol = tachoSymbol(symbolMap, FERRY_TRAIN_SYMBOL_ID)
                           return (
@@ -1177,56 +1194,81 @@ function GraphBlock({
                       </div>
                     </>
                   )}
-                  {!(manualEntryBuffer ?? []).some((seg) => {
-                    const ms = manualSegmentMs(seg, clockMode)
-                    return ms >= visibleFirstDate && ms < visibleLastEnd
-                  }) &&
-                    !(lastWithdrawalUtc != null && lastWithdrawalUtc >= visibleFirstDate && lastWithdrawalUtc < visibleLastEnd) &&
-                    visibleLoadUnload.length === 0 &&
-                    !ferryTrainEvents.some((ev) => ev.minuteStartUtc >= visibleFirstDate && ev.minuteStartUtc < visibleLastEnd) &&
-                    visibleOutMode.length === 0 && (
-                    <span className="work-week-graph-table-empty">—</span>
-                  )}
+                  {manualColumnEmpty && <span className="work-week-graph-table-empty">—</span>}
                 </td>
                 <td className="work-week-graph-table-cell">
-                  {(() => {
-                    const tachoActivities = visibleDays
-                      .flatMap((d) => d.activities.filter((a) => !a.isManualEntry))
-                      .sort((a, b) => a.startMs - b.startMs)
-                    if (tachoActivities.length === 0) {
-                      return <span className="work-week-graph-table-empty">—</span>
-                    }
-                    return (
-                      <div className="work-week-graph-manual-list">
-                        {tachoActivities.map((act, index) => {
-                          const label = (t.workWeek.activityTypes as Record<string, string>)[act.type] ?? ACTIVITY_TYPE_LABELS[act.type] ?? act.type
-                          return (
-                            <div key={`${act.startMs}-${act.endMs}-${index}`} className="work-week-graph-manual-item">
-                              {formatTimeRange(act.startMs, act.endMs, clockMode)} | {label} ({formatDuration(act.durationMinutes)}){formatRegistration(act)}{formatSlot(act)}
-                              {act.isCrew && !act.isManualEntry && (
-                                <span className="crew-mode-dot" title="režim osádky" aria-label="režim osádky" />
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )
-                  })()}
+                  {tachoActivities.length === 0 ? (
+                    <span className="work-week-graph-table-empty">—</span>
+                  ) : (
+                    <div className="work-week-graph-manual-list">
+                      {tachoActivities.map((act, index) => {
+                        const label = (t.workWeek.activityTypes as Record<string, string>)[act.type] ?? ACTIVITY_TYPE_LABELS[act.type] ?? act.type
+                        return (
+                          <div key={`${act.startMs}-${act.endMs}-${index}`} className="work-week-graph-manual-item">
+                            {formatTimeRange(act.startMs, act.endMs, clockMode)} | {label} ({formatDuration(act.durationMinutes)}){formatRegistration(act)}{formatSlot(act)}
+                            {act.isCrew && !act.isManualEntry && (
+                              <span className="crew-mode-dot" title="režim osádky" aria-label="režim osádky" />
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
       )}
-      {showFooter && card && (
-        <CardHistoryTables card={card} weekStartMs={displayWeekStartMs} clockMode={clockMode} />
+      {locations.length > 0 && (
+        <div className="work-week-graph-table-wrapper">
+          <table className="work-week-graph-table">
+            <thead>
+              <tr>
+                <th colSpan={2}>{t.workWeek.recordedLocationsTitle}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td colSpan={2} className="work-week-graph-table-cell">
+                  <div className="work-week-graph-manual-list">
+                    {locations.map((record, index) => {
+                      const mapsUrl = googleMapsUrl({
+                        latitude: record.latitude,
+                        longitude: record.longitude,
+                        countryCode: record.countryCode,
+                        label: record.gpsLocation,
+                      })
+                      return (
+                        <div key={index} className="work-week-graph-manual-item recorded-location-row">
+                          {mapsUrl && (
+                            <a
+                              className="recorded-location-map-link"
+                              href={mapsUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Otevřít v Google Maps"
+                              aria-label={`Otevřít lokaci ${record.gpsLocation} v Google Maps`}
+                            >
+                              📍
+                            </a>
+                          )}
+                          <span className="recorded-location-text">
+                            {formatTimestamp(record.minuteStartUtc, clockMode)} | {record.gpsLocation} |{' '}
+                            {record.recordType ? (t.workWeek.recordedLocationTypes[record.recordType] ?? record.recordType) : '—'}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       )}
-    </div>
+    </>
   )
-}
-
-function formatFaultTime(ms: number, mode: ClockMode): string {
-  return formatClockDateTime(ms, mode)
 }
 
 export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, lastWithdrawalUtc, card2Data, loadUnloadEvents = [], ferryTrainEvents = [], outModeEvents = [], recordedGpsLocations = [], faultsAndEvents = [], symbolMap, onResetLoadUnload, embedded = false, onClose, clockMode = 'local', onClockModeChange, card, initialFocusedDayUtc = null }: WorkWeekGraphViewProps) {
@@ -1497,8 +1539,6 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
               <GraphBlock
                 days={days}
                 countryMarkers={countryMarkers}
-                manualEntryBuffer={manualEntryBuffer}
-                lastWithdrawalUtc={lastWithdrawalUtc}
                 loadUnloadEvents={loadUnloadEvents}
                 ferryTrainEvents={ferryTrainEvents}
                 outModeEvents={outModeEvents ?? []}
@@ -1506,7 +1546,6 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 displayWeekStartMs={displayWeekStartMs}
                 blockId="day-focus"
                 dayNames={dayNames}
-                t={t}
                 clockMode={clockMode}
                 detailActive={inspectActive}
                 singleDayUtc={focusedDayUtc}
@@ -1516,6 +1555,19 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 showFooter={false}
               />
             </DayGraphPan>
+            <DayGraphRecordTables
+              day={days.find((item) => item.dateUtc === focusedDayUtc)}
+              rangeStartUtc={focusedDayUtc}
+              rangeEndUtc={addDays(focusedDayUtc, 1, clockMode)}
+              manualEntryBuffer={manualEntryBuffer}
+              lastWithdrawalUtc={lastWithdrawalUtc}
+              loadUnloadEvents={loadUnloadEvents}
+              ferryTrainEvents={ferryTrainEvents}
+              outModeEvents={outModeEvents ?? []}
+              recordedGpsLocations={recordedGpsLocations ?? []}
+              symbolMap={symbolMap}
+              clockMode={clockMode}
+            />
             <DayDrivingTable days={days} dayStartUtc={focusedDayUtc} dayEndUtc={addDays(focusedDayUtc, 1, clockMode)} clockMode={clockMode} />
             <WeeklyDrivingPanel days={days} dayEndUtc={addDays(focusedDayUtc, 1, clockMode)} />
             <FortnightDrivingRow days={days} dayEndUtc={addDays(focusedDayUtc, 1, clockMode)} />
@@ -1530,8 +1582,6 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
         <GraphBlock
           days={days}
           countryMarkers={countryMarkers}
-          manualEntryBuffer={manualEntryBuffer}
-          lastWithdrawalUtc={lastWithdrawalUtc}
           loadUnloadEvents={loadUnloadEvents}
           ferryTrainEvents={ferryTrainEvents}
           outModeEvents={outModeEvents ?? []}
@@ -1540,7 +1590,6 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
           blockId="card1"
           title={card2Data != null ? t.workWeek.card1 : undefined}
           dayNames={dayNames}
-          t={t}
           clockMode={clockMode}
           card={card}
           detailActive={inspectActive}
@@ -1550,67 +1599,11 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
 
         <WeeklyRestPanel days={days} weekStartUtc={displayWeekStartMs} clockMode={clockMode} />
 
-        {(() => {
-          const visibleFirstDate = displayWeekStartMs
-          const visibleLastEnd = addDays(displayWeekStartMs, 7, clockMode)
-          const merged = (recordedGpsLocations ?? [])
-            .filter((r) => r.minuteStartUtc >= visibleFirstDate && r.minuteStartUtc < visibleLastEnd)
-            .sort((a, b) => a.minuteStartUtc - b.minuteStartUtc)
-          return merged.length > 0 ? (
-            <div className="work-week-graph-table-wrapper">
-              <table className="work-week-graph-table">
-                <thead>
-                  <tr>
-                    <th colSpan={2}>{t.workWeek.recordedLocationsTitle}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td colSpan={2} className="work-week-graph-table-cell">
-                      <div className="work-week-graph-manual-list">
-                        {merged.map((r, i) => {
-                          const mapsUrl = googleMapsUrl({
-                            latitude: r.latitude,
-                            longitude: r.longitude,
-                            countryCode: r.countryCode,
-                            label: r.gpsLocation,
-                          })
-                          return (
-                            <div key={i} className="work-week-graph-manual-item recorded-location-row">
-                              {mapsUrl && (
-                                <a
-                                  className="recorded-location-map-link"
-                                  href={mapsUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  title="Otevřít v Google Maps"
-                                  aria-label={`Otevřít lokaci ${r.gpsLocation} v Google Maps`}
-                                >
-                                  📍
-                                </a>
-                              )}
-                              <span className="recorded-location-text">
-                                {formatTimestamp(r.minuteStartUtc, clockMode)} | {r.gpsLocation} |{' '}
-                                {r.recordType ? (t.workWeek.recordedLocationTypes[r.recordType] ?? r.recordType) : '—'}
-                              </span>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          ) : null
-        })()}
 
         {card2Data != null && (
           <GraphBlock
             days={card2Data.days}
             countryMarkers={card2Data.countryMarkers}
-            manualEntryBuffer={card2Data.manualEntryBuffer}
-            lastWithdrawalUtc={card2Data.lastWithdrawalUtc}
             loadUnloadEvents={[]}
             ferryTrainEvents={[]}
             outModeEvents={[]}
@@ -1619,7 +1612,6 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
             blockId="card2"
             title={t.workWeek.card2}
             dayNames={dayNames}
-            t={t}
             clockMode={clockMode}
             detailActive={inspectActive}
             narrowViewport={narrowViewport}

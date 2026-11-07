@@ -152,6 +152,8 @@ export function assessCrewDailyWindow(input: {
  * Pracovní úsek je od konce předchozího odpočinku po začátek kandidátního
  * devítihodinového odpočinku. Změna slotu průběh sama nepřerušuje.
  * První hodina se toleruje jen na začátku úseku.
+ * Ruční záznam osádku nedokládá ani neukončuje. Výměna slotu, kterou okolní
+ * příznak osádky uzavírá, není přerušení. Nejasný průběh zůstane nejistotou.
  */
 function assessCrewRecord(
   activities: readonly CrewActivity[],
@@ -161,28 +163,114 @@ function assessCrewRecord(
 ): CrewRecordCourse {
   const requiredStartUtc = segmentStartUtc + CREW_FIRST_HOUR_MS
   if (segmentEndUtc <= requiredStartUtc) return 'crew_record_consistent'
-  const reliable: Array<[number, number]> = []
-  let cardOut = false
+  const clipped = clipToSpan(activities, requiredStartUtc, segmentEndUtc)
+  const crewPieces = clipped.filter((activity) => isRecordedCrew(activity))
+  const gaps = coverageGaps(crewPieces, requiredStartUtc, segmentEndUtc)
   let interrupted = false
-  for (const activity of activities) {
-    if (activity.endUtc <= activity.startUtc) continue
-    const startUtc = Math.max(activity.startUtc, requiredStartUtc)
-    const endUtc = Math.min(activity.endUtc, segmentEndUtc)
-    if (endUtc <= startUtc) continue
-    if (activity.kind === 'unknown' || activity.isManualEntry === true) {
-      cardOut = true
-      continue
-    }
-    if (!activity.isCrew) {
-      interrupted = true
-      continue
-    }
-    reliable.push([startUtc, endUtc])
+  let uncertain = unknowns.some((interval) => overlaps(requiredStartUtc, segmentEndUtc, interval.startUtc, interval.endUtc))
+  for (const gap of gaps) {
+    const course = classifyCrewGap(gap, activities, clipped, crewPieces)
+    if (course === 'interrupted') interrupted = true
+    else if (course === 'unknown') uncertain = true
   }
   if (interrupted) return 'crew_record_interrupted'
-  const unknown = unknowns.some((interval) => overlaps(requiredStartUtc, segmentEndUtc, interval.startUtc, interval.endUtc))
-  if (unknown || cardOut || !covers(reliable, requiredStartUtc, segmentEndUtc)) return 'crew_record_unknown'
+  if (uncertain) return 'crew_record_unknown'
   return 'crew_record_consistent'
+}
+
+type GapCourse = 'exchange' | 'interrupted' | 'unknown'
+
+function classifyCrewGap(
+  gap: readonly [number, number],
+  activities: readonly CrewActivity[],
+  clipped: readonly CrewActivity[],
+  crewPieces: readonly CrewActivity[],
+): GapCourse {
+  const [gapStartUtc, gapEndUtc] = gap
+  const beforeSlots = edgeSlots(crewPieces, (activity) => activity.endUtc === gapStartUtc && activity.startUtc < gapStartUtc)
+  const afterSlots = edgeSlots(crewPieces, (activity) => activity.startUtc === gapEndUtc && activity.endUtc > gapEndUtc)
+  const inside = clipped.filter((activity) => overlaps(gapStartUtc, gapEndUtc, activity.startUtc, activity.endUtc))
+  const solos = inside.filter((activity) => !isRecordedCrew(activity) && activity.kind !== 'unknown' && activity.isManualEntry !== true)
+  const manuals = [
+    ...inside.filter((activity) => activity.isManualEntry === true || activity.kind === 'unknown'),
+    ...activities.filter((activity) =>
+      activity.isManualEntry === true
+      && activity.endUtc <= activity.startUtc
+      && activity.startUtc >= gapStartUtc
+      && activity.startUtc <= gapEndUtc
+    ),
+  ]
+  if (slotExchange(gap, beforeSlots, afterSlots, solos, manuals)) return 'exchange'
+  if (solos.length > 0) return 'interrupted'
+  return 'unknown'
+}
+
+/** Výměna slotu doložená navazujícím příznakem. Ruční úsek sám průběh neuzavře. */
+function slotExchange(
+  gap: readonly [number, number],
+  beforeSlots: ReadonlySet<1 | 2>,
+  afterSlots: ReadonlySet<1 | 2>,
+  solos: readonly CrewActivity[],
+  manuals: readonly CrewActivity[],
+): boolean {
+  const [gapStartUtc, gapEndUtc] = gap
+  const slotChanged = [...beforeSlots].some((slot) => [...afterSlots].some((other) => other !== slot))
+  if (!slotChanged || solos.length === 0 || solos.some((activity) => activity.kind === 'driving')) return false
+  const boundary = solos.every((activity) => {
+    const slot = activity.slot
+    if (slot !== 1 && slot !== 2) return false
+    const leavesOldSlot = activity.startUtc === gapStartUtc && beforeSlots.has(slot) && activity.endUtc < gapEndUtc
+    const entersNewSlot = activity.endUtc === gapEndUtc && afterSlots.has(slot) && activity.startUtc > gapStartUtc
+    return (leavesOldSlot || entersNewSlot) && manuals.some((manual) => touches(activity, manual))
+  })
+  if (!boundary) return false
+  const positiveManuals = manuals.filter((activity) => activity.endUtc > activity.startUtc)
+  return covers([...solos, ...positiveManuals].map((activity) => [activity.startUtc, activity.endUtc] as [number, number]), gapStartUtc, gapEndUtc)
+}
+
+function edgeSlots(pieces: readonly CrewActivity[], atEdge: (activity: CrewActivity) => boolean): Set<1 | 2> {
+  const slots = new Set<1 | 2>()
+  for (const activity of pieces) {
+    if (!atEdge(activity)) continue
+    if (activity.slot === 1 || activity.slot === 2) slots.add(activity.slot)
+  }
+  return slots
+}
+
+function isRecordedCrew(activity: CrewActivity): boolean {
+  return activity.isCrew && activity.kind !== 'unknown' && activity.isManualEntry !== true
+}
+
+function clipToSpan(activities: readonly CrewActivity[], startUtc: number, endUtc: number): CrewActivity[] {
+  return activities.flatMap((activity) => {
+    if (activity.endUtc <= activity.startUtc) return []
+    const clippedStartUtc = Math.max(activity.startUtc, startUtc)
+    const clippedEndUtc = Math.min(activity.endUtc, endUtc)
+    if (clippedEndUtc <= clippedStartUtc) return []
+    return [{ ...activity, startUtc: clippedStartUtc, endUtc: clippedEndUtc }]
+  })
+}
+
+function coverageGaps(pieces: readonly CrewActivity[], startUtc: number, endUtc: number): Array<[number, number]> {
+  const merged: Array<[number, number]> = []
+  for (const activity of [...pieces].sort((left, right) => left.startUtc - right.startUtc || left.endUtc - right.endUtc)) {
+    const last = merged[merged.length - 1]
+    if (last != null && activity.startUtc <= last[1]) last[1] = Math.max(last[1], activity.endUtc)
+    else merged.push([activity.startUtc, activity.endUtc])
+  }
+  const gaps: Array<[number, number]> = []
+  let cursor = startUtc
+  for (const [start, end] of merged) {
+    if (start > cursor) gaps.push([cursor, start])
+    cursor = Math.max(cursor, end)
+    if (cursor >= endUtc) return gaps
+  }
+  if (cursor < endUtc) gaps.push([cursor, endUtc])
+  return gaps
+}
+
+function touches(activity: CrewActivity, manual: CrewActivity): boolean {
+  return manual.startUtc <= activity.endUtc && manual.endUtc >= activity.startUtc
 }
 
 function covers(parts: Array<[number, number]>, startUtc: number, endUtc: number): boolean {

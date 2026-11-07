@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { analyzeDriverActivities } from '../src/analysis/analyzeDriverActivities.ts'
-import { assessCrewDailyWindow, CREW_WINDOW_MS, type CrewActivity } from '../src/analysis/crewDailyRest.ts'
+import { assessCrewDailyWindow, CREW_WINDOW_MS, decideCrewDailyWindow, type CrewActivity } from '../src/analysis/crewDailyRest.ts'
 import { DAILY_WINDOW_MS } from '../src/analysis/restWindowIntersection.ts'
 import { buildDailyRestOverview } from '../src/components/dailyRestOverview.ts'
 import type { Activity, DriverCardData } from '../src/types/tacho.ts'
@@ -288,6 +288,96 @@ test('neznámý úsek nebo vyjmutá karta průběh neuzavře', () => {
   assert.equal(cardOut.crewRecord, 'crew_record_unknown')
   assert.equal(cardOut.legalApplicability, 'undecided')
   assert.equal(cardOut.windowEndUtc, START + CREW_WINDOW_MS)
+})
+
+test('výměna karet 22. až 23. září 2025 není přerušení a neotevře 30hodinové okno', () => {
+  const anchor = Date.parse('2025-09-22T17:31:00.000Z')
+  const manualStart = Date.parse('2025-09-22T21:38:00.000Z')
+  const swap = Date.parse('2025-09-23T09:49:00.000Z')
+  const restStart = Date.parse('2025-09-23T13:48:00.000Z')
+  const activities = [
+    activity('crew-before', 'driving', anchor, manualStart, true, 1),
+    activity('manual-gap', 'rest', manualStart, manualStart + MINUTE, false, 1, true),
+    activity('crew-slot-2', 'availability', manualStart + MINUTE, swap, true, 2),
+    activity('leave-slot', 'availability', swap, swap + MINUTE, false, 2),
+    activity('card-mark', 'availability', swap + MINUTE, swap + MINUTE, false, 2, true),
+    activity('enter-slot', 'work', swap + MINUTE, swap + 2 * MINUTE, false, 1),
+    activity('crew-after', 'driving', swap + 2 * MINUTE, restStart, true, 1),
+    activity('daily-rest', 'rest', restStart, restStart + 12 * HOUR, false, 2, true),
+    activity('after-rest', 'driving', restStart + HOUR, restStart + 3 * HOUR, false, 1),
+  ]
+  const snapshot = structuredClone(activities)
+  const result = assessCrewDailyWindow({ windowStartUtc: anchor, activities })
+  const decision = decideCrewDailyWindow({ windowStartUtc: anchor, activities })
+  assert.equal(result.crewRecord, 'crew_record_unknown')
+  assert.notEqual(result.crewRecord, 'crew_record_interrupted')
+  assert.equal(result.qualifyingRest?.startUtc, restStart)
+  assert.equal(decision.applies, false)
+  assert.equal(decision.crewRecord, 'crew_record_unknown')
+  assert.equal(activities.find((item) => item.id === 'manual-gap')?.isCrew, false)
+  assert.equal(activities.find((item) => item.id === 'leave-slot')?.isCrew, false)
+  assert.deepEqual(activities, snapshot)
+})
+
+test('výměna karet 30. září až 1. října 2025 není přerušení a neotevře 30hodinové okno', () => {
+  const anchor = Date.parse('2025-09-30T07:14:00.000Z')
+  const manualStart = Date.parse('2025-09-30T11:33:00.000Z')
+  const swap = Date.parse('2025-09-30T23:41:00.000Z')
+  const restStart = Date.parse('2025-10-01T03:11:00.000Z')
+  const activities = [
+    activity('crew-before', 'driving', anchor, manualStart, true, 1),
+    activity('manual-gap', 'rest', manualStart, manualStart + 5 * MINUTE, false, 1, true),
+    activity('crew-slot-2', 'availability', manualStart + 5 * MINUTE, swap, true, 2),
+    activity('leave-slot', 'availability', swap, swap + MINUTE, false, 2),
+    activity('card-mark', 'availability', swap + MINUTE, swap + MINUTE, false, 2, true),
+    activity('enter-slot', 'work', swap + MINUTE, swap + 2 * MINUTE, false, 1),
+    activity('crew-after', 'driving', swap + 2 * MINUTE, restStart, true, 1),
+    activity('daily-rest', 'rest', restStart, restStart + 12 * HOUR, false, 1, true),
+    activity('after-rest', 'driving', restStart + HOUR, restStart + 3 * HOUR, false, 1),
+  ]
+  const result = assessCrewDailyWindow({ windowStartUtc: anchor, activities })
+  const decision = decideCrewDailyWindow({ windowStartUtc: anchor, activities })
+  assert.equal(result.crewRecord, 'crew_record_unknown')
+  assert.notEqual(result.crewRecord, 'crew_record_interrupted')
+  assert.equal(result.qualifyingRest?.startUtc, restStart)
+  assert.equal(decision.applies, false)
+  assert.equal(decision.crewRecord, 'crew_record_unknown')
+})
+
+test('skutečné přerušení osádky zůstane přerušením', () => {
+  const restStart = START + 12 * HOUR
+  const activities = [
+    activity('crew', 'driving', START, START + 4 * HOUR, true, 1),
+    activity('solo', 'driving', START + 4 * HOUR, START + 6 * HOUR, false, 1),
+    activity('other-slot', 'rest', START + 4 * HOUR, START + 6 * HOUR, false, 2),
+    activity('later', 'driving', START + 6 * HOUR, restStart, true, 2),
+    activity('rest', 'rest', restStart, restStart + 9 * HOUR, true, 2),
+  ]
+  const result = assessCrewDailyWindow({ windowStartUtc: START, activities })
+  const decision = decideCrewDailyWindow({ windowStartUtc: START, activities })
+  assert.equal(result.crewRecord, 'crew_record_interrupted')
+  assert.equal(decision.applies, false)
+  assert.equal(decision.crewRecord, 'crew_record_interrupted')
+  assert.equal(result.qualifyingRest?.startUtc, restStart)
+})
+
+test('navazující výměna slotu není přerušení a odpočinek už se nekontroluje', () => {
+  const restStart = START + 10 * HOUR
+  const swap = START + 5 * HOUR
+  const exchanged = [
+    activity('before', 'driving', START, swap, true, 1),
+    activity('leave-slot', 'availability', swap, swap + MINUTE, false, 1),
+    activity('card-mark', 'availability', swap + MINUTE, swap + MINUTE, false, 1, true),
+    activity('enter-slot', 'work', swap + MINUTE, swap + 2 * MINUTE, false, 2),
+    activity('after', 'driving', swap + 2 * MINUTE, restStart, true, 2),
+    activity('daily-rest', 'rest', restStart, restStart + 12 * HOUR, false, 1, true),
+    activity('ignored', 'driving', restStart + HOUR, restStart + 4 * HOUR, false, 1),
+  ]
+  const result = assessCrewDailyWindow({ windowStartUtc: START, activities: exchanged })
+  assert.equal(result.crewRecord, 'crew_record_consistent')
+  assert.equal(result.qualifyingRest?.startUtc, restStart)
+  assert.equal(decideCrewDailyWindow({ windowStartUtc: START, activities: exchanged }).applies, true)
+  assert.equal(exchanged.find((item) => item.id === 'leave-slot')?.isCrew, false)
 })
 
 test('24hodinové okno zůstane beze změny', () => {

@@ -60,9 +60,16 @@ export function Layout({ currentTab, onTabChange, card, children }: LayoutProps)
       <main className="app-main">{children}</main>
       <footer className="app-footer">
         <aside className="app-author">
-          <p className="app-author-name">Lukáš Mizera</p>
-          <a className="app-author-mail" href="mailto:lukas@zmizik.com">lukas@zmizik.com</a>
-          <p className="app-author-note">Veškerá data do aplikace nahráváte dobrovolně.</p>
+          <div className="app-author-note">
+            <p className="app-author-note-title">Ochrana dat a upozornění</p>
+            <p>Data z karty řidiče nahráváte dobrovolně. Jejich zpracování probíhá lokálně ve vašem prohlížeči. Data nejsou odesílána na server ani ukládána do databáze provozovatele aplikace.</p>
+            <p>Čtečka karet slouží jako informativní a analytická pomůcka. Výsledky vycházejí z dostupných záznamů tachografu a nemusí zohledňovat všechny okolnosti konkrétní přepravy. Nejedná se o úřední kontrolu ani závazné právní posouzení.</p>
+            <p>Za správnost vstupních údajů a jejich oprávněné použití odpovídá uživatel.</p>
+          </div>
+          <div className="app-author-contact">
+            <p className="app-author-name">Lukáš Mizera</p>
+            <a className="app-author-mail" href="mailto:lukas@zmizik.com">lukas@zmizik.com</a>
+          </div>
         </aside>
       </footer>
     </div>
