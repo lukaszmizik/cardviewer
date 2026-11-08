@@ -34,8 +34,8 @@ export type DayDrivingRow = {
 }
 
 const UNRELIABLE = 'Nelze spolehlivě vyhodnotit.'
-const CREW_BREAK = 'Závisí na uznání přestávky v režimu osádky.'
-const CREW_DETAIL = 'Karta nedokládá, že vozidlo řídil jiný řidič a že řidič během přestávky nepomáhal.'
+const CREW_BREAK = 'Podmíněně uznáno'
+const CREW_DETAIL = 'Přestávka je uznatelná za předpokladu, že vozidlo řídil druhý řidič a odpočívající řidič mu během této doby nepomáhal při řízení.'
 const PERIOD_LABEL = 'Doba řízení v pracovním období'
 const NINE_HOURS = 9 * 60 * 60 * 1000
 const TEN_HOURS = 10 * 60 * 60 * 1000
@@ -106,7 +106,7 @@ export function buildDayDrivingRows(input: {
 function resultTone(periods: readonly DrivingBreakPeriod[]): DayDrivingTone {
   if (periods.some((period) => period.status === 'insufficient_data')) return 'undecided'
   if (periods.some((period) => period.status === 'exceeded')) return 'exceeded'
-  if (periods.some((period) => period.status === 'crew_break_unconfirmed')) return 'undecided'
+  if (periods.some((period) => period.status === 'crew_break_conditional')) return 'caution'
   const decided = evaluated(periods)
   if (decided.length === 0) return 'undecided'
   if (decided.some((period) => period.qualifyingBreak == null)) return 'caution'
@@ -116,12 +116,12 @@ function resultTone(periods: readonly DrivingBreakPeriod[]): DayDrivingTone {
 function resultText(periods: readonly DrivingBreakPeriod[]): string {
   if (periods.some((period) => period.status === 'insufficient_data')) return UNRELIABLE
   if (periods.some((period) => period.status === 'exceeded')) return 'Limit 4 h 30 min překročen.'
-  if (periods.some((period) => period.status === 'crew_break_unconfirmed')) return CREW_BREAK
+  if (periods.some((period) => period.status === 'crew_break_conditional')) return CREW_BREAK
   return 'V limitu 4 h 30 min.'
 }
 
 function resultDetail(periods: readonly DrivingBreakPeriod[], tone: DayDrivingTone): string | null {
-  if (periods.some((period) => period.status === 'crew_break_unconfirmed')) return CREW_DETAIL
+  if (periods.some((period) => period.status === 'crew_break_conditional')) return CREW_DETAIL
   if (tone === 'caution') return 'Cyklus řízení není uzavřen.'
   return null
 }

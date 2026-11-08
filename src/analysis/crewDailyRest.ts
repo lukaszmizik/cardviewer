@@ -20,15 +20,8 @@ export type CrewUncertainInterval = {
   endUtc: number
 }
 
-/** Potvrzení jednoho nejistého úseku. Identita je okno a obě hranice, ne datum. */
-export type CrewIntervalConfirmation = {
-  windowStartUtc: number
-  startUtc: number
-  endUtc: number
-}
-
-/** recorded = tachograf. confirmed = uživatel potvrdil jen nejisté úseky. */
-export type CrewWindowBasis = 'recorded' | 'confirmed'
+/** recorded = tachograf. conditional = nejistota bez důkazu nesplnění. */
+export type CrewWindowBasis = 'recorded' | 'conditional'
 
 export type CrewInterval = {
   startUtc: number
@@ -69,6 +62,8 @@ export type CrewDailyCandidate = {
   crewRecord: CrewRecordCourse
   /** Vyplněno jen při crew_record_uncertain. Nejsou to prokázaná přerušení. */
   uncertainIntervals: CrewUncertainInterval[]
+  /** Nejistota z výměny, ručního záznamu nebo mezery bez důkazu nesplnění. Neznámý úsek sem nepatří. */
+  conditionalEligible: boolean
   legalApplicability: 'undecided'
   uncertainties: CrewUncertainty[]
 }
@@ -101,33 +96,27 @@ type RestPiece = {
  * Součet kratších odpočinků devět hodin nenahrazuje. Neznámý úsek odpočinek není.
  */
 /**
- * 30hodinové okno se použije jen při prokázaném záznamu osádky
- * v pracovním úseku po první hodině. Nejistý průběh okno neotevře
- * a není ani prokázané přerušení. Není to důkaz, že druhý řidič vozidlo řídil.
+ * 30hodinové okno se použije při prokázaném záznamu osádky, nebo podmíněně
+ * při nejistotě bez důkazu nesplnění. Přerušení okno neotevře.
+ * Podmíněné uznání není důkaz, že druhý řidič vozidlo řídil.
  */
 export function decideCrewDailyWindow(input: {
   windowStartUtc: number
   activities: readonly CrewActivity[]
   unknownIntervals?: readonly CrewUnknown[]
-  /** Jen přesná shoda všech uncertainIntervals tohoto okna. Část ani přerušení okno neotevře. */
-  confirmedIntervals?: readonly CrewIntervalConfirmation[]
-}): { applies: boolean; crewRecord: CrewRecordCourse; uncertainIntervals: CrewUncertainInterval[]; basis: CrewWindowBasis | null } {
+}): { applies: boolean; crewRecord: CrewRecordCourse; uncertainIntervals: CrewUncertainInterval[]; basis: CrewWindowBasis | null; refusal: string | null } {
   const assessed = assessCrewDailyWindow(input)
   const crewSeen = assessed.recording === 'recorded' || assessed.recording === 'partial'
-  const matched = new Set(
-    (input.confirmedIntervals ?? [])
-      .filter((confirmation) => confirmation.windowStartUtc === input.windowStartUtc)
-      .map((confirmation) => `${confirmation.startUtc}:${confirmation.endUtc}`),
-  )
-  const confirmed = assessed.crewRecord === 'crew_record_uncertain'
-    && assessed.uncertainIntervals.length > 0
-    && assessed.uncertainIntervals.every((interval) => matched.has(`${interval.startUtc}:${interval.endUtc}`))
   const recorded = assessed.crewRecord === 'crew_record_consistent'
+  const conditional = assessed.conditionalEligible
   return {
-    applies: crewSeen && (recorded || confirmed),
+    applies: crewSeen && (recorded || conditional),
     crewRecord: assessed.crewRecord,
     uncertainIntervals: assessed.uncertainIntervals,
-    basis: recorded ? 'recorded' : confirmed ? 'confirmed' : null,
+    basis: recorded ? 'recorded' : conditional ? 'conditional' : null,
+    refusal: assessed.crewRecord === 'crew_record_interrupted'
+      ? 'V pracovním úseku po první hodině je řízení nebo práce bez příznaku osádky, která není výměna slotu ani ruční záznam.'
+      : null,
   }
 }
 
@@ -192,28 +181,32 @@ function assessCrewRecord(
   unknowns: readonly CrewUnknown[],
   segmentStartUtc: number,
   segmentEndUtc: number,
-): { crewRecord: CrewRecordCourse; uncertainIntervals: CrewUncertainInterval[] } {
+): { crewRecord: CrewRecordCourse; uncertainIntervals: CrewUncertainInterval[]; conditionalEligible: boolean } {
   const requiredStartUtc = segmentStartUtc + CREW_FIRST_HOUR_MS
-  if (segmentEndUtc <= requiredStartUtc) return { crewRecord: 'crew_record_consistent', uncertainIntervals: [] }
+  if (segmentEndUtc <= requiredStartUtc) return { crewRecord: 'crew_record_consistent', uncertainIntervals: [], conditionalEligible: false }
   const clipped = clipToSpan(activities, requiredStartUtc, segmentEndUtc)
   const crewPieces = clipped.filter((activity) => isRecordedCrew(activity))
   const gaps = coverageGaps(crewPieces, requiredStartUtc, segmentEndUtc)
   const uncertainIntervals: CrewUncertainInterval[] = []
   let interrupted = false
+  let unknownOverlap = false
   for (const unknown of unknowns) {
     const startUtc = Math.max(unknown.startUtc, requiredStartUtc)
     const endUtc = Math.min(unknown.endUtc, segmentEndUtc)
-    if (endUtc > startUtc) uncertainIntervals.push({ startUtc, endUtc })
+    if (endUtc > startUtc) {
+      unknownOverlap = true
+      uncertainIntervals.push({ startUtc, endUtc })
+    }
   }
   for (const gap of gaps) {
     const course = classifyCrewGap(gap, activities, clipped, crewPieces)
     if (course === 'interrupted') interrupted = true
     else uncertainIntervals.push({ startUtc: gap[0], endUtc: gap[1] })
   }
-  if (interrupted) return { crewRecord: 'crew_record_interrupted', uncertainIntervals: [] }
+  if (interrupted) return { crewRecord: 'crew_record_interrupted', uncertainIntervals: [], conditionalEligible: false }
   const unique = dedupeIntervals(uncertainIntervals)
-  if (unique.length > 0) return { crewRecord: 'crew_record_uncertain', uncertainIntervals: unique }
-  return { crewRecord: 'crew_record_consistent', uncertainIntervals: [] }
+  if (unique.length > 0) return { crewRecord: 'crew_record_uncertain', uncertainIntervals: unique, conditionalEligible: !unknownOverlap }
+  return { crewRecord: 'crew_record_consistent', uncertainIntervals: [], conditionalEligible: false }
 }
 
 type GapCourse = 'interrupted' | 'uncertain'

@@ -252,7 +252,7 @@ test('neprokázaný a ruční odpočinek dostanou poznámku v detailu', () => {
   assert.doesNotMatch(mainText(manual!), /Ruční záznam/)
 })
 
-test('příznak osádky zůstane v datech a nezmění 24hodinové okno', () => {
+test('příznak osádky zůstane v datech a nejisté 30hodinové okno je podmíněné', () => {
   const anchor = Date.parse('2025-02-21T07:39:00.000Z')
   const restStart = Date.parse('2025-02-21T08:15:00.000Z')
   const restEnd = Date.parse('2025-02-21T14:11:00.000Z')
@@ -277,22 +277,23 @@ test('příznak osádky zůstane v datech a nezmění 24hodinové okno', () => {
   assert.equal(analysis.assessed.daily.status, 'assessed')
   if (analysis.assessed.daily.status !== 'assessed') return
   const node = analysis.assessed.daily.chain.nodes.find((item) => item.anchorUtc === anchor)
-  assert.equal(node?.status, 'window_unsatisfied')
+  assert.equal(node?.status, 'evaluated')
+  assert.equal(node?.windowMode, 'crew_30h')
+  assert.equal(node?.crewBasis, 'conditional')
+  assert.equal(node?.crewRecord, 'crew_record_uncertain')
   assert.equal(node?.windowStartUtc, anchor)
-  assert.equal(node?.windowEndUtc, Date.parse('2025-02-22T07:39:00.000Z'))
+  assert.equal(node?.windowEndUtc, Date.parse('2025-02-22T13:39:00.000Z'))
 
   const overview = buildDailyRestOverview(analysis)
   assert.equal(overview.status, 'rows')
   if (overview.status !== 'rows') return
-  const row = overview.rows.find((item) => item.atUtc === anchor)
+  const row = overview.rows.find((item) => item.id === `window:${anchor}`)
   assert.ok(row)
-  assert.equal(row.result, 'Nesplněno podle 24hodinového výpočtu – režim osádky neposouzen.')
-  assert.doesNotMatch(row.result, /Nesplněné 24hodinové období|přestupek|porušení/i)
+  assert.equal(row.result, 'Podmíněně uznáno')
+  assert.doesNotMatch(row.result, /přestupek|porušení|Běžný denní odpočinek|Zkrácený denní odpočinek/i)
   const details = detailText(row)
-  assert.match(details, /Tachograf v tomto období zaznamenal režim osádky/)
-  assert.match(details, /24hodinové období pro jednoho řidiče/)
-  assert.match(details, /Kandidátní 30hodinový výpočet je uveden samostatně/)
-  assert.match(details, /Kandidátní posouzení režimu osádky/)
+  assert.match(details, /Podmíněně uznáno/)
+  assert.match(details, /30 h/)
   assert.equal(
     row.details.find((detail) => detail.label === 'Kandidátní posouzení režimu osádky')?.value,
     'Časová podmínka splněna (rezerva 9 minut). Použitelnost režimu osádky nepotvrzena.',
@@ -304,16 +305,8 @@ test('příznak osádky zůstane v datech a nezmění 24hodinové okno', () => {
   assert.match(details, /nelze kvůli úsekům s vyjmutou kartou spolehlivě potvrdit/)
   assert.doesNotMatch(details, /souvislý s přihlédnutím k první hodině/)
   assert.doesNotMatch(details, /právně vyhovující/)
-  assert.match(details, /neprokazuje splnění všech podmínek/)
-  assert.match(details, /07:39/)
-  assert.match(details, /22\.02\.2025 07:39/)
-  const shortRest = row.details.find((detail) => detail.value.includes('08:15') && detail.value.includes('14:11'))
-  assert.ok(shortRest)
-  assert.match(shortRest.value, /5 h 56 min/)
-  assert.match(shortRest.value, /Režim osádky/)
-  const manualRest = row.details.find((detail) => detail.value.includes('04:30') && detail.value.includes('Ruční záznam'))
-  assert.ok(manualRest)
-  assert.doesNotMatch(manualRest.value, /Režim osádky/)
+  assert.match(details, /04:30/)
+  assert.match(details, /Ruční záznam/)
 })
 
 test('souhrn osádky rozliší nesplněnou podmínku, přerušení a nedostatek údajů', () => {

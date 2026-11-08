@@ -76,9 +76,12 @@ test('nejistý výsledek není prokázané porušení', () => {
     activity('more', 'driving', start + 4 * HOUR + 45 * 60 * 1000, start + 5 * HOUR + 45 * 60 * 1000, { isCrew: true }),
     activity('tail', 'rest', start + 6 * HOUR, NOW),
   ])
-  const crew = view.findings.find((finding) => finding.id.startsWith('break:'))
+  const crew = view.findings.find((finding) => finding.id.startsWith('break-conditional:'))
   assert.equal(crew?.severity, 'uncertain')
+  assert.equal(crew?.actualText, 'Podmíněně uznáno')
+  assert.equal(crew?.explanation, 'Přestávka je uznatelná za předpokladu, že vozidlo řídil druhý řidič a odpočívající řidič mu během této doby nepomáhal při řízení.')
   assert.equal(view.violationCount, 0)
+  assert.equal(view.findings.some((finding) => finding.severity === 'violation'), false)
   assert.equal(view.days.find((day) => day.dayStartUtc === TODAY)?.severity, 'uncertain')
 })
 

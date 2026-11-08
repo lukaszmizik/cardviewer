@@ -2,17 +2,12 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { buildDailyRestChain } from '../src/analysis/dailyRestChain.ts'
-import {
-  acceptCrewBreakConfirmation,
-  assessDrivingBreaks,
-  type BreakActivity,
-  type CrewBreakConfirmation,
-} from '../src/analysis/drivingBreaks.ts'
+import { assessDrivingBreaks, type BreakActivity } from '../src/analysis/drivingBreaks.ts'
 import { DAILY_WINDOW_MS, intersectRestWithDailyWindow } from '../src/analysis/restWindowIntersection.ts'
-import { CREW_WINDOW_MS, type CrewIntervalConfirmation } from '../src/analysis/crewDailyRest.ts'
+import { CREW_WINDOW_MS } from '../src/analysis/crewDailyRest.ts'
 import { classifyRestCandidates, type RestCandidate } from '../src/analysis/restCandidates.ts'
 import { findRestIntervals } from '../src/analysis/restIntervals.ts'
-import { buildComplianceReview, groupCrewBreaks, groupCrewVerification, retainCrewConfirmations } from '../src/components/complianceReview.ts'
+import { buildComplianceDiagnostic, buildComplianceReview } from '../src/components/complianceReview.ts'
 import type { Activity } from '../src/types/tacho.ts'
 
 const HOUR = 60 * 60 * 1000
@@ -57,14 +52,7 @@ function breakActivity(id: string, kind: BreakActivity['kind'], startUtc: number
   return { id, kind, startUtc, endUtc, isCrew }
 }
 
-function confirm(activity: BreakActivity): CrewBreakConfirmation {
-  const accepted = acceptCrewBreakConfirmation(
-    { startUtc: activity.startUtc, endUtc: activity.endUtc, sourceActivityIds: [activity.id] },
-    { secondDriverDrove: true, didNotAssist: true },
-  )
-  assert.ok(accepted)
-  return accepted
-}
+const CREW_BREAK_WARNING = 'Přestávka je uznatelná za předpokladu, že vozidlo řídil druhý řidič a odpočívající řidič mu během této doby nepomáhal při řízení.'
 
 test('24hodinové okno jednoho řidiče zůstává beze změny', () => {
   const rest = candidate(REST_START, REST_END, { sourceActivityIds: ['act-167', 'act-168', 'act-169'], ambiguous: true, established: false })
@@ -101,6 +89,7 @@ test('říjnový odpočinek má v 30hodinovém okně 798 minut a nejednoznačnos
   const interpretation = node.interpretations[0]!
   assert.equal(inside24.restMinutesInsideWindow, 438)
   assert.equal(inside30.restMinutesInsideWindow, 798)
+  assert.equal(node.crewBasis, 'recorded')
   assert.equal(node.windowMode, 'crew_30h')
   assert.equal(node.windowEndUtc - node.windowStartUtc, CREW_WINDOW_MS)
   assert.equal(node.status, 'evaluated')
@@ -132,26 +121,23 @@ test('neúplný nebo přerušený záznam osádky 30hodinové okno neotevře', (
   assert.notEqual(unknown.nodes[0]?.status, 'evaluated')
 })
 
-test('potvrzená pohotovost 45 minut uzavře přestávku a nepotvrzená nechá nejistotu', () => {
+test('pohotovost 45 minut v osádce je podmíněně uznaná a data nemění', () => {
   const activities = [
     breakActivity('drive-1', 'driving', START, START + 4 * HOUR, true),
     breakActivity('wait', 'availability', START + 4 * HOUR, START + 4 * HOUR + 45 * MINUTE, true),
     breakActivity('drive-2', 'driving', START + 5 * HOUR, START + 6 * HOUR, true),
   ]
   const snapshot = structuredClone(activities)
-  const open = assessDrivingBreaks(activities)
-  const closed = assessDrivingBreaks(activities, [confirm(activities[1]!)])
-  const restored = assessDrivingBreaks(activities)
-  assert.equal(open[0]?.status, 'crew_break_unconfirmed')
-  assert.equal(open[0]?.evidence, 'tachograph')
-  assert.equal(closed[0]?.status, 'within_limit')
-  assert.equal(closed[0]?.evidence, 'manual_crew_confirmation')
-  assert.equal(closed[0]?.qualifyingBreak?.kind, 'continuous_45')
-  assert.equal(restored[0]?.status, 'crew_break_unconfirmed')
+  const periods = assessDrivingBreaks(activities)
+  const conditional = periods.find((period) => period.status === 'crew_break_conditional')
+  assert.equal(conditional?.evidence, 'crew_availability_assumption')
+  assert.equal(conditional?.qualifyingBreak?.kind, 'continuous_45')
+  assert.equal(periods.some((period) => period.status === 'exceeded'), false)
+  assert.equal(periods.some((period) => period.status === 'within_limit' && period.evidence === 'crew_availability_assumption'), false)
   assert.deepEqual(activities, snapshot)
 })
 
-test('potvrzené intervaly 15 a 30 minut platí jen ve správném pořadí', () => {
+test('intervaly 15 a 30 minut platí jen ve správném pořadí a zůstávají podmíněné', () => {
   const ordered = [
     breakActivity('drive-1', 'driving', START, START + 2 * HOUR, true),
     breakActivity('first', 'availability', START + 2 * HOUR, START + 2 * HOUR + 15 * MINUTE, true),
@@ -166,46 +152,42 @@ test('potvrzené intervaly 15 a 30 minut platí jen ve správném pořadí', () 
     breakActivity('first', 'availability', START + 5 * HOUR, START + 5 * HOUR + 15 * MINUTE, true),
     breakActivity('drive-3', 'driving', START + 6 * HOUR, START + 7 * HOUR, true),
   ]
-  const closed = assessDrivingBreaks(ordered, [confirm(ordered[1]!), confirm(ordered[3]!)])
-  const wrongOrder = assessDrivingBreaks(reversed, [confirm(reversed[1]!), confirm(reversed[3]!)])
-  assert.equal(closed[0]?.status, 'within_limit')
+  const closed = assessDrivingBreaks(ordered)
+  const wrongOrder = assessDrivingBreaks(reversed)
+  assert.equal(closed[0]?.status, 'crew_break_conditional')
   assert.equal(closed[0]?.qualifyingBreak?.kind, 'split_15_30')
-  assert.equal(closed[0]?.evidence, 'manual_crew_confirmation')
-  assert.notEqual(wrongOrder[0]?.status, 'within_limit')
-  assert.notEqual(wrongOrder[0]?.qualifyingBreak?.kind, 'split_15_30')
+  assert.equal(closed[0]?.evidence, 'crew_availability_assumption')
+  assert.equal(wrongOrder[0]?.status, 'exceeded')
+  assert.equal(wrongOrder[0]?.qualifyingBreak, null)
 })
 
-test('potvrzení neplatí pro řízení, práci ani neznámý interval a bez obou podmínek se neuloží', () => {
-  const activities = [
-    breakActivity('drive-1', 'driving', START, START + 4 * HOUR, true),
-    breakActivity('wait', 'availability', START + 4 * HOUR, START + 4 * HOUR + 45 * MINUTE, true),
+test('krátká pohotovost, řízení, práce ani neznámý úsek podmíněné uznání neobejdou', () => {
+  const short = assessDrivingBreaks([
+    breakActivity('drive-1', 'driving', START, START + 4 * HOUR + 30 * MINUTE, true),
+    breakActivity('wait', 'availability', START + 4 * HOUR + 30 * MINUTE, START + 4 * HOUR + 50 * MINUTE, true),
     breakActivity('drive-2', 'driving', START + 5 * HOUR, START + 6 * HOUR, true),
-  ]
-  const asInterval = (activity: BreakActivity) => ({
-    startUtc: activity.startUtc,
-    endUtc: activity.endUtc,
-    sourceActivityIds: [activity.id],
-  })
-  const driving = acceptCrewBreakConfirmation(asInterval(activities[0]!), { secondDriverDrove: true, didNotAssist: true })
-  const work = acceptCrewBreakConfirmation(
-    asInterval(breakActivity('help', 'work', START + 4 * HOUR, START + 4 * HOUR + 45 * MINUTE, true)),
-    { secondDriverDrove: true, didNotAssist: true },
-  )
-  const unknown = acceptCrewBreakConfirmation(
-    asInterval(breakActivity('gap', 'unknown', START + 4 * HOUR, START + 4 * HOUR + 45 * MINUTE, true)),
-    { secondDriverDrove: true, didNotAssist: true },
-  )
-  assert.equal(acceptCrewBreakConfirmation(asInterval(activities[1]!), { secondDriverDrove: true, didNotAssist: false }), null)
-  assert.equal(acceptCrewBreakConfirmation(asInterval(activities[1]!), { secondDriverDrove: false, didNotAssist: true }), null)
-  assert.ok(driving)
-  assert.ok(work)
-  assert.ok(unknown)
-  const ignored = assessDrivingBreaks(activities, [driving, work, unknown])
-  assert.equal(ignored[0]?.status, 'crew_break_unconfirmed')
-  assert.equal(ignored[0]?.evidence, 'tachograph')
+  ])
+  const splitByWork = assessDrivingBreaks([
+    breakActivity('drive-1', 'driving', START, START + 4 * HOUR + 30 * MINUTE, true),
+    breakActivity('wait-1', 'availability', START + 4 * HOUR + 30 * MINUTE, START + 4 * HOUR + 52 * MINUTE, true),
+    breakActivity('help', 'work', START + 4 * HOUR + 52 * MINUTE, START + 4 * HOUR + 53 * MINUTE, true),
+    breakActivity('wait-2', 'availability', START + 4 * HOUR + 53 * MINUTE, START + 5 * HOUR + 20 * MINUTE, true),
+    breakActivity('drive-2', 'driving', START + 5 * HOUR + 20 * MINUTE, START + 6 * HOUR, true),
+  ])
+  const unknown = assessDrivingBreaks([
+    breakActivity('drive-1', 'driving', START, START + 4 * HOUR, true),
+    breakActivity('gap', 'unknown', START + 4 * HOUR, START + 5 * HOUR, true),
+    breakActivity('drive-2', 'driving', START + 5 * HOUR, START + 6 * HOUR, true),
+  ])
+  assert.equal(short[0]?.status, 'exceeded')
+  assert.equal(splitByWork[0]?.status, 'exceeded')
+  assert.equal(unknown[0]?.status, 'insufficient_data')
+  assert.equal(short.some((period) => period.status === 'crew_break_conditional'), false)
+  assert.equal(splitByWork.some((period) => period.status === 'crew_break_conditional'), false)
+  assert.equal(unknown.some((period) => period.status === 'crew_break_conditional'), false)
 })
 
-test('potvrzení přestávky nezmění denní okno a nepřežije nové volání', () => {
+test('podmíněná přestávka nemění prokázané denní okno a neukládá se', () => {
   const activities = [
     crewActivity('opening', 'rest', ANCHOR - 12 * HOUR, ANCHOR, false),
     crewActivity('first-hour', 'driving', ANCHOR, ANCHOR + HOUR, false),
@@ -216,23 +198,24 @@ test('potvrzení přestávky nezmění denní okno a nepřežije nové volání'
   ]
   const nowUtc = Date.parse('2024-10-26T00:00:00.000Z')
   const period = { mode: 'history' as const }
-  const before = buildComplianceReview({ activities, nowUtc, clockMode: 'utc', period })
-  const confirmation = acceptCrewBreakConfirmation(
-    { startUtc: activities[3]!.startUtc, endUtc: activities[3]!.endUtc, sourceActivityIds: [activities[3]!.id] },
-    { secondDriverDrove: true, didNotAssist: true },
-  )
-  assert.ok(confirmation)
-  const after = buildComplianceReview({ activities, nowUtc, clockMode: 'utc', period, confirmedCrewBreaks: [confirmation] })
+  const review = buildComplianceReview({ activities, nowUtc, clockMode: 'utc', period })
   const again = buildComplianceReview({ activities, nowUtc, clockMode: 'utc', period })
-  assert.deepEqual(before.dailyWindowNotes, after.dailyWindowNotes)
-  assert.equal(after.findings.some((finding) => finding.title === 'Přestávka uznaná ručním potvrzením'), true)
-  assert.equal(after.findings.some((finding) => finding.explanation.includes('Tachograf')), true)
-  assert.equal(again.findings.some((finding) => finding.title === 'Přestávka uznaná ručním potvrzením'), false)
-  assert.equal(again.findings.some((finding) => finding.id.startsWith('break:')), true)
-  assert.equal(after.dailyWindowNotes.some((note) => note.includes('30 h')), true)
+  const breakFinding = review.findings.find((finding) => finding.technicalText.includes('status crew_break_conditional'))
+  assert.deepEqual(review.dailyWindowNotes, again.dailyWindowNotes)
+  assert.equal(breakFinding?.explanation, CREW_BREAK_WARNING)
+  assert.equal(breakFinding?.severity, 'uncertain')
+  assert.equal(review.findings.some((finding) => finding.title === 'Přestávka uznaná ručním potvrzením'), false)
+  assert.equal(review.dailyWindowNotes.some((note) => note.includes('Záznam osádky pokrývá pracovní úsek')), true)
+  assert.equal(review.dailyWindowNotes.some((note) => note.includes('Podmíněně uznáno')), false)
+  assert.equal(review.findings.some((finding) => finding.severity === 'violation' && finding.technicalText.includes('crew_break_conditional')), false)
+  assert.equal(review.findings.some((finding) => finding.severity === 'violation' && finding.technicalText.includes('status exceeded')), true)
   const view = readFileSync(new URL('../src/components/ComplianceReviewView.tsx', import.meta.url), 'utf8')
   assert.equal(view.includes('localStorage'), false)
-  assert.equal(view.includes('useState<CrewBreakConfirmation[]>'), true)
+  assert.equal(view.includes('IndexedDB'), false)
+  assert.equal(view.includes('useState<CrewBreakConfirmation[]>'), false)
+  assert.equal(view.includes('useState<CrewIntervalConfirmation[]>'), false)
+  assert.equal(view.includes('Ověření režimu osádky'), false)
+  assert.equal(view.includes('Potvrdit'), false)
 })
 
 test('kontrola přestupků u okna bez osádky uvádí 24 hodin', () => {
@@ -373,7 +356,7 @@ test('samostatný řidič s platným 24hodinovým odpočinkem zůstává beze zm
   assert.equal(reviewed(activities).findings.some((finding) => finding.id.startsWith('daily-window:')), false)
 })
 
-test('potvrzení nejistých úseků otevře jen 30hodinové okno a přestávku nechá', () => {
+test('nejistá výměna karet otevře 30hodinové okno podmíněně a přestávku posoudí samostatně', () => {
   const first = septemberWindow({
     anchor: Date.parse('2025-09-22T17:31:00.000Z'),
     manualStart: Date.parse('2025-09-22T21:38:00.000Z'),
@@ -391,61 +374,38 @@ test('potvrzení nejistých úseků otevře jen 30hodinové okno a přestávku n
   const nowUtc = Date.parse('2025-10-05T12:00:00.000Z')
   for (const sample of [first, second]) {
     const snapshot = structuredClone(sample.activities)
-    const open = buildComplianceReview({ activities: sample.activities, nowUtc, clockMode: 'utc', period: { mode: 'history' } })
-    const finding = open.findings.find((item) => item.id === `daily-window:${sample.anchor}`)
-    assert.ok(finding?.crewWindowConfirmation)
-    assert.equal(finding.crewWindowConfirmation.confirmed, false)
-    assert.deepEqual(
-      finding.crewWindowConfirmation.intervals.map((interval) => interval.intervalText),
-      sample.prague,
-    )
-    assert.equal(finding.technicalText.includes('single_driver_24h'), true)
-    const confirmations: CrewIntervalConfirmation[] = finding.crewWindowConfirmation.intervals.map((interval) => ({
-      windowStartUtc: sample.anchor,
-      startUtc: interval.startUtc,
-      endUtc: interval.endUtc,
-    }))
-    const partialReview = buildComplianceReview({
-      activities: sample.activities,
-      nowUtc,
-      clockMode: 'utc',
-      period: { mode: 'history' },
-      confirmedCrewWindows: [confirmations[0]!],
-    })
-    assert.equal(partialReview.findings.find((item) => item.id === finding.id)?.technicalText.includes('single_driver_24h'), true)
-    assert.equal(groupCrewVerification(partialReview.findings, [confirmations[0]!, confirmations[0]!])[0]?.days[0]?.status, 'částečně potvrzeno')
-    const checked = buildComplianceReview({
-      activities: sample.activities,
-      nowUtc,
-      clockMode: 'utc',
-      period: { mode: 'history' },
-      confirmedCrewWindows: confirmations,
-    })
-    const accepted = checked.findings.find((item) => item.id === finding.id)
-    assert.equal(accepted?.crewWindowConfirmation?.confirmed, true)
-    assert.equal(accepted?.technicalText.includes('window crew_30h'), true)
-    assert.equal(accepted?.technicalText.includes('crew basis confirmed'), true)
-    assert.equal(accepted?.technicalText.includes('manual_crew_confirmation'), false)
-    assert.equal(accepted?.explanation.includes('na základě potvrzení uživatele'), true)
-    assert.equal(checked.dailyWindowNotes.some((note) => note.includes('na základě potvrzení uživatele')), true)
-    assert.equal(checked.dailyWindowNotes.some((note) => note.includes('Záznam osádky pokrývá pracovní úsek')), false)
-    const chain = chainFrom(sample.activities, confirmations)
+    const review = buildComplianceReview({ activities: sample.activities, nowUtc, clockMode: 'utc', period: { mode: 'history' } })
+    const finding = review.findings.find((item) => item.id === `daily-window:${sample.anchor}`)
+    assert.equal(finding?.actualText, 'Podmíněně uznáno')
+    assert.equal(finding?.severity, 'uncertain')
+    assert.equal(finding?.technicalText.includes('window crew_30h'), true)
+    assert.equal(finding?.technicalText.includes('crew basis conditional'), true)
+    assert.equal(finding?.technicalText.includes('status within_limit'), false)
+    for (const text of sample.prague) assert.equal(finding?.explanation.includes(text), true)
+    assert.equal(review.dailyWindowNotes.some((note) => note.includes('Podmíněně uznáno')), true)
+    assert.equal(review.dailyWindowNotes.some((note) => note.includes('Záznam osádky pokrývá pracovní úsek')), false)
+    assert.equal(review.violationCount, review.findings.filter((item) => item.severity === 'violation').length)
+    assert.equal(review.findings.some((item) => item.severity === 'violation' && item.id.startsWith('daily-window:')), false)
+    const breakFinding = review.findings.find((item) => item.technicalText.includes('status crew_break_conditional'))
+    assert.equal(breakFinding?.explanation, CREW_BREAK_WARNING)
+    assert.equal(breakFinding?.severity, 'uncertain')
+    assert.equal(finding?.explanation.includes(CREW_BREAK_WARNING), false)
+    const chain = chainFrom(sample.activities)
     assert.equal(chain.nodes[0]?.windowMode, 'crew_30h')
-    assert.equal(chain.nodes[0]?.crewBasis, 'confirmed')
+    assert.equal(chain.nodes[0]?.crewBasis, 'conditional')
     assert.equal(chain.nodes[0]?.crewRecord, 'crew_record_uncertain')
+    assert.equal(chain.nodes[0]?.crewRefusal, null)
+    assert.equal(chain.nodes[0]?.uncertainIntervals.length > 0, true)
     assert.equal(chain.nodes[0]?.interpretations[0]?.nextAnchorUtc, sample.restStart + 12 * HOUR)
     assert.equal(chain.nodes[1]?.windowStartUtc, sample.restStart + 12 * HOUR)
-    const unchecked = buildComplianceReview({ activities: sample.activities, nowUtc, clockMode: 'utc', period: { mode: 'history' } })
-    const restored = unchecked.findings.find((item) => item.id === finding.id)
-    assert.equal(restored?.crewWindowConfirmation?.confirmed, false)
-    assert.equal(restored?.technicalText.includes('single_driver_24h'), true)
-    assert.equal(restored?.explanation.includes('na základě potvrzení uživatele'), false)
-    assert.deepEqual(
-      open.findings.filter((item) => item.id.startsWith('break:')).map((item) => item.technicalText),
-      checked.findings.filter((item) => item.id.startsWith('break:')).map((item) => item.technicalText),
-    )
-    assert.equal(checked.findings.some((item) => item.technicalText.includes('crew_break_unconfirmed')), true)
-    assert.equal(checked.findings.some((item) => item.technicalText.includes('manual_crew_confirmation')), false)
+    assert.equal(chain.nodes[1]?.windowStartUtc === chain.nodes[0]?.windowStartUtc, false)
+    const diagnostic = buildComplianceDiagnostic({ activities: sample.activities, nowUtc, clockMode: 'utc', period: { mode: 'history' } })
+    const exported = diagnostic.evaluation.findings.find((item) => item.id === finding?.id)
+    assert.equal(exported?.technicalText.includes('crew basis conditional'), true)
+    assert.equal(exported?.severity, 'uncertain')
+    const day = diagnostic.evaluation.days.find((item) => item.dayStartUtc === finding?.mapDayUtc)
+    assert.equal(day?.severity, 'uncertain')
+    assert.notEqual(day?.severity, 'violation')
     assert.deepEqual(sample.activities, snapshot)
   }
 
@@ -458,22 +418,19 @@ test('potvrzení nejistých úseků otevře jen 30hodinové okno a přestávku n
     card('again', 'driving', interruptedAnchor + 5 * HOUR, interruptedRest, true),
     card('rest', 'rest', interruptedRest, interruptedRest + 10 * HOUR, true),
   ]
-  const forged: CrewIntervalConfirmation = {
-    windowStartUtc: interruptedAnchor,
-    startUtc: interruptedAnchor + 3 * HOUR,
-    endUtc: interruptedAnchor + 5 * HOUR,
-  }
   const interruptedReview = buildComplianceReview({
     activities: interrupted,
     nowUtc: interruptedRest + 11 * HOUR,
     clockMode: 'utc',
     period: { mode: 'history' },
-    confirmedCrewWindows: [forged],
   })
   const interruptedFinding = interruptedReview.findings.find((item) => item.id === `daily-window:${interruptedAnchor}`)
-  assert.equal(interruptedFinding?.crewWindowConfirmation, undefined)
+  assert.equal(interruptedFinding?.actualText, 'Odpočinek v okně není prokázaný')
   assert.equal(interruptedFinding?.technicalText.includes('single_driver_24h'), true)
-  assert.equal(chainFrom(interrupted, [forged]).nodes[0]?.crewBasis, null)
+  assert.equal(interruptedFinding?.technicalText.includes('crew basis conditional'), false)
+  assert.match(interruptedFinding?.explanation ?? '', /řízení nebo práce bez příznaku osádky/)
+  assert.equal(chainFrom(interrupted).nodes[0]?.crewBasis, null)
+  assert.equal(chainFrom(interrupted).nodes[0]?.windowMode, 'single_driver_24h')
 
   const dailyAnchor = Date.parse('2026-05-01T06:00:00.000Z')
   const gap = dailyAnchor + 4 * HOUR
@@ -485,92 +442,20 @@ test('potvrzení nejistých úseků otevře jen 30hodinové okno a přestávku n
     card('after', 'driving', gap + MINUTE, dailyRest, true),
     card('rest', 'rest', dailyRest, dailyRest + 11 * HOUR, false),
   ]
-  const dailyConfirmation: CrewIntervalConfirmation = {
-    windowStartUtc: dailyAnchor,
-    startUtc: gap,
-    endUtc: gap + MINUTE,
-  }
-  const kept = chainFrom(dailyActivities, [dailyConfirmation]).nodes[0]!
+  const kept = chainFrom(dailyActivities).nodes[0]!
   assert.equal(kept.windowMode, 'single_driver_24h')
   assert.equal(kept.status, 'evaluated')
   assert.equal(kept.crewBasis, null)
-  assert.equal(kept.crewConfirmationAvailable, false)
+  assert.equal(kept.crewRefusal, null)
 
-  const separated = groupCrewVerification(
-    [
-      buildComplianceReview({ activities: first.activities, nowUtc, clockMode: 'utc', period: { mode: 'history' } }).findings.find((item) => item.id.startsWith('daily-window:'))!,
-      buildComplianceReview({ activities: second.activities, nowUtc, clockMode: 'utc', period: { mode: 'history' } }).findings.find((item) => item.id.startsWith('daily-window:'))!,
-    ],
-    [],
-  )
-  assert.deepEqual(separated.map((week) => week.rangeText), ['22. 09. 2025 – 28. 09. 2025', '29. 09. 2025 – 05. 10. 2025'])
-  assert.equal(separated[0]?.windowsToVerify, 1)
-  assert.equal(separated[0]?.confirmedDays, 0)
-  const stale = retainCrewConfirmations(
-    [
-      { windowStartUtc: first.anchor, startUtc: 1, endUtc: 2 },
-      { windowStartUtc: first.anchor, startUtc: separated[0]!.days[0]!.intervals[0]!.startUtc, endUtc: separated[0]!.days[0]!.intervals[0]!.endUtc },
-      { windowStartUtc: first.anchor, startUtc: separated[0]!.days[0]!.intervals[0]!.startUtc, endUtc: separated[0]!.days[0]!.intervals[0]!.endUtc },
-    ],
-    [buildComplianceReview({ activities: first.activities, nowUtc, clockMode: 'utc', period: { mode: 'history' } }).findings.find((item) => item.id.startsWith('daily-window:'))!],
-  )
-  assert.equal(stale.length, 1)
   const view = readFileSync(new URL('../src/components/ComplianceReviewView.tsx', import.meta.url), 'utf8')
   assert.equal(view.includes('localStorage'), false)
   assert.equal(view.includes('IndexedDB'), false)
-  assert.equal(view.includes('useState<CrewIntervalConfirmation[]>'), true)
-  assert.equal(view.includes('Ověření režimu osádky'), true)
-  assert.equal(view.includes('Potvrdit celý týden'), true)
-  assert.equal(view.includes('Zrušit potvrzení týdne'), true)
-  assert.equal(view.includes('Potvrdit den'), true)
-  assert.equal(view.includes('Zrušit potvrzení dne'), true)
-  assert.equal(view.includes('Potvrzuji, že druhý řidič byl během uvedených intervalů přítomen.'), false)
-  assert.equal(view.includes('Přestávky v režimu osádky'), true)
+  assert.equal(view.includes('useState<CrewIntervalConfirmation[]>'), false)
+  assert.equal(view.includes('Ověření režimu osádky'), false)
+  assert.equal(view.includes('Potvrdit'), false)
+  assert.equal(view.includes('Přestávky v režimu osádky'), false)
 })
-
-test('přestávky v osádce se řadí po týdnech a dnech', () => {
-  const weeks = groupCrewBreaks([
-    breakFinding('break:a', 'Přestávka v režimu osádky', Date.parse('2025-09-22T17:40:00.000Z'), '22.09.2025 19:40 – 23.09.2025 08:12', [
-      breakInterval(Date.parse('2025-09-22T18:00:00.000Z'), 15, true),
-      breakInterval(Date.parse('2025-09-22T20:00:00.000Z'), 30, false),
-    ]),
-    breakFinding('break:b', 'Přestávka v režimu osádky', Date.parse('2025-09-23T06:00:00.000Z'), '23.09.2025 08:00 – 23.09.2025 12:00', [
-      breakInterval(Date.parse('2025-09-23T08:00:00.000Z'), 20, false),
-    ]),
-    breakFinding('break:ignored', 'Přestávka v řízení', Date.parse('2025-09-22T12:00:00.000Z'), 'mimo', []),
-    breakFinding('break:c', 'Přestávka uznaná ručním potvrzením', Date.parse('2025-09-30T07:35:00.000Z'), '30.09.2025 09:35 – 01.10.2025 05:56', [
-      breakInterval(Date.parse('2025-09-30T08:00:00.000Z'), 45, true),
-    ]),
-  ])
-  assert.deepEqual(weeks.map((week) => week.rangeText), ['22. 09. 2025 – 28. 09. 2025', '29. 09. 2025 – 05. 10. 2025'])
-  assert.deepEqual(weeks[0]?.days.map((day) => day.dateText), ['22. 09. 2025', '23. 09. 2025'])
-  assert.equal(weeks[0]?.days[0]?.status, 'částečně potvrzeno')
-  assert.equal(weeks[0]?.days[0]?.listings.length, 1)
-  assert.equal(weeks[0]?.breaksToVerify, 2)
-  assert.equal(weeks[0]?.fullyConfirmed, false)
-  assert.equal(weeks[1]?.confirmedBreaks, 1)
-  assert.equal(weeks[1]?.fullyConfirmed, true)
-})
-
-function breakFinding(
-  id: string,
-  title: string,
-  startUtc: number,
-  intervalText: string,
-  crewBreakIntervals: { startUtc: number; endUtc: number; sourceActivityIds: string[]; intervalText: string; confirmed: boolean }[],
-) {
-  return { id, title, startUtc, intervalText, crewBreakIntervals }
-}
-
-function breakInterval(startUtc: number, minutes: number, confirmed: boolean) {
-  return {
-    startUtc,
-    endUtc: startUtc + minutes * 60 * 1000,
-    sourceActivityIds: [`act-${startUtc}`],
-    intervalText: `${minutes} min`,
-    confirmed,
-  }
-}
 
 function card(id: string, kind: Activity['kind'], startUtc: number, endUtc: number, isCrew: boolean, isManualEntry = false, slot: 1 | 2 = 1): Activity {
   return {
@@ -630,11 +515,11 @@ function prague(ms: number): string {
   return `${pick('day')}. ${pick('month')}. ${pick('year')} ${pick('hour')}:${pick('minute')}`
 }
 
-function chainFrom(activities: readonly Activity[], confirmations: readonly CrewIntervalConfirmation[]) {
+function chainFrom(activities: readonly Activity[]) {
   const positive = activities.filter((activity) => activity.endUtc > activity.startUtc)
   const candidates = classifyRestCandidates(findRestIntervals(positive))
   const anchor = candidates
     .filter((candidate) => candidate.established && candidate.durationMs >= 11 * HOUR)
     .sort((left, right) => left.endUtc - right.endUtc)[0]!.endUtc
-  return buildDailyRestChain(anchor, candidates, [], positive.at(-1)!.endUtc, activities, confirmations)
+  return buildDailyRestChain(anchor, candidates, [], positive.at(-1)!.endUtc, activities)
 }

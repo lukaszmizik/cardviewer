@@ -194,21 +194,21 @@ test('překryv řízení ve dvou slotech se nepočítá dvakrát', () => {
   assert.deepEqual(period?.drivingSourceActivityIds, ['slot-1', 'slot-2'])
 })
 
-test('pohotovost v osádce není prokázaná přestávka, ale změní výsledek na neuzavřený', () => {
-  const [period] = assessDrivingBreaks([
+test('pohotovost v osádce je podmíněně uznaná a není prokázané splnění', () => {
+  const periods = assessDrivingBreaks([
     activity('drive-1', 'driving', START, START + 4 * HOUR, true),
     activity('wait', 'availability', START + 4 * HOUR, START + 4 * HOUR + 45 * MINUTE, true),
     activity('drive-2', 'driving', START + 5 * HOUR, START + 6 * HOUR, true),
   ])
-  assert.equal(period?.status, 'crew_break_unconfirmed')
-  assert.equal(period?.qualifyingBreak, null)
-  assert.equal(period?.limitReachedUtc, null)
-  assert.equal(period?.drivingMs, 5 * HOUR)
-  assert.notEqual(period?.status, 'within_limit')
-  assert.notEqual(period?.status, 'exceeded')
+  const conditional = periods.find((period) => period.status === 'crew_break_conditional')
+  assert.equal(conditional?.qualifyingBreak?.kind, 'continuous_45')
+  assert.equal(conditional?.evidence, 'crew_availability_assumption')
+  assert.equal(conditional?.limitReachedUtc, null)
+  assert.equal(periods.some((period) => period.status === 'exceeded'), false)
+  assert.equal(periods.some((period) => period.evidence === 'crew_availability_assumption' && period.status === 'within_limit'), false)
 })
 
-test('15 a 30 minut pohotovosti v osádce cyklus prokazatelně neobnoví', () => {
+test('15 a 30 minut pohotovosti v osádce cyklus uzná jen podmíněně', () => {
   const periods = assessDrivingBreaks([
     activity('drive-1', 'driving', START, START + 2 * HOUR, true),
     activity('first', 'availability', START + 2 * HOUR, START + 2 * HOUR + 15 * MINUTE, true),
@@ -216,10 +216,11 @@ test('15 a 30 minut pohotovosti v osádce cyklus prokazatelně neobnoví', () =>
     activity('second', 'availability', START + 5 * HOUR, START + 5 * HOUR + 30 * MINUTE, true),
     activity('drive-3', 'driving', START + 6 * HOUR, START + 7 * HOUR, true),
   ])
-  assert.equal(periods.length, 1)
-  assert.equal(periods[0]?.status, 'crew_break_unconfirmed')
-  assert.equal(periods[0]?.qualifyingBreak, null)
-  assert.equal(periods[0]?.drivingMs, 5 * HOUR)
+  assert.equal(periods[0]?.status, 'crew_break_conditional')
+  assert.equal(periods[0]?.qualifyingBreak?.kind, 'split_15_30')
+  assert.equal(periods[0]?.evidence, 'crew_availability_assumption')
+  assert.notEqual(periods[0]?.status, 'within_limit')
+  assert.notEqual(periods[0]?.status, 'exceeded')
 })
 
 test('pohotovost bez doložené osádky po 4 h 30 min přestávku nepotvrdí', () => {

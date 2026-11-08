@@ -295,6 +295,16 @@ test('neznámý úsek nebo vyjmutá karta průběh neuzavře', () => {
   })
   assert.equal(unknown.crewRecord, 'crew_record_uncertain')
   assert.notEqual(unknown.crewRecord, 'crew_record_interrupted')
+  assert.equal(unknown.conditionalEligible, false)
+  assert.equal(decideCrewDailyWindow({
+    windowStartUtc: START,
+    activities: [
+      activity('before', 'driving', START, START + 4 * HOUR, true),
+      activity('after', 'driving', START + 5 * HOUR, restStart, true),
+      activity('rest', 'rest', restStart, restStart + 9 * HOUR, true),
+    ],
+    unknownIntervals: [{ startUtc: START + 4 * HOUR, endUtc: START + 5 * HOUR }],
+  }).applies, false)
   assert.equal(unknown.nineHourCondition, 'met')
   assert.equal(unknown.legalApplicability, 'undecided')
 
@@ -312,7 +322,7 @@ test('neznámý úsek nebo vyjmutá karta průběh neuzavře', () => {
   assert.equal(cardOut.windowEndUtc, START + CREW_WINDOW_MS)
 })
 
-test('výměna karet 22. až 23. září 2025 není přerušení a neotevře 30hodinové okno', () => {
+test('výměna karet 22. až 23. září 2025 není přerušení a 30hodinové okno uzná podmíněně', () => {
   const anchor = Date.parse('2025-09-22T17:31:00.000Z')
   const manualStart = Date.parse('2025-09-22T21:38:00.000Z')
   const swap = Date.parse('2025-09-23T09:49:00.000Z')
@@ -339,14 +349,16 @@ test('výměna karet 22. až 23. září 2025 není přerušení a neotevře 30h
     { startUtc: swap, endUtc: swap + 2 * MINUTE },
   ])
   assert.equal(result.qualifyingRest?.startUtc, restStart)
-  assert.equal(decision.applies, false)
+  assert.equal(decision.applies, true)
+  assert.equal(decision.basis, 'conditional')
   assert.equal(decision.crewRecord, 'crew_record_uncertain')
+  assert.equal(decision.refusal, null)
   assert.equal(activities.find((item) => item.id === 'manual-gap')?.isCrew, false)
   assert.equal(activities.find((item) => item.id === 'leave-slot')?.isCrew, false)
   assert.deepEqual(activities, snapshot)
 })
 
-test('výměna karet 30. září až 1. října 2025 není přerušení a neotevře 30hodinové okno', () => {
+test('výměna karet 30. září až 1. října 2025 není přerušení a 30hodinové okno uzná podmíněně', () => {
   const anchor = Date.parse('2025-09-30T07:14:00.000Z')
   const manualStart = Date.parse('2025-09-30T11:33:00.000Z')
   const swap = Date.parse('2025-09-30T23:41:00.000Z')
@@ -372,8 +384,10 @@ test('výměna karet 30. září až 1. října 2025 není přerušení a neotev
     { startUtc: swap, endUtc: swap + 2 * MINUTE },
   ])
   assert.equal(result.qualifyingRest?.startUtc, restStart)
-  assert.equal(decision.applies, false)
+  assert.equal(decision.applies, true)
+  assert.equal(decision.basis, 'conditional')
   assert.equal(decision.crewRecord, 'crew_record_uncertain')
+  assert.equal(decision.refusal, null)
 })
 
 test('skutečné přerušení osádky zůstane přerušením', () => {
@@ -389,6 +403,8 @@ test('skutečné přerušení osádky zůstane přerušením', () => {
   const decision = decideCrewDailyWindow({ windowStartUtc: START, activities })
   assert.equal(result.crewRecord, 'crew_record_interrupted')
   assert.equal(decision.applies, false)
+  assert.equal(decision.basis, null)
+  assert.match(decision.refusal ?? '', /řízení nebo práce bez příznaku osádky/)
   assert.equal(decision.crewRecord, 'crew_record_interrupted')
   assert.equal(result.qualifyingRest?.startUtc, restStart)
 })
@@ -410,7 +426,8 @@ test('navazující výměna slotu není přerušení a odpočinek už se nekontr
   assert.notEqual(result.crewRecord, 'crew_record_interrupted')
   assert.deepEqual(result.uncertainIntervals, [{ startUtc: swap, endUtc: swap + 2 * MINUTE }])
   assert.equal(result.qualifyingRest?.startUtc, restStart)
-  assert.equal(decideCrewDailyWindow({ windowStartUtc: START, activities: exchanged }).applies, false)
+  assert.equal(decideCrewDailyWindow({ windowStartUtc: START, activities: exchanged }).applies, true)
+  assert.equal(decideCrewDailyWindow({ windowStartUtc: START, activities: exchanged }).basis, 'conditional')
   assert.equal(exchanged.find((item) => item.id === 'ignored')?.isCrew, false)
   assert.equal(exchanged.find((item) => item.id === 'leave-slot')?.isCrew, false)
 })

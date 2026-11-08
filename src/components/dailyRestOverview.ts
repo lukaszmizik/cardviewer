@@ -233,7 +233,9 @@ function windowRow(
     }
   }
   chosen.parts.forEach((part) => shown.add(restKey(part)))
-  return recognizedInterpretationRow(`window:${node.anchorUtc}`, chosen, candidates, activities, [windowDetail, ...crewDetails, ...candidateDetails])
+  const row = recognizedInterpretationRow(`window:${node.anchorUtc}`, chosen, candidates, activities, [windowDetail, ...crewDetails, ...candidateDetails])
+  if (node.crewBasis !== 'conditional') return row
+  return { ...row, result: 'Podmíněně uznáno', attention: true, tone: 'neutral' }
 }
 
 function recognizedCandidateRow(candidate: RestCandidate, activities: readonly RecordedActivity[], notes: string[]): DailyRestOverviewRow {
@@ -521,6 +523,12 @@ function cardRemovedInWork(candidate: CrewDailyCandidate, activities: readonly R
 }
 
 function crewPeriodDetails(node: DailyChainNode, activities: readonly RecordedActivity[]): OverviewDetail[] {
+  if (node.windowMode === 'crew_30h' && node.crewBasis === 'conditional') {
+    return [
+      { label: 'Režim osádky', value: 'Podmíněně uznáno. 30hodinové okno vychází z předpokladu, že druhý řidič byl v neprokázaných úsecích přítomen. Není to prokázaná osádka.' },
+      { label: 'Omezení příznaku', value: CREW_LIMIT },
+    ]
+  }
   if (node.windowMode === 'crew_30h') {
     return [
       { label: 'Režim osádky', value: 'Použito 30hodinové okno. Záznam příznaku osádky pokrývá pracovní úsek po první hodině. Kandidátní výpočet zůstává samostatně a není právní posouzení přítomnosti druhého řidiče.' },
