@@ -47,7 +47,7 @@ function App() {
   }
 
   function openGraphOnDay(atUtc: number) {
-    setGraphDayUtc(dayStartMs(atUtc, 'utc'))
+    setGraphDayUtc(dayStartMs(atUtc, 'local'))
     setCurrentTab('graph')
   }
 

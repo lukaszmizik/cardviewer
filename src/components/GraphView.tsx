@@ -12,7 +12,7 @@ type GraphViewProps = {
 }
 
 export function GraphView({ data, onUploadCard, focusedDayUtc = null }: GraphViewProps) {
-  const [clockMode, setClockMode] = useState<ClockMode>(focusedDayUtc != null ? 'utc' : 'local')
+  const [clockMode, setClockMode] = useState<ClockMode>('local')
 
   if (!data) {
     return (
