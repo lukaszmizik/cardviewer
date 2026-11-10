@@ -20,8 +20,12 @@ export type OutScopeSegment = {
   recordedKind: ActivityKind
   /** Uzavřený interval out–out_end. Neznamená to oprávněnou výjimku. */
   outActive: boolean
-  /** Druh pro limity čl. 6 a 7, kdyby byl OUT oprávněný. */
+  /** OUT zde není potvrzený, ale v diagnostické alternativě mohl pokračovat. */
+  possibleOut: boolean
+  /** Druh pro limity čl. 6 a 7, kdyby byl uzavřený OUT oprávněný. */
   authorizedKind: ActivityKind
+  /** Druh v diagnostické alternativě, včetně nepotvrzeného pokračování OUT. */
+  hypothesisKind: ActivityKind
   /** Druh, když oprávnění OUT není prokázané. */
   unverifiedKind: ActivityKind
   uncertainty: OutScopeUncertainty | null
@@ -33,6 +37,11 @@ export type OutScopeSegment = {
 export type OutOfScopeResolution = {
   /** Jen páry se známým začátkem i koncem a bez rozporu ve značkách. */
   closedIntervals: OutScopeInterval[]
+  /**
+   * Diagnostický rozsah, kde OUT mohl pokračovat.
+   * Není to potvrzený interval ani zapsaný out_end.
+   */
+  possibleIntervals: OutScopeInterval[]
   openStarts: number[]
   orphanEnds: number[]
   ambiguousSpans: OutScopeInterval[]
@@ -45,7 +54,9 @@ export function resolveOutOfScope(input: {
   /** Konec dostupných dat. Otevřený OUT se jím neuzavírá. */
   recordEndUtc?: number | null
 }): OutOfScopeResolution {
-  const paired = clampOpenAmbiguity(pairOutMarks(input.specificConditions ?? []), horizonOf(input.activities, input.recordEndUtc))
+  const horizon = horizonOf(input.activities, input.recordEndUtc)
+  const paired = clampOpenAmbiguity(pairOutMarks(input.specificConditions ?? []), horizon)
+  const possibleIntervals = possibleOutIntervals(paired, horizon)
   const segments: OutScopeSegment[] = []
   const activities = input.activities.filter((activity) => activity.endUtc > activity.startUtc)
   for (const activity of activities) {
@@ -54,11 +65,12 @@ export function resolveOutOfScope(input: {
       const startUtc = bounds[index]!
       const endUtc = bounds[index + 1]!
       if (endUtc <= startUtc) continue
-      segments.push(toSegment(activity, startUtc, endUtc, paired))
+      segments.push(toSegment(activity, startUtc, endUtc, paired, possibleIntervals))
     }
   }
   return {
     closedIntervals: paired.closed,
+    possibleIntervals,
     openStarts: paired.openStarts,
     orphanEnds: paired.orphanEnds,
     ambiguousSpans: paired.ambiguous,
@@ -66,9 +78,11 @@ export function resolveOutOfScope(input: {
   }
 }
 
-/** Uzavřený OUT, ve kterém je zaznamenané řízení. Jen tehdy se limity řízení liší. */
+/** Uzavřený nebo jen možný OUT, ve kterém je zaznamenané řízení. */
 export function outScopeAffectsDrivingLimits(resolution: OutOfScopeResolution): boolean {
-  return resolution.segments.some((segment) => segment.outActive && segment.recordedKind === 'driving')
+  return resolution.segments.some(
+    (segment) => segment.recordedKind === 'driving' && (segment.outActive || segment.possibleOut),
+  )
 }
 
 /**
@@ -81,8 +95,36 @@ export function activitiesUnderAuthorizedOut(
   activities: readonly Activity[],
   resolution: OutOfScopeResolution,
 ): Activity[] {
-  if (resolution.closedIntervals.length === 0) return activities.map((activity) => ({ ...activity }))
-  return activities.flatMap((activity) => rewriteDriving(activity, resolution.closedIntervals))
+  return rewriteActivities(activities, resolution.closedIntervals)
+}
+
+/**
+ * Nejvýhodnější diagnostická alternativa pro limity řízení.
+ * Řízení v uzavřeném i jen možném OUT počítá jako jinou práci.
+ * Neznámou činnost nemění a původní aktivity nechává na místě.
+ */
+export function activitiesUnderOutHypothesis(
+  activities: readonly Activity[],
+  resolution: OutOfScopeResolution,
+): Activity[] {
+  return rewriteActivities(activities, [...resolution.closedIntervals, ...resolution.possibleIntervals])
+}
+
+function rewriteActivities(activities: readonly Activity[], intervals: readonly OutScopeInterval[]): Activity[] {
+  if (intervals.length === 0) return activities.map((activity) => ({ ...activity }))
+  return activities.flatMap((activity) => rewriteDriving(activity, intervals))
+}
+
+function possibleOutIntervals(marks: PairedMarks, horizon: number | null): OutScopeInterval[] {
+  const intervals: OutScopeInterval[] = []
+  for (const span of marks.ambiguous) {
+    if (span.endUtc > span.startUtc && Number.isFinite(span.endUtc)) intervals.push(span)
+  }
+  if (horizon == null) return intervals
+  for (const startUtc of marks.openStarts) {
+    if (horizon > startUtc) intervals.push({ startUtc, endUtc: horizon })
+  }
+  return intervals
 }
 
 type PairedMarks = {
@@ -170,8 +212,15 @@ function cutPoints(startUtc: number, endUtc: number, marks: PairedMarks): number
   return [...points].sort((left, right) => left - right)
 }
 
-function toSegment(activity: Activity, startUtc: number, endUtc: number, marks: PairedMarks): OutScopeSegment {
+function toSegment(
+  activity: Activity,
+  startUtc: number,
+  endUtc: number,
+  marks: PairedMarks,
+  possible: readonly OutScopeInterval[],
+): OutScopeSegment {
   const insideClosed = marks.closed.some((interval) => startUtc >= interval.startUtc && endUtc <= interval.endUtc)
+  const possibleOut = possible.some((interval) => startUtc >= interval.startUtc && endUtc <= interval.endUtc)
   const ambiguous = marks.ambiguous.some((interval) => startUtc < interval.endUtc && interval.startUtc < endUtc)
   const missingEnd = marks.openStarts.some((atUtc) => atUtc <= startUtc)
   const orphan =
@@ -186,13 +235,16 @@ function toSegment(activity: Activity, startUtc: number, endUtc: number, marks: 
         : null
   const outActive = insideClosed && uncertainty == null
   const recordedKind = activity.kind
+  const countedAsWork = recordedKind === 'driving' && (outActive || possibleOut)
   return {
     sourceActivityId: activity.id,
     startUtc,
     endUtc,
     recordedKind,
     outActive,
+    possibleOut: possibleOut && !outActive,
     authorizedKind: outActive && recordedKind === 'driving' ? 'work' : recordedKind,
+    hypothesisKind: countedAsWork ? 'work' : recordedKind,
     unverifiedKind: recordedKind,
     uncertainty,
     isCrew: activity.isCrew,

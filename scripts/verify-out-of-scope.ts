@@ -10,6 +10,7 @@ import { assessReducedDailyRestLimit } from '../src/analysis/reducedDailyRestLim
 import { classifyWeeklyRestCandidates } from '../src/analysis/weeklyRest.ts'
 import {
   activitiesUnderAuthorizedOut,
+  activitiesUnderOutHypothesis,
   resolveOutOfScope,
   type OutScopeSegment,
 } from '../src/analysis/outOfScopeResolver.ts'
@@ -84,6 +85,7 @@ test('OUT přes půlnoc pokryje jen vnitřek intervalu', () => {
   assert.equal(covered[0]!.endUtc, T0 + DAY + 2 * H)
   assert.ok(covered[0]!.startUtc < T0 + DAY && covered[0]!.endUtc > T0 + DAY)
   assert.equal(covered[0]!.authorizedKind, 'work')
+  assert.equal(drivingMs(activitiesUnderOutHypothesis(activities, resolved)), 3 * H)
 })
 
 test('OUT přes hranici dvou týdnů ubere řízení jen v oprávněné variantě', () => {
@@ -110,6 +112,11 @@ test('OUT přes hranici dvou týdnů ubere řízení jen v oprávněné variant�
   const finding = review(activities, conditions).findings.find((item) => item.id.startsWith('weekly-driving:'))
   assert.equal(finding?.severity, 'uncertain')
   assert.equal(finding?.reviewStatus, 'needs_verification')
+  assert.equal(finding?.meterOver, false)
+  assert.match(finding?.outLines?.join('\n') ?? '', /Řízení podle záznamu: 58 h/)
+  assert.match(finding?.outLines?.join('\n') ?? '', /Při oprávněném OUT: 56 h/)
+  assert.match(finding?.outLines?.join('\n') ?? '', /Rozdíl: 2 h/)
+  assert.doesNotMatch(finding?.outLines?.join('\n') ?? '', /není potvrzen/)
 })
 
 test('chybějící out_end nevytvoří uzavřený interval', () => {
@@ -121,7 +128,13 @@ test('chybějící out_end nevytvoří uzavřený interval', () => {
   assert.equal(resolved.segments[0]!.uncertainty, null)
   assert.equal(resolved.segments[1]!.uncertainty, 'missing_out_end')
   assert.equal(resolved.segments[1]!.authorizedKind, 'driving')
+  assert.equal(resolved.segments[1]!.possibleOut, true)
+  assert.equal(resolved.segments[1]!.hypothesisKind, 'work')
+  assert.equal(resolved.possibleIntervals.length, 1)
+  assert.equal(resolved.possibleIntervals[0]!.endUtc, T0 + 5 * H)
   assert.equal(drivingMs(activitiesUnderAuthorizedOut(activities, resolved)), 5 * H)
+  assert.equal(drivingMs(activitiesUnderOutHypothesis(activities, resolved)), H)
+  assert.equal(activities[0]!.kind, 'driving')
 })
 
 test('osamocené out_end nemá smyšlený začátek', () => {
@@ -176,6 +189,15 @@ test('2 h + OUT 1 h + 2 h 30 min nenuluje nasčítané řízení', () => {
   const finding = review(activities, conditions).findings.find((item) => item.id.startsWith('break:'))
   assert.equal(finding?.reviewStatus, 'needs_verification')
   assert.equal(finding?.severity, 'uncertain')
+  assert.equal(finding?.meterOver, false)
+  assert.equal(finding?.actualText, '4 h 30 min')
+  assert.deepEqual(finding?.outLines, [
+    'Řízení podle záznamu: 5 h 30 min',
+    'Při oprávněném OUT: 4 h 30 min',
+    'Rozdíl: 1 h',
+    'Výsledek: Vyžaduje ověření oprávněnosti OUT.',
+  ])
+  assert.doesNotMatch(finding?.explanation ?? '', /není potvrzen/)
 })
 
 test('porušení 4 h 30 min, které vychází při obou interpretacích, zůstane violation', () => {
@@ -184,6 +206,9 @@ test('porušení 4 h 30 min, které vychází při obou interpretacích, zůstan
   const finding = review(activities, conditions).findings.find((item) => item.id.startsWith('break:'))
   assert.equal(finding?.severity, 'violation')
   assert.equal(finding?.reviewStatus, undefined)
+  assert.equal(finding?.meterOver, true)
+  assert.match(finding?.outLines?.join('\n') ?? '', /Rozdíl: 1 h/)
+  assert.match(finding?.outLines?.join('\n') ?? '', /Prokázané porušení/)
 })
 
 test('denní limit nad 10 h závisí na oprávněnosti OUT', () => {
@@ -290,3 +315,100 @@ test('GN7 u krátkého odpočinku se po přidání OUT na řízení nemění', (
   assert.equal(withOut?.methodology, 'gn7')
   assert.equal(withOut?.startUtc, plain?.startUtc)
 })
+
+test('stejný úsek bez out_end vyžaduje ověření a označí hypotézu', () => {
+  const activities = [act('drive', 'driving', T0, T0 + 5.5 * H)]
+  const finding = review(activities, [mark('out', T0 + 2 * H)]).findings.find((item) => item.id.startsWith('break:'))
+  assert.equal(finding?.severity, 'uncertain')
+  assert.equal(finding?.reviewStatus, 'needs_verification')
+  assert.equal(finding?.meterOver, false)
+  assert.equal(finding?.actualText, '2 h')
+  assert.ok((finding?.meterPercent ?? 100) < 100)
+  assert.deepEqual(finding?.outLines?.slice(0, 4), [
+    'Řízení podle záznamu: 5 h 30 min',
+    'Při oprávněném OUT: 2 h',
+    'Rozdíl: 3 h 30 min',
+    'Výsledek: Vyžaduje ověření oprávněnosti OUT.',
+  ])
+  assert.match(finding?.outLines?.join('\n') ?? '', /hypotetická/)
+  assert.match(finding?.explanation ?? '', /není potvrzen/)
+})
+
+test('opakovaný začátek OUT není potvrzený přestupek', () => {
+  const activities = [act('drive', 'driving', T0, T0 + 5.5 * H)]
+  const finding = review(activities, [
+    mark('out', T0 + 2 * H),
+    mark('out', T0 + 2.5 * H),
+    mark('out_end', T0 + 3 * H),
+  ]).findings.find((item) => item.id.startsWith('break:'))
+  assert.equal(finding?.reviewStatus, 'needs_verification')
+  assert.equal(finding?.severity, 'uncertain')
+  assert.match(finding?.outLines?.join('\n') ?? '', /Rozdíl: 1 h/)
+  assert.match(finding?.explanation ?? '', /není potvrzen/)
+})
+
+test('osamocené out_end nemění prokázané překročení', () => {
+  const activities = [act('drive', 'driving', T0, T0 + 5.5 * H)]
+  const finding = review(activities, [mark('out_end', T0 + 3 * H)]).findings.find((item) => item.id.startsWith('break:'))
+  assert.equal(finding?.severity, 'violation')
+  assert.equal(finding?.reviewStatus, undefined)
+  assert.equal(finding?.outLines, undefined)
+  assert.equal(finding?.meterOver, true)
+})
+
+test('otevřený OUT s neznámou činností nevytvoří prokázaný přestupek', () => {
+  const activities = [
+    act('drive', 'driving', T0, T0 + 5 * H),
+    act('gap', 'unknown', T0 + 5 * H, T0 + 6 * H),
+  ]
+  const resolved = resolution(activities, [mark('out', T0 + 2 * H)])
+  const hypothesis = activitiesUnderOutHypothesis(activities, resolved)
+  assert.equal(hypothesis.some((activity) => activity.kind === 'unknown'), true)
+  assert.equal(hypothesis.some((activity) => activity.kind === 'driving' && activity.id !== 'gap'), true)
+  const finding = review(activities, [mark('out', T0 + 2 * H)]).findings.find((item) => item.id.startsWith('break:'))
+  assert.equal(finding?.severity, 'uncertain')
+  assert.equal(finding?.reviewStatus, 'needs_verification')
+  assert.notEqual(finding?.severity, 'violation')
+})
+
+test('otevřený OUT mimo už překročený úsek přestupek nemění', () => {
+  const later = T0 + 6 * H + 45 * MIN
+  const activities = [
+    act('long', 'driving', T0, T0 + 6 * H),
+    act('rest', 'rest', T0 + 6 * H, later),
+    act('short', 'driving', later, later + 30 * MIN),
+  ]
+  const breaks = review(activities, [mark('out', later)]).findings.filter((item) => item.id.startsWith('break:'))
+  assert.equal(breaks.length, 1)
+  assert.equal(breaks[0]!.severity, 'violation')
+  assert.equal(breaks[0]!.reviewStatus, undefined)
+  assert.equal(breaks[0]!.outLines, undefined)
+  assert.equal(breaks[0]!.meterOver, true)
+})
+
+test('přestávka 15 a 30 minut zůstane platná, když je mezi nimi řízení v OUT', () => {
+  const firstRest = T0 + 4 * H
+  const outStart = firstRest + 15 * MIN
+  const secondRest = outStart + H
+  const activities = [
+    act('before', 'driving', T0, firstRest),
+    act('quarter', 'rest', firstRest, outStart),
+    act('inside', 'driving', outStart, secondRest),
+    act('half', 'rest', secondRest, secondRest + 30 * MIN),
+  ]
+  const conditions = [mark('out', outStart), mark('out_end', secondRest)]
+  const resolved = resolution(activities, conditions)
+  const hypothesis = assessDrivingBreaks(activitiesUnderOutHypothesis(activities, resolved))
+  const recorded = assessDrivingBreaks(activities)
+  assert.equal(hypothesis[0]?.qualifyingBreak?.kind, 'split_15_30')
+  assert.equal(hypothesis[0]?.drivingMs, 4 * H)
+  assert.equal(hypothesis[0]?.status, 'within_limit')
+  assert.equal(recorded[0]?.qualifyingBreak?.kind, 'split_15_30')
+  assert.equal(recorded[0]?.drivingMs, 5 * H)
+  assert.equal(recorded[0]?.status, 'exceeded')
+  assert.equal(resolved.segments.find((segment) => segment.sourceActivityId === 'inside')?.hypothesisKind, 'work')
+  const finding = review(activities, conditions).findings.find((item) => item.id.startsWith('break:'))
+  assert.equal(finding?.reviewStatus, 'needs_verification')
+  assert.equal(finding?.meterOver, false)
+})
+

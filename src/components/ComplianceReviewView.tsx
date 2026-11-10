@@ -257,6 +257,11 @@ function FindingCard({
       <header>
         <span className={`compliance-dot compliance-dot-${tone}`} aria-hidden="true" />
         <h3>{finding.title}</h3>
+        {finding.reviewStatus === 'needs_verification' ? (
+          <span className="compliance-status compliance-status-verify">Vyžaduje ověření</span>
+        ) : finding.severity === 'violation' ? (
+          <span className="compliance-status compliance-status-violation">Prokázané porušení</span>
+        ) : null}
         {tone === 'confirmed' ? <ConfirmedMark /> : null}
       </header>
       <p>{finding.intervalText}</p>
@@ -268,6 +273,9 @@ function FindingCard({
           <div style={{ width: `${finding.meterPercent}%` }} />
         </div>
       ) : null}
+      {finding.outLines?.map((line, index) => (
+        <p key={`${finding.id}-out-${index}`} className="compliance-out-line">{line}</p>
+      ))}
       {finding.deltaText !== '' && finding.deltaText !== finding.explanation ? (
         <p>{finding.deltaText}</p>
       ) : null}

@@ -15,7 +15,7 @@ import { assessReducedDailyRestLimit, type ReducedDailyRestAssessment } from '..
 import { classifyWeeklyRestCandidates } from '../analysis/weeklyRest.ts'
 import { buildWeeklyRestAssignment } from '../analysis/weeklyRestAssignment.ts'
 import { assessWeeklyRestCompensationTaken } from '../analysis/weeklyRestCompensationTaken.ts'
-import { activitiesUnderAuthorizedOut, outScopeAffectsDrivingLimits, resolveOutOfScope } from '../analysis/outOfScopeResolver.ts'
+import { activitiesUnderOutHypothesis, outScopeAffectsDrivingLimits, resolveOutOfScope, type OutOfScopeResolution } from '../analysis/outOfScopeResolver.ts'
 import { addDays, dayStartMs, formatClockDate, formatClockDateTime, formatWeekRange, weekStartMs, type ClockMode } from '../lib/clock.ts'
 import type { Activity, DriverCardData, SpecificConditionEntry } from '../types/tacho.ts'
 
@@ -41,6 +41,8 @@ export type ComplianceFinding = {
   deltaText: string
   explanation: string
   technicalText: string
+  /** Obě varianty řízení ve stejném kontrolním období, když OUT může změnit součet. */
+  outLines?: string[]
   /** Podíl vůči limitu v procentech, nejvýše 100. Null, když graf nedává smysl. */
   meterPercent: number | null
   meterOver: boolean
@@ -146,7 +148,7 @@ export function buildComplianceReview(input: {
     recordEndUtc: record?.endUtc ?? null,
   })
   const authorizedActivities = outScopeAffectsDrivingLimits(outResolution)
-    ? activitiesUnderAuthorizedOut(activities, outResolution)
+    ? activitiesUnderOutHypothesis(activities, outResolution)
     : null
   const authorizedBreaks = authorizedActivities == null ? null : assessDrivingBreaks(authorizedActivities)
   const authorizedDaily = authorizedActivities == null || prepared.chain == null
@@ -156,13 +158,16 @@ export function buildComplianceReview(input: {
   const authorizedWeekDriving = authorizedActivities == null
     ? null
     : weekDrivingStatuses(authorizedActivities, periodStartUtc, periodEndUtc)
+  const outContext: OutDrivingContext | null = authorizedActivities == null
+    ? null
+    : { activities, resolution: outResolution }
   const consecutive = consecutivePeriods(prepared, record)
 
-  collectBreaks(prepared.breaks, days, periodStartUtc, periodEndUtc, clockMode, findings, authorizedBreaks)
-  collectDailyDriving(prepared.daily, days, periodStartUtc, periodEndUtc, clockMode, findings, authorizedDaily)
-  collectWeekly(weekDriving, days, periodStartUtc, periodEndUtc, findings, authorizedWeekDriving)
-  collectFortnight(activities, days, periodStartUtc, periodEndUtc, findings, authorizedActivities)
-  collectExtensions(prepared.daily, activities, days, periodStartUtc, periodEndUtc, findings, authorizedDaily)
+  collectBreaks(prepared.breaks, days, periodStartUtc, periodEndUtc, clockMode, findings, authorizedBreaks, outContext)
+  collectDailyDriving(prepared.daily, days, periodStartUtc, periodEndUtc, clockMode, findings, authorizedDaily, outContext)
+  collectWeekly(weekDriving, days, periodStartUtc, periodEndUtc, findings, authorizedWeekDriving, outContext)
+  collectFortnight(activities, days, periodStartUtc, periodEndUtc, findings, authorizedActivities, outContext)
+  collectExtensions(prepared.daily, activities, days, periodStartUtc, periodEndUtc, findings, authorizedDaily, outContext)
   const gn7Starts = collectGn7DailyRests(
     resolveGn7Anchor(prepared.anchorUtc, prepared.candidates, prepared.unknownIntervals),
     activities,
@@ -390,6 +395,12 @@ function compensationReport(prepared: ReturnType<typeof prepare>) {
 const CREW_BREAK_WARNING = 'Přestávka je uznatelná za předpokladu, že vozidlo řídil druhý řidič a odpočívající řidič mu během této doby nepomáhal při řízení.'
 
 const OUT_VERIFICATION_NOTE = 'Značka OUT není důkazem oprávněné výjimky. Při oprávněném OUT by se toto řízení do limitu nepočítalo a při neoprávněném ano.'
+const OUT_HYPOTHESIS_NOTE = 'Druhá hodnota je pouze hypotetická a časový rozsah OUT není potvrzen.'
+
+type OutDrivingContext = {
+  activities: readonly Activity[]
+  resolution: OutOfScopeResolution
+}
 
 function outVerification(bothProve: boolean): Pick<ComplianceFinding, 'severity' | 'reviewStatus' | 'explanation'> | null {
   if (bothProve) return null
@@ -400,6 +411,51 @@ function outVerification(bothProve: boolean): Pick<ComplianceFinding, 'severity'
   }
 }
 
+function outDrivingLines(
+  recordedMs: number,
+  hypothesisMs: number | null,
+  fromUtc: number,
+  toUtc: number,
+  context: OutDrivingContext | null,
+  dependsOnOut: boolean,
+): { lines: string[]; incomplete: boolean } | null {
+  if (context == null || hypothesisMs == null) return null
+  const affectedMs = Math.max(0, recordedMs - hypothesisMs)
+  if (affectedMs === 0) return null
+  const incomplete = drivingOverlapMs(context.activities, context.resolution.possibleIntervals, fromUtc, toUtc) > 0
+  const lines = [
+    `Řízení podle záznamu: ${durationText(recordedMs)}`,
+    `Při oprávněném OUT: ${durationText(hypothesisMs)}`,
+    `Rozdíl: ${durationText(affectedMs)}`,
+    dependsOnOut
+      ? 'Výsledek: Vyžaduje ověření oprávněnosti OUT.'
+      : 'Výsledek: Prokázané porušení i při hypotéze oprávněného OUT.',
+  ]
+  if (incomplete) lines.push(OUT_HYPOTHESIS_NOTE)
+  return { lines, incomplete }
+}
+
+function drivingOverlapMs(
+  activities: readonly Activity[],
+  intervals: readonly { startUtc: number; endUtc: number }[],
+  fromUtc: number,
+  toUtc: number,
+): number {
+  let total = 0
+  for (const activity of activities) {
+    if (activity.kind !== 'driving' || activity.endUtc <= activity.startUtc) continue
+    const startUtc = Math.max(activity.startUtc, fromUtc)
+    const endUtc = Math.min(activity.endUtc, toUtc)
+    if (endUtc <= startUtc) continue
+    for (const interval of intervals) {
+      const coveredStart = Math.max(startUtc, interval.startUtc)
+      const coveredEnd = Math.min(endUtc, interval.endUtc)
+      if (coveredEnd > coveredStart) total += coveredEnd - coveredStart
+    }
+  }
+  return total
+}
+
 function collectBreaks(
   periods: readonly DrivingBreakPeriod[],
   days: readonly DaySlot[],
@@ -408,6 +464,7 @@ function collectBreaks(
   clockMode: ClockMode,
   findings: ComplianceFinding[],
   authorized: readonly DrivingBreakPeriod[] | null = null,
+  outContext: OutDrivingContext | null = null,
 ) {
   for (const period of periods) {
     if (!overlaps(period.startUtc, period.endUtc, periodStartUtc, periodEndUtc)) continue
@@ -435,10 +492,13 @@ function collectBreaks(
     if (period.status !== 'exceeded') continue
     const alternative = authorized == null ? null : overlappingBreak(period, authorized)
     const dependsOnOut = authorized != null && alternative?.status !== 'exceeded'
+    const hypothesisMs = alternative?.drivingMs ?? (authorized == null ? null : 0)
+    const compared = outDrivingLines(period.drivingMs, hypothesisMs, period.startUtc, period.endUtc, outContext, dependsOnOut)
     const anchor = period.limitReachedUtc ?? period.startUtc
     const mapDayUtc = placeDay(anchor, period.startUtc, period.endUtc, days)
     if (mapDayUtc == null) continue
     const verification = outVerification(!dependsOnOut)
+    const shownMs = dependsOnOut ? (hypothesisMs ?? period.drivingMs) : period.drivingMs
     findings.push({
       id: `break:${period.startUtc}`,
       severity: verification?.severity ?? 'violation',
@@ -447,18 +507,27 @@ function collectBreaks(
       startUtc: period.startUtc,
       endUtc: period.endUtc,
       mapDayUtc,
-      actualText: durationText(period.drivingMs),
+      actualText: durationText(shownMs),
       limitText: '4 h 30 min',
       deltaText: dependsOnOut ? 'Závisí na oprávněnosti OUT' : overText(period.drivingMs, DRIVING_LIMIT_MS),
-      explanation: verification?.explanation ?? 'Souvislé řízení překročilo 4 hodiny 30 minut bez prokázané přestávky.',
+      explanation: joinOutExplanation(
+        verification?.explanation ?? 'Souvislé řízení překročilo 4 hodiny 30 minut bez prokázané přestávky.',
+        compared,
+      ),
       technicalText: authorized == null
         ? `status ${period.status}, evidence ${period.evidence}`
-        : `status ${period.status}, evidence ${period.evidence}, out ${dependsOnOut ? 'needs_verification' : 'agreed'}`,
-      meterPercent: meter(period.drivingMs, DRIVING_LIMIT_MS),
+        : `status ${period.status}, evidence ${period.evidence}, out ${dependsOnOut ? 'needs_verification' : 'agreed'}${compared?.incomplete ? ', incomplete' : ''}`,
+      meterPercent: meter(shownMs, DRIVING_LIMIT_MS),
       meterOver: !dependsOnOut,
       reviewStatus: verification?.reviewStatus,
+      outLines: compared?.lines,
     })
   }
+}
+
+function joinOutExplanation(explanation: string, compared: { incomplete: boolean } | null): string {
+  if (compared?.incomplete !== true) return explanation
+  return `${explanation} ${OUT_HYPOTHESIS_NOTE}`
 }
 
 function overlappingBreak(period: DrivingBreakPeriod, alternatives: readonly DrivingBreakPeriod[]): DrivingBreakPeriod | null {
@@ -482,6 +551,7 @@ function collectDailyDriving(
   clockMode: ClockMode,
   findings: ComplianceFinding[],
   authorized: readonly DailyDrivingPeriod[] | null = null,
+  outContext: OutDrivingContext | null = null,
 ) {
   for (const period of periods) {
     const endUtc = period.endUtc ?? period.startUtc
@@ -489,7 +559,10 @@ function collectDailyDriving(
     if (period.result === 'over_10h' && period.drivingMs != null) {
       const alternative = authorized?.find((item) => item.startUtc === period.startUtc) ?? null
       const dependsOnOut = authorized != null && alternative?.result !== 'over_10h'
+      const hypothesisMs = authorized == null ? null : alternative?.drivingMs ?? 0
+      const compared = outDrivingLines(period.drivingMs, hypothesisMs, period.startUtc, endUtc, outContext, dependsOnOut)
       const verification = outVerification(!dependsOnOut)
+      const shownMs = dependsOnOut ? (hypothesisMs ?? period.drivingMs) : period.drivingMs
       const crossed = period.startUtc + TEN_HOURS
       const mapDayUtc = placeDay(crossed, period.startUtc, endUtc, days)
       if (mapDayUtc == null) continue
@@ -501,16 +574,20 @@ function collectDailyDriving(
         startUtc: period.startUtc,
         endUtc,
         mapDayUtc,
-        actualText: durationText(period.drivingMs),
+        actualText: durationText(shownMs),
         limitText: '10 h',
         deltaText: dependsOnOut ? 'Závisí na oprávněnosti OUT' : overText(period.drivingMs, TEN_HOURS),
-        explanation: verification?.explanation ?? 'Doba řízení mezi odpočinky je nad 10 hodin. Počet prodloužení mezi 9 a 10 hodinami se tím neuzavírá.',
+        explanation: joinOutExplanation(
+          verification?.explanation ?? 'Doba řízení mezi odpočinky je nad 10 hodin. Počet prodloužení mezi 9 a 10 hodinami se tím neuzavírá.',
+          compared,
+        ),
         technicalText: authorized == null
           ? `result ${period.result}, closed ${period.closed}`
-          : `result ${period.result}, closed ${period.closed}, out ${dependsOnOut ? 'needs_verification' : 'agreed'}`,
-        meterPercent: meter(period.drivingMs, TEN_HOURS),
+          : `result ${period.result}, closed ${period.closed}, out ${dependsOnOut ? 'needs_verification' : 'agreed'}${compared?.incomplete ? ', incomplete' : ''}`,
+        meterPercent: meter(shownMs, TEN_HOURS),
         meterOver: !dependsOnOut,
         reviewStatus: verification?.reviewStatus,
+        outLines: compared?.lines,
       })
       continue
     }
@@ -568,13 +645,17 @@ function collectWeekly(
   periodEndUtc: number,
   findings: ComplianceFinding[],
   authorized: readonly WeekDrivingRow[] | null = null,
+  outContext: OutDrivingContext | null = null,
 ) {
   for (const result of rows) {
     if (!overlaps(result.weekStartUtc, result.weekEndUtc, periodStartUtc, periodEndUtc)) continue
     if (result.status !== 'over_56h') continue
     const alternative = authorized?.find((item) => item.weekStartUtc === result.weekStartUtc) ?? null
     const dependsOnOut = authorized != null && alternative?.status !== 'over_56h'
+    const hypothesisMs = authorized == null ? null : alternative?.drivingMs ?? 0
+    const compared = outDrivingLines(result.drivingMs, hypothesisMs, result.weekStartUtc, result.weekEndUtc, outContext, dependsOnOut)
     const verification = outVerification(!dependsOnOut)
+    const shownMs = dependsOnOut ? (hypothesisMs ?? result.drivingMs) : result.drivingMs
     const mapDayUtc = placeDay(result.weekStartUtc, result.weekStartUtc, result.weekEndUtc, days)
     if (mapDayUtc == null) continue
     findings.push({
@@ -585,16 +666,20 @@ function collectWeekly(
       startUtc: result.weekStartUtc,
       endUtc: result.weekEndUtc,
       mapDayUtc,
-      actualText: durationText(result.drivingMs),
+      actualText: durationText(shownMs),
       limitText: '56 h',
       deltaText: dependsOnOut ? 'Závisí na oprávněnosti OUT' : overText(result.drivingMs, WEEKLY_DRIVING_LIMIT_MS),
-      explanation: verification?.explanation ?? 'Součet řízení v týdnu od pondělí 00:00 UTC je nad 56 hodin.',
+      explanation: joinOutExplanation(
+        verification?.explanation ?? 'Součet řízení v týdnu od pondělí 00:00 UTC je nad 56 hodin.',
+        compared,
+      ),
       technicalText: authorized == null
         ? `status ${result.status}`
-        : `status ${result.status}, out ${dependsOnOut ? 'needs_verification' : 'agreed'}`,
-      meterPercent: meter(result.drivingMs, WEEKLY_DRIVING_LIMIT_MS),
+        : `status ${result.status}, out ${dependsOnOut ? 'needs_verification' : 'agreed'}${compared?.incomplete ? ', incomplete' : ''}`,
+      meterPercent: meter(shownMs, WEEKLY_DRIVING_LIMIT_MS),
       meterOver: !dependsOnOut,
       reviewStatus: verification?.reviewStatus,
+      outLines: compared?.lines,
     })
   }
 }
@@ -607,6 +692,7 @@ function collectExtensions(
   periodEndUtc: number,
   findings: ComplianceFinding[],
   authorized: readonly DailyDrivingPeriod[] | null = null,
+  outContext: OutDrivingContext | null = null,
 ) {
   const record = recordSpan(activities)
   if (record == null) return
@@ -630,6 +716,11 @@ function collectExtensions(
         recordEndUtc: record.endUtc,
       })
     const dependsOnOut = authorized != null && (alternative?.status !== 'counted' || alternative.used == null || alternative.used <= WEEKLY_EXTENSION_LIMIT)
+    const recordedWeekMs = drivingOverlapMs(activities, [{ startUtc: result.weekStartUtc, endUtc: result.weekEndUtc }], result.weekStartUtc, result.weekEndUtc)
+    const removedMs = outContext == null
+      ? 0
+      : drivingOverlapMs(activities, [...outContext.resolution.closedIntervals, ...outContext.resolution.possibleIntervals], result.weekStartUtc, result.weekEndUtc)
+    const compared = outDrivingLines(recordedWeekMs, recordedWeekMs - removedMs, result.weekStartUtc, result.weekEndUtc, outContext, dependsOnOut)
     const verification = outVerification(!dependsOnOut)
     const mapDayUtc = placeDay(result.weekStartUtc, result.weekStartUtc, result.weekEndUtc, days)
     if (mapDayUtc == null) continue
@@ -641,16 +732,22 @@ function collectExtensions(
       startUtc: result.weekStartUtc,
       endUtc: result.weekEndUtc,
       mapDayUtc,
-      actualText: `${result.used} nad 9 hodin`,
+      actualText: dependsOnOut && alternative?.used != null ? `${alternative.used} nad 9 hodin` : `${result.used} nad 9 hodin`,
       limitText: `${WEEKLY_EXTENSION_LIMIT}`,
       deltaText: dependsOnOut ? 'Závisí na oprávněnosti OUT' : `O ${result.used - WEEKLY_EXTENSION_LIMIT} víc`,
-      explanation: verification?.explanation ?? 'V týdnu od pondělí 00:00 UTC jsou víc než dvě vyhodnocené doby řízení nad 9 hodin. Neuzavřený počet se sem nepočítá.',
+      explanation: joinOutExplanation(
+        verification?.explanation ?? 'V týdnu od pondělí 00:00 UTC jsou víc než dvě vyhodnocené doby řízení nad 9 hodin. Neuzavřený počet se sem nepočítá.',
+        compared,
+      ),
       technicalText: authorized == null
         ? `status ${result.status}, used ${result.used}`
-        : `status ${result.status}, used ${result.used}, out ${dependsOnOut ? 'needs_verification' : 'agreed'}`,
-      meterPercent: meter(result.used, WEEKLY_EXTENSION_LIMIT),
+        : `status ${result.status}, used ${result.used}, out ${dependsOnOut ? 'needs_verification' : 'agreed'}${compared?.incomplete ? ', incomplete' : ''}`,
+      meterPercent: dependsOnOut
+        ? (alternative?.used == null ? null : meter(alternative.used, WEEKLY_EXTENSION_LIMIT))
+        : meter(result.used, WEEKLY_EXTENSION_LIMIT),
       meterOver: !dependsOnOut,
       reviewStatus: verification?.reviewStatus,
+      outLines: compared?.lines,
     })
   }
 }
@@ -713,6 +810,7 @@ function collectFortnight(
   periodEndUtc: number,
   findings: ComplianceFinding[],
   authorizedActivities: readonly Activity[] | null = null,
+  outContext: OutDrivingContext | null = null,
 ) {
   const rows = activities.length === 0 ? [] : assessAdjacentFortnightDrivingTimes({ activities })
   const authorizedRows = authorizedActivities == null ? null : assessAdjacentFortnightDrivingTimes({ activities: authorizedActivities })
@@ -723,6 +821,9 @@ function collectFortnight(
     const dependsOnOut = authorizedRows != null && alternative?.status !== 'over_90h'
     const verification = outVerification(!dependsOnOut)
     const shown = assessFortnightDrivingTime({ activities, laterWeekStartUtc: result.laterWeekStartUtc })
+    const hypothesisMs = authorizedRows == null ? null : alternative?.drivingMs ?? 0
+    const compared = outDrivingLines(shown.drivingMs, hypothesisMs, shown.periodStartUtc, shown.periodEndUtc, outContext, dependsOnOut)
+    const shownMs = dependsOnOut ? (hypothesisMs ?? shown.drivingMs) : shown.drivingMs
     const mapDayUtc = placeDay(shown.laterWeekStartUtc, shown.periodStartUtc, shown.periodEndUtc, days)
     if (mapDayUtc == null) continue
     findings.push({
@@ -733,16 +834,20 @@ function collectFortnight(
       startUtc: shown.periodStartUtc,
       endUtc: shown.periodEndUtc,
       mapDayUtc,
-      actualText: durationText(shown.drivingMs),
+      actualText: durationText(shownMs),
       limitText: '90 h',
       deltaText: dependsOnOut ? 'Závisí na oprávněnosti OUT' : overText(shown.drivingMs, FORTNIGHT_DRIVING_LIMIT_MS),
-      explanation: verification?.explanation ?? 'Součet řízení ve dvou sousedních týdnech od pondělí 00:00 UTC je nad 90 hodin.',
+      explanation: joinOutExplanation(
+        verification?.explanation ?? 'Součet řízení ve dvou sousedních týdnech od pondělí 00:00 UTC je nad 90 hodin.',
+        compared,
+      ),
       technicalText: authorizedRows == null
         ? `status ${shown.status}`
-        : `status ${shown.status}, out ${dependsOnOut ? 'needs_verification' : 'agreed'}`,
-      meterPercent: meter(shown.drivingMs, FORTNIGHT_DRIVING_LIMIT_MS),
+        : `status ${shown.status}, out ${dependsOnOut ? 'needs_verification' : 'agreed'}${compared?.incomplete ? ', incomplete' : ''}`,
+      meterPercent: meter(shownMs, FORTNIGHT_DRIVING_LIMIT_MS),
       meterOver: !dependsOnOut,
       reviewStatus: verification?.reviewStatus,
+      outLines: compared?.lines,
     })
   }
 }

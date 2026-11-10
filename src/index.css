@@ -718,6 +718,20 @@ body {
   align-items: center;
 }
 
+.compliance-status {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.compliance-status-violation { color: #b91c1c; }
+.compliance-status-verify { color: #c2410c; }
+
+.compliance-out-line {
+  margin: 2px 0;
+}
+
 .compliance-card h3,
 .compliance-watch h2,
 .compliance-watch-card h3 {
