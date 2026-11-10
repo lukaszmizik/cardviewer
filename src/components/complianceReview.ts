@@ -2,13 +2,13 @@ import { analyzeDriverActivities } from '../analysis/analyzeDriverActivities.ts'
 import { assessConsecutiveWeeks, type ConsecutiveWeekPeriod } from '../analysis/consecutiveWeeks.ts'
 import { assessDailyDrivingTime, assessWeeklyDrivingExtensions, utcWeekStart, WEEKLY_EXTENSION_LIMIT, type DailyDrivingPeriod } from '../analysis/dailyDrivingTime.ts'
 import { buildDailyRestChain, type DailyChainNode } from '../analysis/dailyRestChain.ts'
-import { buildGn7ControlPeriods } from '../analysis/gn7ControlPeriods.ts'
+import { buildGn7ControlPeriods, type Gn7ControlPeriod } from '../analysis/gn7ControlPeriods.ts'
 import { buildGn7DiagnosticFeed } from '../analysis/gn7DiagnosticFeed.ts'
 import { findFerryRestCandidates, type FerryRestCandidate } from '../analysis/ferryRestCandidates.ts'
 import { buildDiagnosticExport, deriveDiagnosticCases, derivePeriodDiagnostics } from '../analysis/diagnosticCases.ts'
 import { assessDrivingBreaks, DRIVING_LIMIT_MS, type DrivingBreakPeriod } from '../analysis/drivingBreaks.ts'
 import { assessAdjacentFortnightDrivingTimes, assessFortnightDrivingTime, FORTNIGHT_DRIVING_LIMIT_MS } from '../analysis/fortnightDrivingTime.ts'
-import { classifyRestCandidates } from '../analysis/restCandidates.ts'
+import { classifyRestCandidates, type RestCandidate } from '../analysis/restCandidates.ts'
 import { findRestIntervals } from '../analysis/restIntervals.ts'
 import { assessWeeklyDrivingTime, WEEKLY_DRIVING_LIMIT_MS, type WeeklyDrivingStatus } from '../analysis/weeklyDrivingTime.ts'
 import { classifyWeeklyRestCandidates } from '../analysis/weeklyRest.ts'
@@ -19,6 +19,7 @@ import type { Activity, DriverCardData, SpecificConditionEntry } from '../types/
 
 const HOUR_MS = 60 * 60 * 1000
 const WEEK_MS = 7 * 24 * HOUR_MS
+const NINE_HOURS = 9 * HOUR_MS
 const ELEVEN_HOURS = 11 * HOUR_MS
 const TEN_HOURS = 10 * HOUR_MS
 const PERIOD_DAYS = 57
@@ -146,7 +147,7 @@ export function buildComplianceReview(input: {
   collectFortnight(activities, days, periodStartUtc, periodEndUtc, findings)
   collectExtensions(prepared.daily, activities, days, periodStartUtc, periodEndUtc, findings)
   const gn7Starts = collectGn7DailyRests(
-    prepared.anchorUtc,
+    resolveGn7Anchor(prepared.anchorUtc, prepared.candidates, prepared.unknownIntervals),
     activities,
     input.specificConditions ?? [],
     prepared.recordEndUtc,
@@ -652,7 +653,33 @@ function collectFortnight(
 
 const NINE_MINUTES = 9 * 60
 const GN7_NOTE = 'Použita metodika GN7 pro vyhodnocení nedostatečného denního odpočinku.'
-const FERRY_NOTE = 'Možná výjimka podle čl. 9 odst. 1. Splnění všech podmínek nelze ověřit pouze z dat karty.'
+const FERRY_NOTE = 'Možná výjimka podle čl. 9 odst. 1 může změnit kvalifikaci odpočinku v tomto období. Splnění výjimky záznam nepotvrzuje.'
+const FERRY_ANCHOR_NOTE = 'Předchozí trajektový kandidát může posunout kotvu. Alternativní řetězec GN7 se nepřepočítává, proto toto období není potvrzený přestupek.'
+
+type Gn7Anchor = {
+  anchorUtc: number
+  /** Souvislých 9 h bez prokázané přípustnosti zkrácení. Navazující období se nepotvrzují, dokud řetězec nenarazí na běžný odpočinek. */
+  openingReducedUnverified: boolean
+}
+
+/**
+ * Kotva jen pro GN7. Řetězec denních oken dál používá výhradně ustavených 11 h.
+ * Zkrácených 9 h se použije, jen když 11 h v datech není. Přípustnost zkrácení se nepočítá.
+ * Dělený 3+9 bez předchozí prokázané kotvy nelze odlišit od zkráceného 9 h, proto se jako potvrzená kotva nebere.
+ */
+function resolveGn7Anchor(
+  regularAnchorUtc: number | null,
+  candidates: readonly RestCandidate[],
+  unknownIntervals: readonly { startUtc: number; endUtc: number }[],
+): Gn7Anchor | null {
+  if (regularAnchorUtc != null) return { anchorUtc: regularAnchorUtc, openingReducedUnverified: false }
+  const reduced = candidates
+    .filter((candidate) => candidate.established && candidate.durationMs >= NINE_HOURS && candidate.durationMs < ELEVEN_HOURS)
+    .filter((candidate) => !unknownIntervals.some((interval) => overlaps(candidate.startUtc, candidate.endUtc, interval.startUtc, interval.endUtc)))
+    .sort((left, right) => left.endUtc - right.endUtc)[0]
+  if (reduced == null) return null
+  return { anchorUtc: reduced.endUtc, openingReducedUnverified: true }
+}
 
 function ferryMayRemove(candidate: FerryRestCandidate, startUtc: number, endUtc: number): boolean {
   if (candidate.legalApplicability !== 'conditional' || !candidate.timeConditionsMet) return false
@@ -660,8 +687,26 @@ function ferryMayRemove(candidate: FerryRestCandidate, startUtc: number, endUtc:
   return overlaps(candidate.startUtc, candidate.endUtc, startUtc, endUtc)
 }
 
+/** Trajekt může změnit další kotvu jen tehdy, když jeho konec není už zvolený konec kvalifikovaného odpočinku. */
+function ferryMayMoveNextAnchor(period: Gn7ControlPeriod, hits: readonly FerryRestCandidate[]): boolean {
+  const chosen = period.nextAnchorUtc
+  const alreadyQualifying = period.status === 'qualifying_rest' || period.status === 'crossing_rest_becomes_qualifying'
+  return hits.some((candidate) => {
+    if (chosen != null && candidate.endUtc === chosen) return false
+    if (alreadyQualifying && chosen != null && candidate.endUtc >= chosen) return false
+    return true
+  })
+}
+
+function firmRegularAnchor(period: Gn7ControlPeriod): boolean {
+  if (!period.confirmedForEnforcement || period.nextAnchorUtc == null) return false
+  if (period.reducedRestPermitted !== 'not_required') return false
+  const variant = period.qualifying[0]?.variant
+  return variant === 'continuous_regular' || variant === 'split_regular'
+}
+
 function collectGn7DailyRests(
-  anchorUtc: number | null,
+  anchor: Gn7Anchor | null,
   activities: readonly Activity[],
   specificConditions: readonly SpecificConditionEntry[],
   recordEndUtc: number | null,
@@ -672,62 +717,84 @@ function collectGn7DailyRests(
   findings: ComplianceFinding[],
 ): Set<number> {
   const covered = new Set<number>()
-  if (anchorUtc == null) return covered
-  const input = { anchorUtc, activities, recordEndUtc }
+  if (anchor == null) return covered
+  const input = { anchorUtc: anchor.anchorUtc, activities, recordEndUtc }
   const periods = buildGn7ControlPeriods(input)
   const feed = buildGn7DiagnosticFeed(input)
   const ferries = findFerryRestCandidates({ activities, specificConditions })
   const emitted: Array<{ startUtc: number; endUtc: number }> = []
-  let laterAnchorUncertain = false
+  let ferryAnchorOpen = false
+  let reductionCause: 'opening' | 'chain' | null = anchor.openingReducedUnverified ? 'opening' : null
 
   for (let index = 0; index < periods.length; index += 1) {
     const period = periods[index]!
     const diagnostic = feed.periods[index]
     if (diagnostic == null) continue
     covered.add(period.startUtc)
-    if (period.status === 'qualifying_rest' || period.status === 'crossing_rest_becomes_qualifying' || period.status === 'history_incomplete') continue
-    if (!overlaps(period.startUtc, period.endUtc, periodStartUtc, periodEndUtc)) continue
-    if (emitted.some((item) => overlaps(item.startUtc, item.endUtc, period.startUtc, period.endUtc))) continue
+    const ownHits = ferries.filter((candidate) => ferryMayRemove(candidate, period.startUtc, period.endUtc))
+    const ownFerry = ownHits.length > 0
+    const inheritedFerry = ferryAnchorOpen
+    const causeNow = reductionCause
+    const previous = index > 0 ? periods[index - 1]! : null
+    const substitute = previous?.status === 'consecutive_reference' || previous?.status === 'crossing_rest_remains_insufficient'
+    const skipKind = period.status === 'qualifying_rest' || period.status === 'crossing_rest_becomes_qualifying' || period.status === 'history_incomplete'
+    const inView = overlaps(period.startUtc, period.endUtc, periodStartUtc, periodEndUtc)
+    const duplicate = emitted.some((item) => overlaps(item.startUtc, item.endUtc, period.startUtc, period.endUtc))
 
-    const ferry = ferries.find((candidate) => ferryMayRemove(candidate, period.startUtc, period.endUtc))
-    if (ferry != null) laterAnchorUncertain = true
-    const longestInside = period.rests
-      .filter((rest) => rest.established)
-      .reduce((best, rest) => Math.max(best, rest.minutesInsideWindow), 0)
-    const provenShort = diagnostic.usableForGn7Diagnostics
-      && diagnostic.confirmation === 'confirmed'
-      && !diagnostic.analysisTruncated
-      && !laterAnchorUncertain
-      && longestInside < NINE_MINUTES
-      && (period.status === 'consecutive_reference' || period.status === 'crossing_rest_remains_insufficient')
-    const mapDayUtc = placeDay(period.startUtc, period.startUtc, period.endUtc, days)
-    if (mapDayUtc == null) continue
-    emitted.push({ startUtc: period.startUtc, endUtc: period.endUtc })
-    const reasons = [
-      GN7_NOTE,
-      ferry != null ? FERRY_NOTE : '',
-      diagnostic.limitation ?? '',
-      laterAnchorUncertain && ferry == null ? 'Předchozí trajektová výjimka může posunout kotvu, další okno není jediné jisté.' : '',
-    ].filter((part) => part !== '')
-    findings.push({
-      id: `gn7-daily:${period.startUtc}`,
-      severity: provenShort ? 'violation' : 'uncertain',
-      title: provenShort ? 'Nedostatečný denní odpočinek' : 'Denní odpočinek vyžaduje ověření',
-      intervalText: formatRange(period.startUtc, period.endUtc, clockMode),
-      startUtc: period.startUtc,
-      endUtc: period.endUtc,
-      mapDayUtc,
-      actualText: longestInside === 0 ? 'Bez prokázaného REST v okně' : `Nejdelší REST v okně ${longestInside} min`,
-      limitText: period.windowMinutes === 30 * 60 ? '9 h v okně 30 h' : '11 h nebo 9 h v okně 24 h',
-      deltaText: provenShort ? 'Pod oběma délkami denního odpočinku' : 'Není prokázané porušení',
-      explanation: reasons.join(' '),
-      technicalText: `methodology gn7, status ${period.status}, review ${provenShort ? 'proven' : 'needs_verification'}, ferry ${ferry != null ? 'possible' : 'none'}`,
-      meterPercent: null,
-      meterOver: provenShort,
-      methodology: 'gn7',
-      ferryException: ferry != null ? 'possible' : 'none',
-      reviewStatus: provenShort ? 'proven' : 'needs_verification',
-    })
+    if (!skipKind && inView && !duplicate) {
+      const longestInside = period.rests
+        .filter((rest) => rest.established)
+        .reduce((best, rest) => Math.max(best, rest.minutesInsideWindow), 0)
+      const shortRest = longestInside < NINE_MINUTES
+        && (period.status === 'consecutive_reference' || period.status === 'crossing_rest_remains_insufficient')
+      const crewConditional = period.crewBasis === 'conditional'
+      const blocked = causeNow != null
+        || ownFerry
+        || inheritedFerry
+        || crewConditional
+        || period.analysisTruncated
+        || period.dataCompleteness !== 'complete'
+        || diagnostic.confirmation !== 'confirmed'
+        || !diagnostic.usableForGn7Diagnostics
+      const provenShort = !blocked && shortRest
+      const mapDayUtc = placeDay(period.startUtc, period.startUtc, period.endUtc, days)
+      if (mapDayUtc != null) {
+        emitted.push({ startUtc: period.startUtc, endUtc: period.endUtc })
+        const reasons = [GN7_NOTE]
+        if (substitute) reasons.push('Toto je náhradní referenční období GN7: předchozí okno nemělo kvalifikovaný odpočinek, takže toto období navazuje na hranici okna.')
+        if (shortRest) reasons.push('V tomto referenčním období není odpočinek, který by dosáhl 9 h ani 11 h.')
+        if (causeNow === 'opening') reasons.push('Výchozí kotva je zkrácený denní odpočinek a přípustnost zkrácení není z dat ověřená.')
+        if (causeNow === 'chain') reasons.push('Předchozí kotva vychází ze zkráceného odpočinku, jehož přípustnost není ověřená.')
+        if (crewConditional) reasons.push('Podmíněná osádka není potvrzená vícečlenná osádka.')
+        if (period.analysisTruncated) reasons.push('Výpočet GN7 je ořezaný a nepokrývá další dostupnou historii.')
+        if (period.dataCompleteness !== 'complete' && !crewConditional) reasons.push(period.assessmentBasis)
+        if (ownFerry) reasons.push(FERRY_NOTE)
+        if (inheritedFerry) reasons.push(FERRY_ANCHOR_NOTE)
+        findings.push({
+          id: `gn7-daily:${period.startUtc}`,
+          severity: provenShort ? 'violation' : 'uncertain',
+          title: provenShort ? 'Nedostatečný denní odpočinek' : 'Denní odpočinek vyžaduje ověření',
+          intervalText: formatRange(period.startUtc, period.endUtc, clockMode),
+          startUtc: period.startUtc,
+          endUtc: period.endUtc,
+          mapDayUtc,
+          actualText: longestInside === 0 ? 'Bez prokázaného REST v okně' : `Nejdelší REST v okně ${longestInside} min`,
+          limitText: period.windowMinutes === 30 * 60 ? '9 h v okně 30 h' : '11 h nebo 9 h v okně 24 h',
+          deltaText: provenShort ? 'Pod oběma délkami denního odpočinku' : 'Není prokázané porušení',
+          explanation: reasons.join(' '),
+          technicalText: `methodology gn7, status ${period.status}, review ${provenShort ? 'proven' : 'needs_verification'}, ferry ${ownFerry || inheritedFerry ? 'possible' : 'none'}, anchor ${causeNow ?? 'verified'}`,
+          meterPercent: null,
+          meterOver: provenShort,
+          methodology: 'gn7',
+          ferryException: ownFerry || inheritedFerry ? 'possible' : 'none',
+          reviewStatus: provenShort ? 'proven' : 'needs_verification',
+        })
+      }
+    }
+
+    if (ferryMayMoveNextAnchor(period, ownHits)) ferryAnchorOpen = true
+    if (firmRegularAnchor(period) && !ferryAnchorOpen) reductionCause = null
+    else if (period.reducedRestPermitted === 'not_assessed') reductionCause = 'chain'
   }
   return covered
 }

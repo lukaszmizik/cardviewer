@@ -56,6 +56,8 @@ test('8h odpočinek bez trajektu je prokázaný nedostatek podle GN7', () => {
   assert.equal(finding?.methodology, 'gn7')
   assert.equal(finding?.ferryException, 'none')
   assert.match(finding?.explanation ?? '', /metodika GN7/)
+  assert.match(finding?.explanation ?? '', /9 h ani 11 h/)
+  assert.doesNotMatch(finding?.explanation ?? '', /čl\. 9/)
   assert.equal(view.violationCount >= 1, true)
 })
 
@@ -152,6 +154,7 @@ test('podmíněná osádka není prokázané porušení', () => {
   const finding = view.findings.find((item) => item.methodology === 'gn7')
   assert.equal(finding?.severity, 'uncertain')
   assert.equal(finding?.reviewStatus, 'needs_verification')
+  assert.match(finding?.explanation ?? '', /Podmíněná osádka/)
   assert.equal(view.findings.some((item) => item.methodology === 'gn7' && item.severity === 'violation'), false)
 })
 
@@ -196,4 +199,121 @@ test('trajekt může změnit kotvu a nezávislá přestávka zůstane', () => {
   assert.equal(restBreak?.severity, 'violation')
   assert.equal(view.violationCount >= 1, true)
   assert.equal(view.findings.filter((item) => item.methodology === 'gn7' && item.severity === 'violation').length, 0)
+})
+
+test('trajektový kandidát mění kvalifikaci dřívějšího odpočinku a nepotvrdí ho', () => {
+  const findings = gn7([
+    act('r0', 'rest', 0, 11 * 60),
+    act('early', 'rest', 12 * 60, 17 * 60),
+    act('fw', 'work', 17 * 60, 17 * 60 + 30),
+    act('late', 'rest', 17 * 60 + 30, 23 * 60 + 30),
+    act('tail', 'driving', 23 * 60 + 31, 11 * 60 + 30 * 60),
+  ], [
+    { atUtc: T0 + 17 * 60 * MIN, kind: 'ferry' },
+    { atUtc: T0 + (17 * 60 + 30) * MIN, kind: 'ferry_end' },
+  ])
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0]!.severity, 'uncertain')
+  assert.equal(findings[0]!.reviewStatus, 'needs_verification')
+  assert.equal(findings[0]!.ferryException, 'possible')
+  assert.match(findings[0]!.explanation, /čl\. 9 odst\. 1/)
+})
+
+test('nejistota trajektu se přenáší jen na závislá následující období', () => {
+  const findings = gn7([
+    act('r0', 'rest', 0, 11 * 60),
+    act('early8', 'rest', 12 * 60, 20 * 60),
+    act('gap', 'work', 20 * 60, 35 * 60),
+    act('a', 'rest', 36 * 60, 41 * 60),
+    act('fw', 'work', 41 * 60, 41 * 60 + 30),
+    act('b', 'rest', 41 * 60 + 30, 47 * 60 + 30),
+    act('mid', 'driving', 47 * 60 + 31, 59 * 60),
+    act('late8', 'rest', 60 * 60, 68 * 60),
+    act('tail', 'work', 68 * 60, 84 * 60),
+  ], [
+    { atUtc: T0 + 41 * 60 * MIN, kind: 'ferry' },
+    { atUtc: T0 + (41 * 60 + 30) * MIN, kind: 'ferry_end' },
+  ])
+  const ordered = findings.slice().sort((left, right) => left.startUtc - right.startUtc)
+  assert.equal(ordered.length, 3)
+  assert.equal(ordered[0]!.reviewStatus, 'proven')
+  assert.equal(ordered[0]!.ferryException, 'none')
+  assert.equal(ordered[1]!.reviewStatus, 'needs_verification')
+  assert.equal(ordered[1]!.ferryException, 'possible')
+  assert.match(ordered[1]!.explanation, /čl\. 9 odst\. 1/)
+  assert.equal(ordered[2]!.reviewStatus, 'needs_verification')
+  assert.match(ordered[2]!.explanation, /posunout kotvu/)
+  assert.match(ordered[2]!.explanation, /náhradní referenční období/)
+})
+
+test('nezávislý přestupek v řízení zůstává potvrzený vedle nejistého denního odpočinku', () => {
+  const view = review([
+    act('r0', 'rest', 0, 11 * 60),
+    act('long', 'driving', 11 * 60, 17 * 60),
+    act('a', 'rest', 17 * 60, 22 * 60),
+    act('fw', 'work', 22 * 60, 22 * 60 + 30),
+    act('b', 'rest', 22 * 60 + 30, 28 * 60 + 30),
+    act('tail', 'driving', 28 * 60 + 31, 11 * 60 + 40 * 60),
+  ], [
+    { atUtc: T0 + 22 * 60 * MIN, kind: 'ferry' },
+    { atUtc: T0 + (22 * 60 + 30) * MIN, kind: 'ferry_end' },
+  ])
+  const daily = view.findings.filter((item) => item.methodology === 'gn7')
+  const restBreak = view.findings.find((item) => item.id.startsWith('break:'))
+  assert.equal(daily.every((item) => item.severity !== 'violation'), true)
+  assert.equal(restBreak?.severity, 'violation')
+})
+
+test('ořezané období GN7 není potvrzený přestupek a dřívější zůstává', () => {
+  const start = NOW - 50 * 24 * H
+  const findings = gn7([
+    {
+      id: 'r0',
+      kind: 'rest',
+      startUtc: start,
+      endUtc: start + 11 * H,
+      durationMinutes: 11 * 60,
+      slot: 1,
+    },
+    {
+      id: 'tail',
+      kind: 'work',
+      startUtc: start + 11 * H,
+      endUtc: start + 50 * 24 * H,
+      durationMinutes: (50 * 24 * 60) - (11 * 60),
+      slot: 1,
+    },
+  ])
+  const truncated = findings.filter((finding) => /ořezaný/.test(finding.explanation))
+  const proven = findings.filter((finding) => finding.reviewStatus === 'proven')
+  assert.equal(truncated.length, 1)
+  assert.equal(truncated[0]!.severity, 'uncertain')
+  assert.equal(truncated[0]!.reviewStatus, 'needs_verification')
+  assert.equal(proven.length > 0, true)
+  assert.equal(proven.some((finding) => /ořezaný/.test(finding.explanation)), false)
+})
+
+test('neověřený výchozí 9h odpočinek nepotvrdí navazující nedostatek', () => {
+  const findings = gn7([
+    act('r9', 'rest', 0, 9 * 60),
+    act('w', 'work', 9 * 60, 10 * 60),
+    act('r8', 'rest', 10 * 60, 18 * 60),
+    act('tail', 'driving', 18 * 60, 9 * 60 + 36 * 60),
+  ])
+  assert.equal(findings.length >= 1, true)
+  assert.equal(findings.some((finding) => finding.severity === 'violation'), false)
+  assert.match(findings.map((finding) => finding.explanation).join(' '), /přípustnost zkrácení/)
+})
+
+test('jednoznačný výchozí 11h odpočinek potvrdí navazující 8h bez trajektu', () => {
+  const findings = gn7([
+    act('r0', 'rest', 0, 11 * 60),
+    act('w', 'work', 11 * 60, 12 * 60),
+    act('r8', 'rest', 12 * 60, 20 * 60),
+    act('tail', 'driving', 20 * 60, 11 * 60 + 36 * 60),
+  ])
+  const finding = findings.find((item) => item.reviewStatus === 'proven')
+  assert.equal(finding?.severity, 'violation')
+  assert.doesNotMatch(finding?.explanation ?? '', /přípustnost zkrácení/)
+  assert.doesNotMatch(finding?.explanation ?? '', /čl\. 9/)
 })
