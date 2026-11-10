@@ -3,7 +3,7 @@
  * Každý den = řádek, hodiny 0–24, aktivity jako barevné segmenty.
  */
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react'
 import { useLanguage } from './translations'
 import type { DayData, ParsedActivity, ActivityType, CountryMarker } from './workWeekTxtParser'
 import {
@@ -69,6 +69,13 @@ import { DayGraphPan } from './components/DayGraphPan'
 import { GraphSwipeNav } from './components/GraphSwipeNav'
 import { CardCalendar } from './components/CardCalendar'
 import { googleMapsUrl } from './lib/mapsLink'
+import {
+  OUT_MODE_GRAPH_COLOR,
+  buildOutModeGraphModel,
+  formatOutModeTooltip,
+  latestActivityEndMs,
+  sliceOutRangeForDay,
+} from './lib/outModeGraph'
 import type { DriverCardData } from './types/tacho'
 
 function markerTimeMs(
@@ -77,6 +84,10 @@ function markerTimeMs(
 ): number {
   if (marker.recordedAtUtc != null) return marker.recordedAtUtc
   return parseClockDateTime(marker.timeStr, marker.dateStr, mode)
+}
+
+function isTimestampOnDay(ms: number, dayStartUtc: number, clockMode: ClockMode): boolean {
+  return ms >= dayStartUtc && ms < addDays(dayStartUtc, 1, clockMode)
 }
 
 function manualSegmentMs(
@@ -487,35 +498,6 @@ function getFerryTrainOnDay(events: FerryTrainEvent[], dayUtcMs: number, clockMo
   return events.filter((e) => e.minuteStartUtc >= dayUtcMs && e.minuteStartUtc < dayEndMs)
 }
 
-function getOutModeOnDay(events: OutModeEvent[], dayUtcMs: number, clockMode: ClockMode): OutModeEvent[] {
-  const dayEndMs = addDays(dayUtcMs, 1, clockMode)
-  return events.filter((e) => e.minuteStartUtc >= dayUtcMs && e.minuteStartUtc < dayEndMs)
-}
-
-/** Vrací období OUT (startMs, endMs) z párování activation–deactivation */
-function getOutModeRanges(events: OutModeEvent[]): Array<{ startMs: number; endMs: number }> {
-  const sorted = [...events].sort((a, b) => a.minuteStartUtc - b.minuteStartUtc)
-  const ranges: Array<{ startMs: number; endMs: number }> = []
-  let pendingStart: number | null = null
-  for (const e of sorted) {
-    if (e.type === 'activation') {
-      pendingStart = e.minuteStartUtc
-    } else if (e.type === 'deactivation' && pendingStart != null) {
-      ranges.push({ startMs: pendingStart, endMs: e.minuteStartUtc })
-      pendingStart = null
-    }
-  }
-  return ranges
-}
-
-/** Zda aktivita řízení (startMs, endMs) překrývá nějaké OUT období */
-function drivingOverlapsOutPeriod(actStartMs: number, actEndMs: number, outRanges: Array<{ startMs: number; endMs: number }>): boolean {
-  for (const r of outRanges) {
-    if (actStartMs < r.endMs && actEndMs > r.startMs) return true
-  }
-  return false
-}
-
 const LOAD_UNLOAD_SYMBOL_ID: Record<VehicleLoadUnloadEvent['type'], number> = {
   load: 52,
   unload: 53,
@@ -553,7 +535,7 @@ function WorkWeekGraphLegend({
   distanceRecord,
   clockMode,
 }: {
-  t: { workWeek: { legendRest45h: string; legendRest24h: string; manualEntryLabel: string } }
+  t: { workWeek: { legendRest45h: string; legendRest24h: string; manualEntryLabel: string; outModeLegendLine: string } }
   distanceRecord: DailyDistanceRecord | null
   clockMode: ClockMode
 }) {
@@ -601,6 +583,12 @@ function WorkWeekGraphLegend({
           <line x1={0} y1={5.5} x2={22} y2={5.5} stroke="#25D366" strokeWidth={8} strokeLinecap="butt" />
         </svg>
         <span className="work-week-graph-legend-label">režim osádky</span>
+      </span>
+      <span className="work-week-graph-legend-item">
+        <svg width={38} height={18} className="work-week-graph-legend-sample" viewBox="0 0 22 11" preserveAspectRatio="xMidYMid meet">
+          <line x1={0} y1={2} x2={22} y2={2} stroke={OUT_MODE_GRAPH_COLOR} strokeWidth={4} strokeLinecap="butt" />
+        </svg>
+        <span className="work-week-graph-legend-label">{t.workWeek.outModeLegendLine}</span>
       </span>
       <span className="work-week-graph-legend-item">
         <span className="work-week-graph-legend-trophy" aria-hidden="true">🏆</span>
@@ -724,10 +712,10 @@ function GraphBlock({
   const visibleFerryTrain = ferryTrainEvents.filter(
     (e) => e.type === 'activation' && e.minuteStartUtc >= visibleFirstDate && e.minuteStartUtc < visibleLastEnd
   )
-  const visibleOutMode = outModeEvents.filter(
-    (e) => e.minuteStartUtc >= visibleFirstDate && e.minuteStartUtc < visibleLastEnd
-  )
-  const outModeRanges = getOutModeRanges(outModeEvents)
+  const recordEndUtc =
+    latestActivityEndMs(days) ??
+    (outModeEvents.length > 0 ? Math.max(...outModeEvents.map((event) => event.minuteStartUtc)) : null)
+  const outModeModel = buildOutModeGraphModel(outModeEvents, recordEndUtc)
 
   const workShiftRanges = getWorkShiftRanges(countryMarkers, clockMode)
 
@@ -758,8 +746,8 @@ function GraphBlock({
           <pattern id={`crew-mode-hatch-${blockId}`} patternUnits="userSpaceOnUse" width={lx(6)} height={lx(6)}>
             <line x1="0" y1="0" x2={lx(6)} y2={lx(6)} stroke="rgba(100, 149, 237, 0.18)" strokeWidth={lx(1)} />
           </pattern>
-          <pattern id={`out-driving-hatch-${blockId}`} patternUnits="userSpaceOnUse" width={lx(4)} height={lx(4)}>
-            <line x1="0" y1="0" x2={lx(4)} y2={lx(4)} stroke="#c62828" strokeWidth={lx(2.2)} />
+          <pattern id={`out-mode-hatch-${blockId}`} patternUnits="userSpaceOnUse" width={lx(6)} height={lx(6)}>
+            <line x1="0" y1="0" x2={lx(6)} y2={lx(6)} stroke="rgba(249, 115, 22, 0.14)" strokeWidth={lx(1.2)} />
           </pattern>
           <clipPath id={`chart-clip-${blockId}`}>
             <rect x={labelW} y={marginTop} width={chartW} height={visibleDays.length * rowH} />
@@ -875,29 +863,17 @@ function GraphBlock({
                   const y = rowCenter + maxStrokeHalf - strokeW / 2
                   const bottomY = y + strokeW / 2 + MANUAL_UNDERLINE_WIDTH / 2
                   const crewY = bottomY + (act.isManualEntry ? MANUAL_UNDERLINE_WIDTH : 0)
-                  const isDrivingInOut =
-                    act.type === 'řízení' && drivingOverlapsOutPeriod(act.startMs, act.endMs, outModeRanges)
                   return (
                     <g key={i}>
-                      {isDrivingInOut ? (
-                        <rect
-                          x={x1}
-                          y={y - strokeW / 2}
-                          width={Math.max(1, x2 - x1)}
-                          height={strokeW}
-                          fill={`url(#out-driving-hatch-${blockId})`}
-                        />
-                      ) : (
-                        <line
-                          x1={x1}
-                          y1={y}
-                          x2={x2}
-                          y2={y}
-                          stroke={baseColor}
-                          strokeWidth={strokeW}
-                          strokeLinecap="butt"
-                        />
-                      )}
+                      <line
+                        x1={x1}
+                        y1={y}
+                        x2={x2}
+                        y2={y}
+                        stroke={baseColor}
+                        strokeWidth={strokeW}
+                        strokeLinecap="butt"
+                      />
                       {act.isManualEntry && (
                         <line x1={x1} y1={bottomY} x2={x2} y2={bottomY} stroke="#8b5cf6" strokeWidth={MANUAL_UNDERLINE_WIDTH} strokeLinecap="butt" />
                       )}
@@ -907,6 +883,184 @@ function GraphBlock({
                     </g>
                   )
                 })
+              })()}
+              {(() => {
+                const maxStrokeHalf = sx(8)
+                const rowCenter = yBase + rowH / 2
+                const activityTop = rowCenter - maxStrokeHalf
+                const outBarH = lx(4)
+                const outBarY = activityTop - outBarH - lx(1)
+                const rowTop = yBase + lx(3)
+                const rowBarH = rowH - lx(6)
+                const markerXs = getMarkersOnDay(visibleMarkers, day.dateUtc, clockMode).map((marker) =>
+                  xAt(dayStart, markerTimeMs(marker, clockMode)),
+                )
+                const flagBaseY = outBarY - lx(4)
+                const adjustFlagY = (x: number) => {
+                  let y = flagBaseY
+                  for (const mx of markerXs) {
+                    if (Math.abs(mx - x) < lx(26)) y -= lx(11)
+                  }
+                  return y
+                }
+                const nodes: ReactNode[] = []
+                outModeModel.ranges.forEach((range, ri) => {
+                  const slice = sliceOutRangeForDay(range, dayStart, clockMode)
+                  if (slice) {
+                    const span = clipChartX(xAt(dayStart, slice.startMs), xAt(dayStart, slice.endMs), chartW, labelW)
+                    if (span) {
+                      const sliceIncomplete = range.incomplete && slice.endMs >= range.endMs - 60_000
+                      const barTooltip = formatOutModeTooltip(
+                        slice.startMs,
+                        slice.endMs,
+                        clockMode,
+                        sliceIncomplete,
+                        range.uncertain,
+                      )
+                      if (isDayDetail) {
+                        nodes.push(
+                          <rect
+                            key={`out-hatch-${ri}`}
+                            x={span.x1}
+                            y={rowTop}
+                            width={Math.max(1, span.x2 - span.x1)}
+                            height={rowBarH}
+                            fill={`url(#out-mode-hatch-${blockId})`}
+                            pointerEvents="none"
+                          />,
+                        )
+                      }
+                      nodes.push(
+                        <g key={`out-bar-${ri}`}>
+                          <title>{barTooltip}</title>
+                          <rect
+                            x={span.x1}
+                            y={outBarY}
+                            width={Math.max(1, span.x2 - span.x1)}
+                            height={outBarH}
+                            fill={OUT_MODE_GRAPH_COLOR}
+                          />
+                        </g>,
+                      )
+                    }
+                  }
+                  const rangeTooltip = formatOutModeTooltip(
+                    range.startMs,
+                    range.endMs,
+                    clockMode,
+                    range.incomplete,
+                    range.uncertain,
+                  )
+                  if (isTimestampOnDay(range.startMs, dayStart, clockMode)) {
+                    const x = xAt(dayStart, range.startMs)
+                    if (x >= labelW && x <= chartRight) {
+                      const textY = adjustFlagY(x)
+                      nodes.push(
+                        <g key={`out-start-${ri}`}>
+                          <title>{rangeTooltip}</title>
+                          <text
+                            x={x}
+                            y={textY}
+                            dx={lx(4)}
+                            textAnchor="start"
+                            fill={OUT_MODE_GRAPH_COLOR}
+                            fontSize={lx(8)}
+                            fontFamily="sans-serif"
+                            fontWeight={600}
+                          >
+                            OUT ▶
+                          </text>
+                          <line
+                            x1={x}
+                            y1={textY + lx(2)}
+                            x2={x}
+                            y2={outBarY - lx(0.5)}
+                            stroke={OUT_MODE_GRAPH_COLOR}
+                            strokeWidth={lx(1)}
+                            strokeLinecap="round"
+                          />
+                          <circle cx={x} cy={outBarY - lx(0.5)} r={lx(2)} fill={OUT_MODE_GRAPH_COLOR} />
+                        </g>,
+                      )
+                    }
+                  }
+                  if (!range.incomplete && isTimestampOnDay(range.endMs, dayStart, clockMode)) {
+                    const x = xAt(dayStart, range.endMs)
+                    if (x >= labelW && x <= chartRight) {
+                      const textY = adjustFlagY(x)
+                      nodes.push(
+                        <g key={`out-end-${ri}`}>
+                          <title>{rangeTooltip}</title>
+                          <text
+                            x={x}
+                            y={textY}
+                            dx={-lx(4)}
+                            textAnchor="end"
+                            fill={OUT_MODE_GRAPH_COLOR}
+                            fontSize={lx(8)}
+                            fontFamily="sans-serif"
+                            fontWeight={600}
+                          >
+                            ◀ OUT
+                          </text>
+                          <line
+                            x1={x}
+                            y1={textY + lx(2)}
+                            x2={x}
+                            y2={outBarY - lx(0.5)}
+                            stroke={OUT_MODE_GRAPH_COLOR}
+                            strokeWidth={lx(1)}
+                            strokeLinecap="round"
+                          />
+                          <circle cx={x} cy={outBarY - lx(0.5)} r={lx(2)} fill={OUT_MODE_GRAPH_COLOR} />
+                        </g>,
+                      )
+                    }
+                  }
+                })
+                outModeModel.orphanEnds.forEach((orphan, oi) => {
+                  if (!isTimestampOnDay(orphan.endMs, dayStart, clockMode)) return
+                  const x = xAt(dayStart, orphan.endMs)
+                  if (x < labelW || x > chartRight) return
+                  const textY = adjustFlagY(x)
+                  const orphanTooltip = [
+                    'Režim OUT',
+                    '',
+                    `${formatClockDateTime(orphan.endMs, clockMode)} (konec bez známého začátku)`,
+                    '',
+                    'Tachograf byl v režimu mimo působnost.',
+                    '',
+                    'Oprávněnost použití OUT nelze ověřit jen z dat karty.',
+                  ].join('\n')
+                  nodes.push(
+                    <g key={`out-orphan-${oi}`}>
+                      <title>{orphanTooltip}</title>
+                      <text
+                        x={x}
+                        y={textY}
+                        dx={-lx(4)}
+                        textAnchor="end"
+                        fill={OUT_MODE_GRAPH_COLOR}
+                        fontSize={lx(8)}
+                        fontFamily="sans-serif"
+                        fontWeight={600}
+                      >
+                        ◀ OUT
+                      </text>
+                      <line
+                        x1={x}
+                        y1={textY + lx(2)}
+                        x2={x}
+                        y2={outBarY - lx(0.5)}
+                        stroke={OUT_MODE_GRAPH_COLOR}
+                        strokeWidth={lx(1)}
+                        strokeLinecap="round"
+                      />
+                      <circle cx={x} cy={outBarY - lx(0.5)} r={lx(2)} fill={OUT_MODE_GRAPH_COLOR} />
+                    </g>,
+                  )
+                })
+                return nodes
               })()}
               {getMarkersOnDay(visibleMarkers, day.dateUtc, clockMode).map((marker, i) => {
                 const ms = markerTimeMs(marker, clockMode)
@@ -948,24 +1102,6 @@ function GraphBlock({
                   <g key={`ferrytrain-${dayStart}-${ev.minuteStartUtc}-${i}`}>
                     <text x={x} y={yBase + lx(10)} textAnchor="middle" fill={ANCHOR_STROKE} fontSize={lx(12)} fontFamily="SymbolTacho1">{symbolChar}</text>
                     <line x1={x} y1={yBase + lx(14)} x2={x} y2={anchorBottom} stroke={ANCHOR_STROKE} strokeWidth={lx(1.5)} strokeLinecap="round" />
-                  </g>
-                )
-              })}
-              {getOutModeOnDay(visibleOutMode, day.dateUtc, clockMode).map((ev, i) => {
-                const x = xAt(dayStart, ev.minuteStartUtc)
-                if (x < labelW || x > chartRight) return null
-                const label = ev.type === 'activation' ? 'OUT►' : '◄OUT'
-                const dx = ev.type === 'activation' ? lx(3) : -lx(3)
-                const textAnchor = ev.type === 'activation' ? 'start' : 'end'
-                const rowCenter = yBase + rowH / 2
-                const anchorTop = rowCenter + lx(4)
-                const anchorBottom = yBase + rowH - lx(4)
-                const textY = ev.type === 'activation' ? anchorBottom + lx(4) : anchorBottom - lx(2)
-                return (
-                  <g key={`outmode-${dayStart}-${ev.minuteStartUtc}-${ev.type}-${i}`}>
-                    <line x1={x} y1={anchorTop} x2={x} y2={anchorBottom} stroke={ANCHOR_STROKE} strokeWidth={lx(1)} strokeLinecap="round" />
-                    <circle cx={x} cy={anchorBottom} r={lx(1.5)} fill={ANCHOR_COLOR} />
-                    <text x={x} y={textY} dx={dx} textAnchor={textAnchor} fill={ANCHOR_STROKE} fontSize={lx(7)} fontFamily="sans-serif" fontWeight={600}>{label}</text>
                   </g>
                 )
               })}
@@ -1294,6 +1430,13 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
 
   const focusedDayRef = useRef(focusedDayUtc)
   focusedDayRef.current = focusedDayUtc
+
+  useEffect(() => {
+    if (initialFocusedDayUtc == null) return
+    const day = dayStartMs(initialFocusedDayUtc, clockMode)
+    setFocusedDayUtc(day)
+    setDisplayWeekStartMs(weekStartMs(day, clockMode))
+  }, [initialFocusedDayUtc, clockMode])
 
   useEffect(() => {
     const current = focusedDayRef.current

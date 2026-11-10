@@ -1,12 +1,21 @@
 import { useMemo, useState } from 'react'
+import {
+  ComplianceCalendarPicker,
+  buildCalendarBuckets,
+  daySlotsBetween,
+  workPeriodCalendarMode,
+  type CalendarDay,
+} from '../components/complianceCalendar.tsx'
+import type { ComplianceSeverity } from '../components/complianceReview.ts'
 import { formatActivityDuration } from '../lib/activityPresentation'
-import { formatClockDateTime } from '../lib/clock'
+import { addDays, dayStartMs, formatClockDate, formatClockDateTime, type ClockMode } from '../lib/clock'
 import type { DriverCardData } from '../types/tacho'
 import {
   buildWorkPeriodOverview,
   type BoundaryReliability,
   type SeparatingRestPartView,
   type SeparatingRestSummary,
+  type WorkPeriodOverviewModel,
   type WorkPeriodPresentationItem,
 } from '../presentation/workPeriodOverview'
 import { useCardSession } from '../context/CardSessionContext'
@@ -201,16 +210,88 @@ function PeriodCard({ period }: { period: WorkPeriodPresentationItem }) {
   )
 }
 
+function periodOverlapsDay(period: WorkPeriodPresentationItem, dayStartUtc: number, clockMode: ClockMode): boolean {
+  const dayEndUtc = addDays(dayStartUtc, 1, clockMode)
+  return period.startUtc < dayEndUtc && period.endUtc > dayStartUtc
+}
+
+function periodDaySeverity(periods: readonly WorkPeriodPresentationItem[]): ComplianceSeverity {
+  if (periods.length === 0) return 'incomplete'
+  const preliminary = periods.some(
+    (period) =>
+      period.startBoundaryReliability === 'preliminary'
+      || period.endBoundaryReliability === 'preliminary'
+      || period.preliminaryBoundaryNotes.length > 0
+      || period.overlappingCoverageGaps.length > 0,
+  )
+  if (preliminary) return 'uncertain'
+  const open = periods.some(
+    (period) => period.startBoundaryReliability === 'open' || period.endBoundaryReliability === 'open',
+  )
+  if (open) return 'incomplete'
+  return 'clear'
+}
+
+function buildWorkPeriodCalendarDays(
+  overview: WorkPeriodOverviewModel,
+  clockMode: ClockMode,
+): CalendarDay[] {
+  const envelopeStart = overview.envelopeStartUtc
+  const envelopeEnd = overview.envelopeEndUtc
+  if (envelopeStart == null || envelopeEnd == null) return []
+  const rangeStart = dayStartMs(envelopeStart, clockMode)
+  const rangeEnd = dayStartMs(envelopeEnd, clockMode)
+  const slots = daySlotsBetween(rangeStart, rangeEnd, clockMode)
+  return slots.map((dayStartUtc) => {
+    const periods = overview.periods.filter((period) => periodOverlapsDay(period, dayStartUtc, clockMode))
+    const count = periods.length
+    return {
+      dayStartUtc,
+      label: formatClockDate(dayStartUtc, clockMode),
+      severity: periodDaySeverity(periods),
+      note: count === 0 ? 'Žádné pracovní období' : `${count} období`,
+    }
+  })
+}
+
 export function WorkPeriodsPage({ card }: WorkPeriodsPageProps) {
   const { getAnalytics, session } = useCardSession()
+  const [clockMode] = useState<ClockMode>('local')
+  const [selectedDay, setSelectedDay] = useState<number | null>(null)
+  const [openBucket, setOpenBucket] = useState<string | null>(null)
   const overview = useMemo(() => {
     if (!card) return null
     const settingsKey = session == null ? 'no-session' : `rev-${session.revision}`
     return getAnalytics('workPeriodOverview', settingsKey, () => buildWorkPeriodOverview(card))
   }, [card, getAnalytics, session])
 
+  const calendarDays = useMemo(
+    () => (overview == null ? [] : buildWorkPeriodCalendarDays(overview, clockMode)),
+    [overview, clockMode],
+  )
+  const mapMode = useMemo(() => workPeriodCalendarMode(calendarDays.length), [calendarDays.length])
+  const buckets = useMemo(
+    () => (mapMode === 'days' ? [] : buildCalendarBuckets(calendarDays, mapMode, clockMode)),
+    [calendarDays, mapMode, clockMode],
+  )
+  const activeBucket = buckets.find((item) => item.id === openBucket) ?? null
+  const visiblePeriods = useMemo(() => {
+    if (overview == null) return []
+    return overview.periods.filter((period) => {
+      if (selectedDay != null) return periodOverlapsDay(period, selectedDay, clockMode)
+      if (activeBucket != null) {
+        return activeBucket.dayStarts.some((dayStartUtc) => periodOverlapsDay(period, dayStartUtc, clockMode))
+      }
+      return true
+    })
+  }, [overview, selectedDay, activeBucket, clockMode])
+
   return (
     <section className="app-content-card work-periods-page">
+      <p className="work-period-debug-notice" role="note">
+        Upozornění: Tato stránka zobrazuje technická diagnostická data určená pro ladění aplikace.
+        Texty nejsou uživatelsky srozumitelné a neslouží jako právní hodnocení tachografu.
+      </p>
       <header className="dashboard-header">
         <h1>Přehled pracovních období</h1>
         <p>
@@ -229,12 +310,38 @@ export function WorkPeriodsPage({ card }: WorkPeriodsPageProps) {
       ) : (
         <>
           <p className="work-period-meta">
-            Obálka: {formatClockDateTime(overview.envelopeStartUtc!, 'local')} –{' '}
-            {formatClockDateTime(overview.envelopeEndUtc!, 'local')} · hranic z odpočinků:{' '}
+            Obálka: {formatClockDateTime(overview.envelopeStartUtc!, clockMode)} –{' '}
+            {formatClockDateTime(overview.envelopeEndUtc!, clockMode)} · hranic z odpočinků:{' '}
             {overview.restBoundaryCount} · dataComplete={String(overview.dataComplete)}
           </p>
+          <div className="compliance-review work-period-calendar">
+            <p className="compliance-note">
+              Vyberte měsíc nebo den v kalendáři. Zeleně jsou období s potvrzenými hranicemi, oranžově předběžná,
+              šedě dny bez období nebo s otevřenou obálkou.
+            </p>
+            <ComplianceCalendarPicker
+              days={calendarDays}
+              mapMode={mapMode}
+              buckets={buckets}
+              selectedDay={selectedDay}
+              openBucket={openBucket}
+              onSelectDay={setSelectedDay}
+              onSelectBucket={(id) => {
+                setOpenBucket(id)
+                setSelectedDay(null)
+              }}
+            />
+          </div>
+          {selectedDay != null || activeBucket != null ? (
+            <p className="compliance-note">
+              Zobrazeno {visiblePeriods.length} z {overview.periods.length} pracovních období.
+            </p>
+          ) : null}
+          {visiblePeriods.length === 0 ? (
+            <p className="compliance-empty">Ve zvoleném dni nebo měsíci není žádné pracovní období.</p>
+          ) : null}
           <ol className="work-period-list">
-            {overview.periods.map((period) => (
+            {visiblePeriods.map((period) => (
               <li key={period.id}>
                 <PeriodCard period={period} />
               </li>

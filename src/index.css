@@ -208,6 +208,20 @@ body {
   color: #334155;
 }
 
+.work-period-debug-notice {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid #c2410c;
+  background: #fff7ed;
+  color: #7c2d12;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.work-period-calendar {
+  margin: 1rem 0 1.25rem;
+}
+
 .work-periods-page .work-period-meta {
   margin: 1rem 0 1.5rem;
   color: #64748b;

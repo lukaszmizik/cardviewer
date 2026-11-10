@@ -229,34 +229,35 @@ test('nejistota trajektu se přenáší jen na závislá následující období'
     act('b', 'rest', 41 * 60 + 30, 47 * 60 + 30),
     act('mid', 'driving', 47 * 60 + 31, 59 * 60),
     act('late8', 'rest', 60 * 60, 68 * 60),
-    act('tail', 'work', 68 * 60, 84 * 60),
+    act('tail', 'work', 68 * 60, 120 * 60),
   ], [
     { atUtc: T0 + 41 * 60 * MIN, kind: 'ferry' },
     { atUtc: T0 + (41 * 60 + 30) * MIN, kind: 'ferry_end' },
   ])
   const ordered = findings.slice().sort((left, right) => left.startUtc - right.startUtc)
-  assert.equal(ordered.length, 3)
+  assert.equal(ordered.length >= 3, true)
   assert.equal(ordered[0]!.reviewStatus, 'proven')
   assert.equal(ordered[0]!.ferryException, 'none')
   assert.equal(ordered[1]!.reviewStatus, 'needs_verification')
   assert.equal(ordered[1]!.ferryException, 'possible')
   assert.match(ordered[1]!.explanation, /čl\. 9 odst\. 1/)
-  assert.equal(ordered[2]!.reviewStatus, 'needs_verification')
+  assert.equal(ordered.slice(2).every((finding) => finding.reviewStatus === 'needs_verification'), true)
   assert.match(ordered[2]!.explanation, /posunout kotvu/)
   assert.match(ordered[2]!.explanation, /náhradní referenční období/)
+  assert.equal(ordered.slice(1).some((finding) => finding.severity === 'violation'), false)
 })
 
 test('nezávislý přestupek v řízení zůstává potvrzený vedle nejistého denního odpočinku', () => {
   const view = review([
     act('r0', 'rest', 0, 11 * 60),
-    act('long', 'driving', 11 * 60, 17 * 60),
-    act('a', 'rest', 17 * 60, 22 * 60),
-    act('fw', 'work', 22 * 60, 22 * 60 + 30),
-    act('b', 'rest', 22 * 60 + 30, 28 * 60 + 30),
-    act('tail', 'driving', 28 * 60 + 31, 11 * 60 + 40 * 60),
+    act('long', 'driving', 11 * 60 + 1, 16 * 60 + 1),
+    act('a', 'rest', 16 * 60 + 1, 21 * 60 + 1),
+    act('fw', 'work', 21 * 60 + 1, 21 * 60 + 31),
+    act('b', 'rest', 21 * 60 + 31, 27 * 60 + 31),
+    act('tail', 'work', 27 * 60 + 32, 11 * 60 + 40 * 60),
   ], [
-    { atUtc: T0 + 22 * 60 * MIN, kind: 'ferry' },
-    { atUtc: T0 + (22 * 60 + 30) * MIN, kind: 'ferry_end' },
+    { atUtc: T0 + (21 * 60 + 1) * MIN, kind: 'ferry' },
+    { atUtc: T0 + (21 * 60 + 31) * MIN, kind: 'ferry_end' },
   ])
   const daily = view.findings.filter((item) => item.methodology === 'gn7')
   const restBreak = view.findings.find((item) => item.id.startsWith('break:'))

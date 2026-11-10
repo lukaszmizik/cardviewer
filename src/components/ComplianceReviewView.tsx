@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
+import { ComplianceCalendarPicker, buildCalendarBuckets } from './complianceCalendar.tsx'
 import { DiagnosticReview } from './DiagnosticReview.tsx'
-import { buildComplianceDiagnostic, buildComplianceReview, type ComplianceFinding, type CompliancePeriodMode, type CompliancePeriodRequest, type ComplianceSeverity } from './complianceReview.ts'
+import { buildComplianceDiagnostic, buildComplianceReview, type ComplianceFinding, type CompliancePeriodMode, type CompliancePeriodRequest } from './complianceReview.ts'
 import type { ClockMode } from '../lib/clock.ts'
 import type { Activity, DriverCardData } from '../types/tacho.ts'
 import { useCardSession } from '../context/CardSessionContext.tsx'
@@ -47,11 +48,15 @@ export function ComplianceReviewView({
       }),
     )
   }, [activities, nowUtc, clockMode, period, getAnalytics, session])
-  const bucket = review.buckets.find((item) => item.id === openBucket) ?? null
+  const calendarBuckets = useMemo(
+    () => (review.mapMode === 'days' ? [] : buildCalendarBuckets(review.days, review.mapMode, clockMode)),
+    [review.days, review.mapMode, clockMode],
+  )
   const visible = review.findings.filter((finding) => {
     if (filter === 'violation' && finding.severity !== 'violation') return false
     if (filter === 'uncertain' && finding.severity !== 'uncertain') return false
     if (selectedDay != null && finding.mapDayUtc !== selectedDay) return false
+    const bucket = calendarBuckets.find((item) => item.id === openBucket) ?? null
     if (selectedDay == null && bucket != null && !bucket.dayStarts.includes(finding.mapDayUtc)) return false
     return true
   })
@@ -122,35 +127,18 @@ export function ComplianceReviewView({
           ))}
         </details>
       ) : null}
-      {review.mapMode === 'days' ? (
-        <DayMap days={review.days} selectedDay={selectedDay} onSelect={setSelectedDay} />
-      ) : (
-        <div className="compliance-map compliance-map-buckets" role="list" aria-label={review.mapMode === 'weeks' ? 'Mapa týdnů' : 'Mapa měsíců'}>
-          {review.buckets.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="listitem"
-              className={`compliance-day compliance-bucket compliance-day-${item.severity}${openBucket === item.id ? ' is-selected' : ''}`}
-              aria-pressed={openBucket === item.id}
-              title={`${item.label}: ${severityLabel(item.severity)}`}
-              onClick={() => {
-                setOpenBucket((current) => (current === item.id ? null : item.id))
-                setSelectedDay(null)
-              }}
-            >
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </div>
-      )}
-      {bucket != null ? (
-        <DayMap
-          days={review.days.filter((day) => bucket.dayStarts.includes(day.dayStartUtc))}
-          selectedDay={selectedDay}
-          onSelect={setSelectedDay}
-        />
-      ) : null}
+      <ComplianceCalendarPicker
+        days={review.days}
+        mapMode={review.mapMode}
+        buckets={calendarBuckets.length > 0 ? calendarBuckets : review.buckets}
+        selectedDay={selectedDay}
+        openBucket={openBucket}
+        onSelectDay={setSelectedDay}
+        onSelectBucket={(id) => {
+          setOpenBucket(id)
+          setSelectedDay(null)
+        }}
+      />
       <div className="compliance-filters" role="tablist" aria-label="Filtr zjištění">
         {FILTERS.map((item) => (
           <button
@@ -244,34 +232,6 @@ function dateInputUtc(value: string, clockMode: ClockMode): number | null {
   return new Date(year, month - 1, day).getTime()
 }
 
-function DayMap({
-  days,
-  selectedDay,
-  onSelect,
-}: {
-  days: { dayStartUtc: number; label: string; severity: ComplianceSeverity; note: string | null }[]
-  selectedDay: number | null
-  onSelect: (dayStartUtc: number | null) => void
-}) {
-  return (
-    <div className="compliance-map" role="list" aria-label="Mapa dnů">
-      {days.map((day) => (
-        <button
-          key={day.dayStartUtc}
-          type="button"
-          role="listitem"
-          className={`compliance-day compliance-day-${day.severity}${selectedDay === day.dayStartUtc ? ' is-selected' : ''}`}
-          aria-pressed={selectedDay === day.dayStartUtc}
-          title={`${day.label}: ${severityLabel(day.severity)}${day.note == null ? '' : `. ${day.note}`}`}
-          onClick={() => onSelect(selectedDay === day.dayStartUtc ? null : day.dayStartUtc)}
-        >
-          <span>{day.label.slice(0, 2)}</span>
-        </button>
-      ))}
-    </div>
-  )
-}
-
 function diagnosticCard(activities: readonly Activity[]): DriverCardData {
   return {
     cardNumber: '',
@@ -348,9 +308,3 @@ function ConfirmedMark() {
   )
 }
 
-function severityLabel(severity: ComplianceSeverity): string {
-  if (severity === 'violation') return 'prokázané porušení'
-  if (severity === 'uncertain') return 'nejistota'
-  if (severity === 'incomplete') return 'neúplné nebo neuzavřené'
-  return 'vyhodnoceno bez porušení'
-}

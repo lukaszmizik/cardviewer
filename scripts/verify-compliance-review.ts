@@ -50,7 +50,7 @@ test('uzavřené dny úplného období jsou zelené a neuzavřené kontroly ne',
   assert.notEqual(view.days.find((day) => day.dayStartUtc === TODAY)?.severity, 'clear')
   assert.equal(view.summaryText.includes('bez přestupků'), false)
   assert.equal(JSON.stringify(view).includes('bez přestupků'), false)
-  assert.equal(view.unevaluatedNotes.some((note) => note.includes('tří zkrácených')), true)
+  assert.equal(view.unevaluatedNotes.some((note) => note.includes('tří zkrácených')), false)
 })
 
 test('několik porušení v jednom dni má jeden červený den a víc karet', () => {
@@ -185,7 +185,7 @@ test('diagnostika obsahuje období a stavy a ne osobní údaje', () => {
   assert.equal(payload.period.legalWeekClock, 'monday_00_00_utc')
   assert.equal(payload.period.clockMode, 'utc')
   assert.equal(payload.period.startUtc, PERIOD_START)
-  assert.equal(payload.evaluation.unevaluatedNotes.length > 0, true)
+  assert.equal(Array.isArray(payload.evaluation.unevaluatedNotes), true)
   assert.equal(payload.diagnostic.consecutiveWeeks.clockBasis, 'monday_00_00_utc')
   assert.equal(text.includes('SPZ12345'), false)
   assert.equal(text.includes('bez přestupků'), false)

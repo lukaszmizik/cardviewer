@@ -35,6 +35,7 @@ export type WorkWeekTranslations = {
   deactivation: string
   outModeStartMark: string
   outModeEndMark: string
+  outModeLegendLine: string
   legendRest45h: string
   legendRest24h: string
   shiftSumLabel: string
@@ -107,6 +108,7 @@ export const cs: ViewerTranslations = {
     deactivation: 'deaktivace',
     outModeStartMark: 'out začátek',
     outModeEndMark: 'out konec',
+    outModeLegendLine: 'Oranžová linka – režim OUT',
     legendRest45h: '≥ 45h',
     legendRest24h: '24h - 44h 59m',
     shiftSumLabel: 'Součet aktivit v probíhající směně:',
