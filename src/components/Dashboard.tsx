@@ -8,6 +8,8 @@ import { downloadDriverCard } from '../lib/cardReader/tachographDownload'
 import { dddFileName, saveDownloadedDdd } from '../lib/saveDownloadedDdd'
 import { mapDddParserJson } from '../utils/dddMapper'
 import { parseDddBinary } from '../utils/dddParser'
+import { fingerprintBytes } from '../lib/cardFingerprint'
+import { findSessionByFingerprint } from '../lib/cardSessionStore'
 import { FileUploader } from './FileUploader'
 
 type DashboardProps = {
@@ -16,7 +18,7 @@ type DashboardProps = {
   onDataLoaded: (
     parsedJson: DriverCardData,
     fileName: string,
-    raw: { bytes: Uint8Array; missingFiles: string[] },
+    raw: { bytes: Uint8Array; missingFiles: string[]; parserJson?: unknown },
     epoch: number,
   ) => void
   loadEpoch: () => number
@@ -67,14 +69,25 @@ export function Dashboard({
         setUsbProgress({ current: info.current, total: Math.max(info.total, 1) })
       }, missingFiles)
       validateCardBytes(bytes)
+      const bytesFingerprint = fingerprintBytes(bytes)
+      const existing = findSessionByFingerprint(bytesFingerprint)
+      if (existing != null) {
+        if (epoch !== loadEpoch()) return
+        const fileName = dddFileName(existing.card.cardNumber)
+        onDataLoaded(existing.card, fileName, { bytes, missingFiles, parserJson: existing.parserJson }, epoch)
+        setUsbDialogOpen(false)
+        setUsbStatus(null)
+        return
+      }
       setUsbStatus('Dekóduji výpis karty…')
       setUsbProgress((current) =>
         current ? { current: current.total, total: current.total } : { current: 1, total: 1 },
       )
-      const parsed = mapDddParserJson(await parseDddBinary(bytes))
+      const parserJson = await parseDddBinary(bytes)
+      const parsed = mapDddParserJson(parserJson)
       if (epoch !== loadEpoch()) return
       const fileName = dddFileName(parsed.cardNumber)
-      onDataLoaded(parsed, fileName, { bytes, missingFiles }, epoch)
+      onDataLoaded(parsed, fileName, { bytes, missingFiles, parserJson }, epoch)
       setUsbDialogOpen(false)
       setUsbStatus(null)
     } catch (cause) {
@@ -115,8 +128,8 @@ export function Dashboard({
         <div className="import-panel import-panel--upload">
           <FileUploader
             loadEpoch={loadEpoch}
-            onDataLoaded={(parsedJson, fileName, epoch, bytes) =>
-              onDataLoaded(parsedJson, fileName, { bytes, missingFiles: [] }, epoch)
+            onDataLoaded={(parsedJson, fileName, epoch, bytes, parserJson) =>
+              onDataLoaded(parsedJson, fileName, { bytes, missingFiles: [], parserJson }, epoch)
             }
           />
           <div className="dashboard-actions">

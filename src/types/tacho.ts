@@ -1,3 +1,5 @@
+import type { DailyRecordCoverageGap } from './coverage.ts'
+
 export type ActivityKind = 'driving' | 'work' | 'availability' | 'rest' | 'unknown'
 
 export interface Activity {
@@ -93,6 +95,45 @@ export interface LoadUnloadEntry {
   location: string | null
 }
 
+export type HolderStartOrigin = 'explicit_change' | 'manual_entry' | 'inferred' | 'unknown'
+
+export type HolderEndCause =
+  | 'next_change_same_position'
+  | 'next_change_other_position'
+  | 'day_end'
+  | 'unknown_gap'
+  | 'unresolved'
+
+export type HolderContinuity = 'recorded' | 'inferred' | 'unknown' | 'conflict'
+
+/** Diagnostická časová osa držitele — nemění význam Activity[]. */
+export interface HolderTimelineSegment {
+  startUtc: number
+  endUtc: number
+  kind: ActivityKind
+  position: 1 | 2
+  startOrigin: HolderStartOrigin
+  endCause: HolderEndCause
+  continuity: HolderContinuity
+  sourceActivityIds: string[]
+  sourceChangeCount: number
+}
+
+export type HolderTimelineMeta = {
+  /**
+   * Mapovač řadí změny slot 1 i 2 do jedné chronologie (laterChange).
+   * Normativní význam bitu driver v EU specifikaci není v tomto repozitáři ověřen.
+   */
+  slotChronologyAssumption: 'single_card_merged_timeline' | 'unresolved'
+}
+
+/** Odvozený přechod příznaku přítomnosti karty ze změnových záznamů DDD (ne fyzické vložení/vyjmutí). */
+export interface CardPresentEdge {
+  atUtc: number
+  present: boolean
+  slot: 1 | 2
+}
+
 export interface DriverCardData {
   cardNumber: string
   firstName: string
@@ -111,6 +152,11 @@ export interface DriverCardData {
   lastCardDownloadUtc?: number | null
   lastWithdrawalUtc: number | null
   activities: Activity[]
+  holderTimelineSegments?: HolderTimelineSegment[]
+  holderTimelineMeta?: HolderTimelineMeta
+  /** Kalendářní mezery mezi zdrojovými dny aktivit — ne Activity[]. */
+  dailyRecordCoverageGaps?: DailyRecordCoverageGap[]
+  cardPresentEdges?: CardPresentEdge[]
   locations: Location[]
   violations: ComplianceViolation[]
   vehicleUses?: VehicleUse[]

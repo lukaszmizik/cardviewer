@@ -3,6 +3,7 @@ import { DiagnosticReview } from './DiagnosticReview.tsx'
 import { buildComplianceDiagnostic, buildComplianceReview, type ComplianceFinding, type CompliancePeriodMode, type CompliancePeriodRequest, type ComplianceSeverity } from './complianceReview.ts'
 import type { ClockMode } from '../lib/clock.ts'
 import type { Activity, DriverCardData } from '../types/tacho.ts'
+import { useCardSession } from '../context/CardSessionContext.tsx'
 
 type Filter = 'all' | 'violation' | 'uncertain'
 
@@ -30,11 +31,22 @@ export function ComplianceReviewView({
   const [openBucket, setOpenBucket] = useState<string | null>(null)
   const [technical, setTechnical] = useState<{ key: string; text: string } | null>(null)
   const [copied, setCopied] = useState(false)
+  const { getAnalytics, session } = useCardSession()
   const period = useMemo(() => periodRequest(periodMode, fromDate, toDate, clockMode), [periodMode, fromDate, toDate, clockMode])
-  const review = useMemo(
-    () => buildComplianceReview({ activities, nowUtc, clockMode, period }),
-    [activities, nowUtc, clockMode, period],
-  )
+  const review = useMemo(() => {
+    const periodKey =
+      period.mode === 'custom' ? `custom:${period.fromUtc}:${period.toUtc}` : period.mode
+    const settingsKey = `${session?.revision ?? 'na'}:${clockMode}:${periodKey}:${nowUtc}:ferry${session?.card?.specificConditions?.length ?? 0}`
+    return getAnalytics('complianceReview', settingsKey, () =>
+      buildComplianceReview({
+        activities,
+        nowUtc,
+        clockMode,
+        period,
+        specificConditions: session?.card?.specificConditions,
+      }),
+    )
+  }, [activities, nowUtc, clockMode, period, getAnalytics, session])
   const bucket = review.buckets.find((item) => item.id === openBucket) ?? null
   const visible = review.findings.filter((finding) => {
     if (filter === 'violation' && finding.severity !== 'violation') return false
@@ -296,7 +308,9 @@ function FindingCard({
           <div style={{ width: `${finding.meterPercent}%` }} />
         </div>
       ) : null}
-      <p>{finding.deltaText}</p>
+      {finding.deltaText !== '' && finding.deltaText !== finding.explanation ? (
+        <p>{finding.deltaText}</p>
+      ) : null}
       <p>{finding.explanation}</p>
       {onOpenDay != null ? (
         <button type="button" className="compliance-open-day" onClick={() => onOpenDay(finding.mapDayUtc)}>

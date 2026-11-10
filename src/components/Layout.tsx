@@ -6,6 +6,7 @@ import { driverDisplayName } from '../lib/placeholderCard'
 const TABS: { id: AppTab; label: string }[] = [
   { id: 'dashboard', label: 'Import dat' },
   { id: 'graph', label: 'Graf aktivit' },
+  { id: 'work-periods', label: 'Přehled prací' },
   { id: 'compliance', label: 'Kontrola přestupků' },
 ]
 

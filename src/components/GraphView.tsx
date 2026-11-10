@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { DriverCardData } from '../types/tacho'
 import { WorkWeekGraphView } from '../WorkWeekGraphView'
 import { cardToGraph } from '../utils/cardToGraph'
 import type { ClockMode } from '../lib/clock'
 import { TACHO_SYMBOLS } from '../TachoTypes'
+import { useCardSession } from '../context/CardSessionContext'
 
 type GraphViewProps = {
   data: DriverCardData | null
@@ -13,6 +14,12 @@ type GraphViewProps = {
 
 export function GraphView({ data, onUploadCard, focusedDayUtc = null }: GraphViewProps) {
   const [clockMode, setClockMode] = useState<ClockMode>('local')
+  const { getAnalytics } = useCardSession()
+
+  const graph = useMemo(() => {
+    if (!data) return null
+    return getAnalytics('cardToGraph', clockMode, () => cardToGraph(data, clockMode))
+  }, [data, clockMode, getAnalytics])
 
   if (!data) {
     return (
@@ -26,7 +33,7 @@ export function GraphView({ data, onUploadCard, focusedDayUtc = null }: GraphVie
     )
   }
 
-  const graph = cardToGraph(data, clockMode)
+  if (graph == null) return null
 
   return (
     <div className="graph-view">

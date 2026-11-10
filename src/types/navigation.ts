@@ -1,1 +1,1 @@
-export type AppTab = 'dashboard' | 'graph' | 'compliance'
+export type AppTab = 'dashboard' | 'graph' | 'work-periods' | 'compliance'

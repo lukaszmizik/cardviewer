@@ -1,10 +1,17 @@
+import { deriveDailyRecordCoverageGaps } from '../analysis/dailyRecordCoverage.ts'
 import type {
   Activity,
   ActivityKind,
+  CardPresentEdge,
   ComplianceRule,
   CardIncident,
   ComplianceViolation,
   DriverCardData,
+  HolderContinuity,
+  HolderEndCause,
+  HolderStartOrigin,
+  HolderTimelineMeta,
+  HolderTimelineSegment,
   LoadUnloadEntry,
   LoadUnloadKind,
   Location,
@@ -442,6 +449,10 @@ type SlotChange = {
   order: number
 }
 
+type CollectedSlotChange = SlotChange & {
+  raw: unknown
+}
+
 function changeTime(item: SlotChange): number {
   return item.dayStart + item.minutes * 60_000
 }
@@ -483,29 +494,106 @@ function laterChange(collected: SlotChange[], index: number): SlotChange | undef
   return undefined
 }
 
-function mapActivities(card: DddParserCardJson): Activity[] {
+function slotFromChange(change: DddActivityChange): 1 | 2 {
+  return change.driver === false ? 2 : 1
+}
+
+function collectSlotChanges(card: DddParserCardJson): CollectedSlotChange[] {
   const days = mergeActivityDays(card)
-  const collected: SlotChange[] = []
+  const collected: CollectedSlotChange[] = []
   let order = 0
 
   for (const day of days) {
     const dayStart = parseUnixMs(day.activity_record_date)
     if (dayStart == null) continue
-    const changes = (day.activity_change_info ?? [])
-      .map((raw) => normalizeActivityChange(raw))
-      .filter((change): change is DddActivityChange => change != null)
-    for (const change of changes) {
+    for (const raw of day.activity_change_info ?? []) {
+      const change = normalizeActivityChange(raw)
+      if (change == null) continue
       collected.push({
         dayStart,
         minutes: Math.max(0, change.minutes ?? 0),
         change,
         order,
+        raw,
       })
       order += 1
     }
   }
 
   collected.sort((a, b) => changeTime(a) - changeTime(b) || a.order - b.order)
+  return collected
+}
+
+function cardPresentExplicit(raw: unknown, change: DddActivityChange): { known: boolean; present: boolean } {
+  if (typeof raw === 'string' || (Array.isArray(raw) && raw.length >= 2)) {
+    return { known: true, present: cardIsPresent(change) }
+  }
+  const rec = asRecord(raw)
+  if (rec) {
+    const known = 'card_present' in rec || 'cardPresent' in rec || 'CardPresent' in rec
+    if (known) return { known: true, present: cardIsPresent(change) }
+  }
+  return { known: false, present: cardIsPresent(change) }
+}
+
+function changesAreContinuous(prev: SlotChange, next: SlotChange, dayMs: number): boolean {
+  const prevUtc = changeTime(prev)
+  const nextUtc = changeTime(next)
+  if (nextUtc <= prevUtc) return false
+  return !spansUnrecordedDays(prev, next, dayMs)
+}
+
+function conflictingPresentTimes(items: readonly CollectedSlotChange[]): Set<number> {
+  const byTime = new Map<number, boolean>()
+  const conflicts = new Set<number>()
+  for (const item of items) {
+    const atUtc = changeTime(item)
+    const state = cardPresentExplicit(item.raw, item.change)
+    if (!state.known) continue
+    const prior = byTime.get(atUtc)
+    if (prior !== undefined && prior !== state.present) conflicts.add(atUtc)
+    else if (prior === undefined) byTime.set(atUtc, state.present)
+  }
+  return conflicts
+}
+
+/**
+ * Přechody card_present mezi navazujícími změnovými záznamy stejného slotu.
+ * Neodvozuje stav z Activity.kind === 'unknown'.
+ */
+function mapCardPresentEdges(card: DddParserCardJson): CardPresentEdge[] {
+  const collected = collectSlotChanges(card)
+  const dayMs = 24 * 60 * 60_000
+  const edges: CardPresentEdge[] = []
+
+  for (const slot of [1, 2] as const) {
+    const slotItems = collected.filter((item) => slotFromChange(item.change) === slot)
+    const conflictTimes = conflictingPresentTimes(slotItems)
+    let prev: { item: CollectedSlotChange; present: boolean } | null = null
+
+    for (const item of slotItems) {
+      const atUtc = changeTime(item)
+      if (conflictTimes.has(atUtc)) {
+        prev = null
+        continue
+      }
+      const state = cardPresentExplicit(item.raw, item.change)
+      if (!state.known) {
+        prev = null
+        continue
+      }
+      if (prev != null && changesAreContinuous(prev.item, item, dayMs) && state.present !== prev.present) {
+        edges.push({ atUtc, present: state.present, slot })
+      }
+      prev = { item, present: state.present }
+    }
+  }
+
+  return edges.sort((a, b) => a.atUtc - b.atUtc || a.slot - b.slot)
+}
+
+function mapActivities(card: DddParserCardJson): Activity[] {
+  const collected = collectSlotChanges(card)
 
   const dayMs = 24 * 60 * 60_000
   const activities: Activity[] = []
@@ -535,7 +623,7 @@ function mapActivities(card: DddParserCardJson): Activity[] {
 
     const inVehicle = cardIsPresent(current.change)
     const explicitManual = isExplicitManualEntry(current, sharesTimestamp ? nextInOrder : nextLater)
-    const slot: 1 | 2 = current.change.driver === false ? 2 : 1
+    const slot: 1 | 2 = slotFromChange(current.change)
 
     activities.push({
       id: `act-${i}`,
@@ -560,6 +648,347 @@ function mapActivities(card: DddParserCardJson): Activity[] {
   }
 
   return assignVehicleRegistrations(activities, card)
+}
+
+const TIMELINE_DAY_MS = 24 * 60 * 60_000
+
+function startOriginForChange(
+  explicitManual: boolean,
+  inVehicle: boolean,
+): HolderStartOrigin {
+  if (explicitManual) return 'manual_entry'
+  if (!inVehicle) return 'unknown'
+  return 'explicit_change'
+}
+
+function endCauseForSegment(
+  current: CollectedSlotChange,
+  nextLater: CollectedSlotChange | undefined,
+  sharesTimestamp: boolean,
+  unknownUntil: number | null,
+): HolderEndCause {
+  if (unknownUntil != null) return 'unknown_gap'
+  if (sharesTimestamp) return 'unresolved'
+  if (!nextLater) return 'day_end'
+  const samePosition = slotFromChange(nextLater.change) === slotFromChange(current.change)
+  return samePosition ? 'next_change_same_position' : 'next_change_other_position'
+}
+
+function continuityForSegment(
+  kind: ActivityKind,
+  startOrigin: HolderStartOrigin,
+  endCause: HolderEndCause,
+  startUtc: number,
+  endUtc: number,
+): HolderContinuity {
+  if (kind === 'unknown' || endCause === 'unknown_gap') return 'unknown'
+  if (endCause === 'unresolved' || startOrigin === 'unknown') return 'unknown'
+  if (endCause === 'next_change_other_position') return 'inferred'
+  if (endCause === 'day_end') return 'inferred'
+  if (startOrigin === 'manual_entry') return 'inferred'
+  if (endUtc - startUtc > TIMELINE_DAY_MS) return 'inferred'
+  if (startOrigin === 'explicit_change' && endCause === 'next_change_same_position') return 'recorded'
+  return 'inferred'
+}
+
+function markPositionOverlapConflicts(segments: HolderTimelineSegment[]): void {
+  for (const position of [1, 2] as const) {
+    const ordered = segments
+      .filter((segment) => segment.position === position)
+      .sort((a, b) => a.startUtc - b.startUtc || a.endUtc - b.endUtc)
+    for (let index = 1; index < ordered.length; index += 1) {
+      const prev = ordered[index - 1]!
+      const next = ordered[index]!
+      if (prev.endUtc > next.startUtc && prev.startUtc < next.endUtc) {
+        prev.continuity = 'conflict'
+        next.continuity = 'conflict'
+      }
+    }
+  }
+}
+
+/**
+ * Diagnostická osa držitele — stejná časová logika jako mapActivities, bez změny Activity[].
+ */
+export function mapHolderTimelineSegments(card: DddParserCardJson): {
+  segments: HolderTimelineSegment[]
+  meta: HolderTimelineMeta
+} {
+  const collected = collectSlotChanges(card)
+  const segments: HolderTimelineSegment[] = []
+
+  for (let i = 0; i < collected.length; i += 1) {
+    const current = collected[i]!
+    const startUtc = changeTime(current)
+    const nextInOrder = collected[i + 1]
+    const sharesTimestamp = nextInOrder != null && changeTime(nextInOrder) === startUtc
+    const nextLater = laterChange(collected, i)
+    let endUtc = nextLater ? changeTime(nextLater) : current.dayStart + TIMELINE_DAY_MS
+    let unknownUntil: number | null = null
+    if (sharesTimestamp) {
+      endUtc = startUtc
+    } else if (nextLater && spansUnrecordedDays(current, nextLater, TIMELINE_DAY_MS) && !sameAbsentActivity(current, nextLater)) {
+      const recordedUntil = current.dayStart + TIMELINE_DAY_MS
+      const nextUtc = changeTime(nextLater)
+      if (recordedUntil > startUtc && recordedUntil < nextUtc) {
+        endUtc = recordedUntil
+        unknownUntil = nextUtc
+      }
+    }
+    if (endUtc < startUtc) continue
+    const durationMinutes = Math.round((endUtc - startUtc) / 60_000)
+    if (durationMinutes < 0) continue
+    if (durationMinutes === 0 && !sharesTimestamp) continue
+
+    const inVehicle = cardIsPresent(current.change)
+    const explicitManual = isExplicitManualEntry(current, sharesTimestamp ? nextInOrder : nextLater)
+    const position = slotFromChange(current.change)
+    const startOrigin = startOriginForChange(explicitManual, inVehicle)
+    const endCause = endCauseForSegment(current, nextLater, sharesTimestamp, unknownUntil)
+    const kind: ActivityKind =
+      inVehicle || explicitManual ? activityKindFromChange(current.change) : 'unknown'
+    const continuity = continuityForSegment(kind, startOrigin, endCause, startUtc, endUtc)
+
+    segments.push({
+      startUtc,
+      endUtc,
+      kind,
+      position,
+      startOrigin,
+      endCause,
+      continuity,
+      sourceActivityIds: [`act-${i}`],
+      sourceChangeCount: 1,
+    })
+
+    if (unknownUntil != null) {
+      segments.push({
+        startUtc: endUtc,
+        endUtc: unknownUntil,
+        kind: 'unknown',
+        position,
+        startOrigin: 'inferred',
+        endCause: 'unknown_gap',
+        continuity: 'unknown',
+        sourceActivityIds: [`gap-${i}`],
+        sourceChangeCount: 0,
+      })
+    }
+  }
+
+  markPositionOverlapConflicts(segments)
+  return {
+    segments,
+    meta: { slotChronologyAssumption: 'single_card_merged_timeline' },
+  }
+}
+
+export type HolderAbsentLongSpanDiagnostic = {
+  sourceActivityId: string
+  startUtc: number
+  endUtc: number
+  currentDayStart: number
+  nextLaterDayStart: number | null
+  dayStartDiffCalendarDays: number | null
+  currentCardPresent: boolean
+  nextLaterCardPresent: boolean | null
+  currentWorkType: number | null
+  nextLaterWorkType: number | null
+  currentDriver: boolean | null
+  nextLaterDriver: boolean | null
+  spansUnrecordedDays: boolean | 'unavailable'
+  sameAbsentActivity: boolean | 'unavailable'
+  wouldCreateUnknownWithoutSameAbsentException: boolean | 'unavailable'
+  dailyRecordsBetweenDayStartsInclusive: number
+  dailyRecordsStrictlyBetweenDayStarts: number
+}
+
+function countMergedDailyRecords(
+  days: readonly DddDailyRecord[],
+  fromDayStart: number,
+  toDayStart: number,
+): { inclusive: number; strictlyBetween: number } {
+  let inclusive = 0
+  let strictlyBetween = 0
+  for (const day of days) {
+    const dayStart = parseUnixMs(day.activity_record_date)
+    if (dayStart == null) continue
+    if (dayStart >= fromDayStart && dayStart <= toDayStart) inclusive += 1
+    if (dayStart > fromDayStart && dayStart < toDayStart) strictlyBetween += 1
+  }
+  return { inclusive, strictlyBetween }
+}
+
+/**
+ * Read-only diagnostika dlouhých úseků bez karty — stejná smyčka a podmínky jako mapHolderTimelineSegments.
+ * Nemění výstup mapování.
+ */
+export function diagnoseHolderAbsentLongSpans(
+  card: DddParserCardJson,
+  minDurationMs: number = TIMELINE_DAY_MS,
+): HolderAbsentLongSpanDiagnostic[] {
+  const collected = collectSlotChanges(card)
+  const mergedDays = mergeActivityDays(card)
+  const dayMs = TIMELINE_DAY_MS
+  const results: HolderAbsentLongSpanDiagnostic[] = []
+
+  for (let i = 0; i < collected.length; i += 1) {
+    const current = collected[i]!
+    if (cardIsPresent(current.change)) continue
+
+    const startUtc = changeTime(current)
+    const nextInOrder = collected[i + 1]
+    const sharesTimestamp = nextInOrder != null && changeTime(nextInOrder) === startUtc
+    const nextLater = laterChange(collected, i)
+    let endUtc = nextLater ? changeTime(nextLater) : current.dayStart + dayMs
+    if (sharesTimestamp) {
+      endUtc = startUtc
+    } else if (nextLater && spansUnrecordedDays(current, nextLater, dayMs) && !sameAbsentActivity(current, nextLater)) {
+      const recordedUntil = current.dayStart + dayMs
+      const nextUtc = changeTime(nextLater)
+      if (recordedUntil > startUtc && recordedUntil < nextUtc) {
+        endUtc = recordedUntil
+      }
+    }
+    if (endUtc < startUtc) continue
+    if (endUtc - startUtc <= minDurationMs) continue
+    if (durationMinutesWouldSkip(endUtc, startUtc, sharesTimestamp)) continue
+
+    const dayCounts =
+      nextLater != null
+        ? countMergedDailyRecords(mergedDays, current.dayStart, nextLater.dayStart)
+        : countMergedDailyRecords(mergedDays, current.dayStart, current.dayStart)
+
+    let spansFlag: boolean | 'unavailable' = 'unavailable'
+    let sameAbsent: boolean | 'unavailable' = 'unavailable'
+    let wouldUnknown: boolean | 'unavailable' = 'unavailable'
+    if (nextLater != null) {
+      spansFlag = spansUnrecordedDays(current, nextLater, dayMs)
+      sameAbsent = sameAbsentActivity(current, nextLater)
+      if (spansFlag && !sameAbsent) {
+        const recordedUntil = current.dayStart + dayMs
+        const nextUtc = changeTime(nextLater)
+        wouldUnknown = recordedUntil > startUtc && recordedUntil < nextUtc
+      } else {
+        wouldUnknown = false
+      }
+    }
+
+    const dayStartDiff =
+      nextLater != null ? Math.round((nextLater.dayStart - current.dayStart) / dayMs) : null
+
+    results.push({
+      sourceActivityId: `act-${i}`,
+      startUtc,
+      endUtc,
+      currentDayStart: current.dayStart,
+      nextLaterDayStart: nextLater?.dayStart ?? null,
+      dayStartDiffCalendarDays: dayStartDiff,
+      currentCardPresent: cardIsPresent(current.change),
+      nextLaterCardPresent: nextLater != null ? cardIsPresent(nextLater.change) : null,
+      currentWorkType: current.change.work_type ?? null,
+      nextLaterWorkType: nextLater?.change.work_type ?? null,
+      currentDriver: current.change.driver ?? null,
+      nextLaterDriver: nextLater?.change.driver ?? null,
+      spansUnrecordedDays: spansFlag,
+      sameAbsentActivity: sameAbsent,
+      wouldCreateUnknownWithoutSameAbsentException: wouldUnknown,
+      dailyRecordsBetweenDayStartsInclusive: dayCounts.inclusive,
+      dailyRecordsStrictlyBetweenDayStarts: dayCounts.strictlyBetween,
+    })
+  }
+
+  return results.sort((a, b) => a.startUtc - b.startUtc)
+}
+
+function durationMinutesWouldSkip(endUtc: number, startUtc: number, sharesTimestamp: boolean): boolean {
+  const durationMinutes = Math.round((endUtc - startUtc) / 60_000)
+  if (durationMinutes < 0) return true
+  if (durationMinutes === 0 && !sharesTimestamp) return true
+  return false
+}
+
+/** Diagnostika z surového výstupu parseru (bez změny mapování). */
+export function diagnoseHolderAbsentLongSpansFromParserJson(
+  parserJson: unknown,
+  minDurationMs: number = TIMELINE_DAY_MS,
+): HolderAbsentLongSpanDiagnostic[] {
+  const card = unwrapParserCard(parserJson)
+  if (!card) return []
+  return diagnoseHolderAbsentLongSpans(card, minDurationMs)
+}
+
+export type CoverageAnchorChange = CollectedSlotChange & { index: number }
+
+/** Seřazené dayStart z mergeActivityDays — stejná normalizace jako mapper. */
+export function mergedActivityDayStarts(card: DddParserCardJson): number[] {
+  const days = mergeActivityDays(card)
+  const starts: number[] = []
+  for (const day of days) {
+    const dayStart = parseUnixMs(day.activity_record_date)
+    if (dayStart != null) starts.push(dayStart)
+  }
+  starts.sort((left, right) => left - right)
+  return starts
+}
+
+export function collectCoverageAnchorChanges(card: DddParserCardJson): CoverageAnchorChange[] {
+  return collectSlotChanges(card).map((item, index) => ({ ...item, index }))
+}
+
+/** Read-only Activity[] pro coverage overlap — nemění kanonický výstup mapDddParserJson. */
+export function mapActivitiesFromDdd(card: DddParserCardJson): Activity[] {
+  return mapActivities(card)
+}
+
+export function unwrapParserCardForCoverage(parserJson: unknown): DddParserCardJson | null {
+  return unwrapParserCard(parserJson)
+}
+
+export function mapperUnknownGapFlags(
+  current: CollectedSlotChange,
+  nextLater: CollectedSlotChange,
+  dayMs: number = TIMELINE_DAY_MS,
+): {
+  spansUnrecordedDays: boolean
+  sameAbsentActivityAtAnchors: boolean
+  unknownGapGeometryEligible: boolean
+  unknownGapSuppressedBySameAbsentActivity: boolean
+  unknownGapEmittedByMapper: boolean
+} {
+  const spans = spansUnrecordedDays(current, nextLater, dayMs)
+  const sameAbsent = sameAbsentActivity(current, nextLater)
+  const startUtc = changeTime(current)
+  const nextUtc = changeTime(nextLater)
+  const recordedUntil = current.dayStart + dayMs
+  const unknownGapGeometryEligible = spans && recordedUntil > startUtc && recordedUntil < nextUtc
+  return {
+    spansUnrecordedDays: spans,
+    sameAbsentActivityAtAnchors: sameAbsent,
+    unknownGapGeometryEligible,
+    unknownGapSuppressedBySameAbsentActivity: unknownGapGeometryEligible && sameAbsent,
+    unknownGapEmittedByMapper: unknownGapGeometryEligible && !sameAbsent,
+  }
+}
+
+function holderTimelineFromActivities(activities: readonly Activity[]): HolderTimelineSegment[] {
+  return activities
+    .filter((activity) => activity.slot === 1 || activity.slot === 2)
+    .map((activity) => ({
+      startUtc: activity.startUtc,
+      endUtc: activity.endUtc,
+      kind: activity.kind,
+      position: activity.slot === 2 ? 2 : 1,
+      startOrigin: activity.isManualEntry
+        ? 'manual_entry'
+        : activity.kind === 'unknown'
+          ? 'unknown'
+          : 'inferred',
+      endCause: 'unresolved' as const,
+      continuity: activity.kind === 'unknown' ? ('unknown' as const) : ('inferred' as const),
+      sourceActivityIds: [activity.id],
+      sourceChangeCount: activity.id.startsWith('gap-') ? 0 : activity.id.startsWith('act-') ? 1 : 0,
+    }))
 }
 
 function registrationPlate(value: string | null | undefined): string | null {
@@ -909,7 +1338,14 @@ function unwrapParserCard(parserJson: unknown): DddParserCardJson | null {
 }
 
 export function mapDddParserJson(parserJson: unknown): DriverCardData {
-  if (isInternalCard(parserJson)) return parserJson
+  if (isInternalCard(parserJson)) {
+    const card = parserJson
+    return {
+      ...card,
+      holderTimelineSegments: card.holderTimelineSegments ?? holderTimelineFromActivities(card.activities),
+      holderTimelineMeta: card.holderTimelineMeta ?? { slotChronologyAssumption: 'unresolved' },
+    }
+  }
 
   const card = unwrapParserCard(parserJson)
   if (!card) {
@@ -924,6 +1360,7 @@ export function mapDddParserJson(parserJson: unknown): DriverCardData {
   const lastDownload = firstDefined(card.last_card_download_2, card.last_card_download_1)
 
   const mappedLocations = mapLocations(card)
+  const timeline = mapHolderTimelineSegments(card)
 
   const mapped: DriverCardData = {
     cardNumber: (id?.card_number ?? '').trim(),
@@ -944,6 +1381,10 @@ export function mapDddParserJson(parserJson: unknown): DriverCardData {
     lastWithdrawalUtc: lastWithdrawalUtc(card),
     locations: mappedLocations,
     activities: mapActivities(card),
+    holderTimelineSegments: timeline.segments,
+    holderTimelineMeta: timeline.meta,
+    dailyRecordCoverageGaps: deriveDailyRecordCoverageGaps(card),
+    cardPresentEdges: mapCardPresentEdges(card),
     violations: mapViolations(card),
     vehicleUses: mapVehicleUses(card),
     events: mapEvents(card),

@@ -2,6 +2,9 @@ import { analyzeDriverActivities } from '../analysis/analyzeDriverActivities.ts'
 import { assessConsecutiveWeeks, type ConsecutiveWeekPeriod } from '../analysis/consecutiveWeeks.ts'
 import { assessDailyDrivingTime, assessWeeklyDrivingExtensions, utcWeekStart, WEEKLY_EXTENSION_LIMIT, type DailyDrivingPeriod } from '../analysis/dailyDrivingTime.ts'
 import { buildDailyRestChain, type DailyChainNode } from '../analysis/dailyRestChain.ts'
+import { buildGn7ControlPeriods } from '../analysis/gn7ControlPeriods.ts'
+import { buildGn7DiagnosticFeed } from '../analysis/gn7DiagnosticFeed.ts'
+import { findFerryRestCandidates, type FerryRestCandidate } from '../analysis/ferryRestCandidates.ts'
 import { buildDiagnosticExport, deriveDiagnosticCases, derivePeriodDiagnostics } from '../analysis/diagnosticCases.ts'
 import { assessDrivingBreaks, DRIVING_LIMIT_MS, type DrivingBreakPeriod } from '../analysis/drivingBreaks.ts'
 import { assessAdjacentFortnightDrivingTimes, assessFortnightDrivingTime, FORTNIGHT_DRIVING_LIMIT_MS } from '../analysis/fortnightDrivingTime.ts'
@@ -12,7 +15,7 @@ import { classifyWeeklyRestCandidates } from '../analysis/weeklyRest.ts'
 import { buildWeeklyRestAssignment } from '../analysis/weeklyRestAssignment.ts'
 import { assessWeeklyRestCompensationTaken } from '../analysis/weeklyRestCompensationTaken.ts'
 import { addDays, dayStartMs, formatClockDate, formatClockDateTime, formatWeekRange, weekStartMs, type ClockMode } from '../lib/clock.ts'
-import type { Activity, DriverCardData } from '../types/tacho.ts'
+import type { Activity, DriverCardData, SpecificConditionEntry } from '../types/tacho.ts'
 
 const HOUR_MS = 60 * 60 * 1000
 const WEEK_MS = 7 * 24 * HOUR_MS
@@ -38,6 +41,12 @@ export type ComplianceFinding = {
   /** Podíl vůči limitu v procentech, nejvýše 100. Null, když graf nedává smysl. */
   meterPercent: number | null
   meterOver: boolean
+  /** gn7 je metodika nedostatečného denního odpočinku. standard je dosavadní okno řetězce. */
+  methodology?: 'gn7' | 'standard'
+  /** possible znamená, že trajektová výjimka může výsledek změnit a není potvrzená. */
+  ferryException?: 'none' | 'possible'
+  /** needs_verification se nepočítá mezi prokázaná porušení. */
+  reviewStatus?: 'proven' | 'needs_verification'
 }
 
 
@@ -113,6 +122,7 @@ export function buildComplianceReview(input: {
   clockMode?: ClockMode
   /** Bez hodnoty zůstává posledních 56 dnů a dnešek. */
   period?: CompliancePeriodRequest
+  specificConditions?: readonly SpecificConditionEntry[]
 }): ComplianceReview {
   const clockMode = input.clockMode ?? 'local'
   const todayStart = dayStartMs(input.nowUtc, clockMode)
@@ -135,7 +145,18 @@ export function buildComplianceReview(input: {
   collectWeekly(weekDriving, days, periodStartUtc, periodEndUtc, findings)
   collectFortnight(activities, days, periodStartUtc, periodEndUtc, findings)
   collectExtensions(prepared.daily, activities, days, periodStartUtc, periodEndUtc, findings)
-  collectDailyWindows(prepared.nodes, days, periodStartUtc, periodEndUtc, clockMode, findings)
+  const gn7Starts = collectGn7DailyRests(
+    prepared.anchorUtc,
+    activities,
+    input.specificConditions ?? [],
+    prepared.recordEndUtc,
+    days,
+    periodStartUtc,
+    periodEndUtc,
+    clockMode,
+    findings,
+  )
+  collectDailyWindows(prepared.nodes, gn7Starts, days, periodStartUtc, periodEndUtc, clockMode, findings)
   collectWeeklyRests(consecutive, record?.endUtc ?? null, days, periodStartUtc, periodEndUtc, findings)
   const compensation = compensationReport(prepared)
   collectCompensation(compensation, days, periodStartUtc, periodEndUtc, input.nowUtc, clockMode, findings)
@@ -322,6 +343,7 @@ function prepare(
     breaks: assessDrivingBreaks(activities),
     daily,
     nodes: chain?.nodes ?? [],
+    anchorUtc: anchor ?? null,
   }
 }
 
@@ -360,7 +382,7 @@ function collectBreaks(
         mapDayUtc,
         actualText: 'Podmíněně uznáno',
         limitText: '4 h 30 min',
-        deltaText: CREW_BREAK_WARNING,
+        deltaText: '',
         explanation: CREW_BREAK_WARNING,
         technicalText: `status ${period.status}, evidence ${period.evidence}`,
         meterPercent: meter(period.drivingMs, DRIVING_LIMIT_MS),
@@ -628,8 +650,91 @@ function collectFortnight(
   }
 }
 
+const NINE_MINUTES = 9 * 60
+const GN7_NOTE = 'Použita metodika GN7 pro vyhodnocení nedostatečného denního odpočinku.'
+const FERRY_NOTE = 'Možná výjimka podle čl. 9 odst. 1. Splnění všech podmínek nelze ověřit pouze z dat karty.'
+
+function ferryMayRemove(candidate: FerryRestCandidate, startUtc: number, endUtc: number): boolean {
+  if (candidate.legalApplicability !== 'conditional' || !candidate.timeConditionsMet) return false
+  if (candidate.qualification !== 'regular_daily' && candidate.qualification !== 'reduced_weekly' && candidate.qualification !== 'regular_weekly') return false
+  return overlaps(candidate.startUtc, candidate.endUtc, startUtc, endUtc)
+}
+
+function collectGn7DailyRests(
+  anchorUtc: number | null,
+  activities: readonly Activity[],
+  specificConditions: readonly SpecificConditionEntry[],
+  recordEndUtc: number | null,
+  days: readonly DaySlot[],
+  periodStartUtc: number,
+  periodEndUtc: number,
+  clockMode: ClockMode,
+  findings: ComplianceFinding[],
+): Set<number> {
+  const covered = new Set<number>()
+  if (anchorUtc == null) return covered
+  const input = { anchorUtc, activities, recordEndUtc }
+  const periods = buildGn7ControlPeriods(input)
+  const feed = buildGn7DiagnosticFeed(input)
+  const ferries = findFerryRestCandidates({ activities, specificConditions })
+  const emitted: Array<{ startUtc: number; endUtc: number }> = []
+  let laterAnchorUncertain = false
+
+  for (let index = 0; index < periods.length; index += 1) {
+    const period = periods[index]!
+    const diagnostic = feed.periods[index]
+    if (diagnostic == null) continue
+    covered.add(period.startUtc)
+    if (period.status === 'qualifying_rest' || period.status === 'crossing_rest_becomes_qualifying' || period.status === 'history_incomplete') continue
+    if (!overlaps(period.startUtc, period.endUtc, periodStartUtc, periodEndUtc)) continue
+    if (emitted.some((item) => overlaps(item.startUtc, item.endUtc, period.startUtc, period.endUtc))) continue
+
+    const ferry = ferries.find((candidate) => ferryMayRemove(candidate, period.startUtc, period.endUtc))
+    if (ferry != null) laterAnchorUncertain = true
+    const longestInside = period.rests
+      .filter((rest) => rest.established)
+      .reduce((best, rest) => Math.max(best, rest.minutesInsideWindow), 0)
+    const provenShort = diagnostic.usableForGn7Diagnostics
+      && diagnostic.confirmation === 'confirmed'
+      && !diagnostic.analysisTruncated
+      && !laterAnchorUncertain
+      && longestInside < NINE_MINUTES
+      && (period.status === 'consecutive_reference' || period.status === 'crossing_rest_remains_insufficient')
+    const mapDayUtc = placeDay(period.startUtc, period.startUtc, period.endUtc, days)
+    if (mapDayUtc == null) continue
+    emitted.push({ startUtc: period.startUtc, endUtc: period.endUtc })
+    const reasons = [
+      GN7_NOTE,
+      ferry != null ? FERRY_NOTE : '',
+      diagnostic.limitation ?? '',
+      laterAnchorUncertain && ferry == null ? 'Předchozí trajektová výjimka může posunout kotvu, další okno není jediné jisté.' : '',
+    ].filter((part) => part !== '')
+    findings.push({
+      id: `gn7-daily:${period.startUtc}`,
+      severity: provenShort ? 'violation' : 'uncertain',
+      title: provenShort ? 'Nedostatečný denní odpočinek' : 'Denní odpočinek vyžaduje ověření',
+      intervalText: formatRange(period.startUtc, period.endUtc, clockMode),
+      startUtc: period.startUtc,
+      endUtc: period.endUtc,
+      mapDayUtc,
+      actualText: longestInside === 0 ? 'Bez prokázaného REST v okně' : `Nejdelší REST v okně ${longestInside} min`,
+      limitText: period.windowMinutes === 30 * 60 ? '9 h v okně 30 h' : '11 h nebo 9 h v okně 24 h',
+      deltaText: provenShort ? 'Pod oběma délkami denního odpočinku' : 'Není prokázané porušení',
+      explanation: reasons.join(' '),
+      technicalText: `methodology gn7, status ${period.status}, review ${provenShort ? 'proven' : 'needs_verification'}, ferry ${ferry != null ? 'possible' : 'none'}`,
+      meterPercent: null,
+      meterOver: provenShort,
+      methodology: 'gn7',
+      ferryException: ferry != null ? 'possible' : 'none',
+      reviewStatus: provenShort ? 'proven' : 'needs_verification',
+    })
+  }
+  return covered
+}
+
 function collectDailyWindows(
   nodes: readonly DailyChainNode[],
+  gn7Starts: ReadonlySet<number>,
   days: readonly DaySlot[],
   periodStartUtc: number,
   periodEndUtc: number,
@@ -639,6 +744,7 @@ function collectDailyWindows(
   for (const node of nodes) {
     const conditional = node.crewBasis === 'conditional' && node.status === 'evaluated'
     if (node.status !== 'window_unsatisfied' && !conditional) continue
+    if (node.status === 'window_unsatisfied' && gn7Starts.has(node.windowStartUtc)) continue
     if (!overlaps(node.windowStartUtc, node.windowEndUtc, periodStartUtc, periodEndUtc)) continue
     const mapDayUtc = placeDay(node.windowStartUtc, node.windowStartUtc, node.windowEndUtc, days)
     if (mapDayUtc == null) continue

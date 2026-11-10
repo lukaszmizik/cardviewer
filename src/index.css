@@ -208,6 +208,93 @@ body {
   color: #334155;
 }
 
+.work-periods-page .work-period-meta {
+  margin: 1rem 0 1.5rem;
+  color: #64748b;
+  font-size: 0.95rem;
+}
+
+.work-period-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.work-period-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  background: #f8fafc;
+}
+
+.work-period-card__title {
+  margin: 0 0 0.35rem;
+  font-size: 1.15rem;
+  color: #0f172a;
+}
+
+.work-period-badge--preliminary {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #b45309;
+}
+
+.work-period-card__range,
+.work-period-card__duration {
+  margin: 0.2rem 0;
+  color: #475569;
+}
+
+.work-period-dl {
+  margin: 1rem 0;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.work-period-dl dt {
+  font-weight: 600;
+  color: #334155;
+  font-size: 0.88rem;
+}
+
+.work-period-dl dd {
+  margin: 0.15rem 0 0;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.work-period-gap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.work-period-gap-chip {
+  display: block;
+  font-size: 0.9rem;
+}
+
+.work-period-toggle {
+  margin-top: 0.75rem;
+}
+
+.work-period-activities {
+  width: 100%;
+  margin-top: 1rem;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.work-period-activities th,
+.work-period-activities td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+}
+
 .dashboard {
   display: flex;
   flex-direction: column;

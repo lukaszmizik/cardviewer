@@ -3,9 +3,17 @@ import type { DriverCardData } from '../types/tacho'
 import { CARD_FILE_ACCEPT, CardFileError, validateCardBytes, validateCardFile } from '../lib/cardFile'
 import { mapDddParserJson } from '../utils/dddMapper'
 import { parseDddBinary } from '../utils/dddParser'
+import { fingerprintBytes } from '../lib/cardFingerprint'
+import { findSessionByFingerprint } from '../lib/cardSessionStore'
 
 type FileUploaderProps = {
-  onDataLoaded: (parsedJson: DriverCardData, fileName: string, epoch: number, bytes: Uint8Array) => void
+  onDataLoaded: (
+    parsedJson: DriverCardData,
+    fileName: string,
+    epoch: number,
+    bytes: Uint8Array,
+    parserJson: unknown,
+  ) => void
   loadEpoch: () => number
 }
 
@@ -25,9 +33,16 @@ export function FileUploader({ onDataLoaded, loadEpoch }: FileUploaderProps) {
       const buffer = await file.arrayBuffer()
       const bytes = new Uint8Array(buffer)
       validateCardBytes(bytes)
+      const bytesFingerprint = fingerprintBytes(bytes)
+      const existing = findSessionByFingerprint(bytesFingerprint)
+      if (existing != null) {
+        if (epoch !== loadEpoch()) return
+        onDataLoaded(existing.card, existing.fileName, epoch, bytes, existing.parserJson ?? null)
+        return
+      }
       const parserJson = await parseDddBinary(bytes)
       if (epoch !== loadEpoch()) return
-      onDataLoaded(mapDddParserJson(parserJson), file.name, epoch, bytes)
+      onDataLoaded(mapDddParserJson(parserJson), file.name, epoch, bytes, parserJson)
     } catch (cause) {
       if (epoch !== loadEpoch()) return
       const message =
