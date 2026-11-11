@@ -1,7 +1,25 @@
 import { addDays, clockParts, formatClockDateTime, type ClockMode } from './clock.ts'
 import type { OutModeEvent } from '../TachoTypes.ts'
 
-export const OUT_MODE_GRAPH_COLOR = '#f97316'
+function formatOutModeDurationMinutes(totalMinutes: number): string {
+  const total = Math.max(0, Math.round(totalMinutes))
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  return `${h}:${String(m).padStart(2, '0')}`
+}
+
+export const OUT_MODE_GRAPH_COLOR = '#E88A16'
+/** Cílová výška pásu OUT ve viewBox jednotkách (škáluje se přes lx v grafu). */
+export const OUT_MODE_BAR_HEIGHT = 6
+/** Minimální šířka intervalu (viewBox), aby se zobrazil text „OUT“. */
+export const OUT_MODE_LABEL_MIN_WIDTH = 34
+/** Neviditelná interaktivní oblast – min. výška pro klepnutí. */
+export const OUT_MODE_TOUCH_MIN_HEIGHT = 14
+
+export function isTimestampOnDay(ms: number, dayStartUtc: number, clockMode: ClockMode): boolean {
+  const dayEndUtc = addDays(dayStartUtc, 1, clockMode)
+  return ms >= dayStartUtc && ms < dayEndUtc
+}
 
 export type OutModeGraphRange = {
   startMs: number
@@ -98,6 +116,8 @@ export function formatOutModeTooltip(
   uncertain: boolean,
 ): string {
   const time = formatOutModeTimeRange(startMs, endMs, clockMode)
+  const durationMin = Math.max(0, Math.round((endMs - startMs) / 60_000))
+  const duration = `Délka: ${formatOutModeDurationMinutes(durationMin)}`
   const status = incomplete
     ? uncertain ? `${time} (neúplný interval, nejisté párování)` : `${time} (neúplný interval)`
     : uncertain
@@ -107,6 +127,7 @@ export function formatOutModeTooltip(
     'Režim OUT',
     '',
     status,
+    duration,
     '',
     'Tachograf byl v režimu mimo působnost.',
     '',

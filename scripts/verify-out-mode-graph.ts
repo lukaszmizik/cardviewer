@@ -84,6 +84,7 @@ test('tooltip obsahuje povinné řádky', () => {
   assert.match(tooltip, /^Režim OUT\n/)
   assert.match(tooltip, /Tachograf byl v režimu mimo působnost/)
   assert.match(tooltip, /Oprávněnost použití OUT/)
+  assert.match(tooltip, /Délka: 0:30/)
 })
 
 test('interval přes půlnoc zobrazí datum v čase', () => {
