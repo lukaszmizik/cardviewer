@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
 import type { ClockMode } from '../lib/clock'
-import { formatClockTime, parseClockDateTime } from '../lib/clock'
+import { formatClockDateTime, formatClockTime, parseClockDateTime } from '../lib/clock'
 import {
   CHART_WIDTH,
   DEFAULT_ZOOM,
@@ -19,6 +19,7 @@ import {
   formatActivityDuration,
   getActivityDisplayColor,
 } from '../lib/activityPresentation'
+import { OUT_MODE_GRAPH_COLOR, findActiveOutRange, type OutModeGraphRange } from '../lib/outModeGraph'
 import type { DayData, ParsedActivity } from '../workWeekTxtParser'
 
 type GraphStageProps = {
@@ -32,6 +33,7 @@ type GraphStageProps = {
   rowHeight?: number
   marginTop?: number
   zoomDomain?: ZoomDomain
+  outModeRanges?: readonly OutModeGraphRange[]
 }
 
 function pad(n: number): string {
@@ -86,6 +88,27 @@ function fillInspectPanel(
   flagsEl.hidden = !showCrew && !showManual
 }
 
+function fillOutOnlyPanel(
+  swatch: HTMLSpanElement,
+  typeEl: HTMLSpanElement,
+  durationEl: HTMLSpanElement,
+  rangeEl: HTMLSpanElement,
+  registrationEl: HTMLSpanElement,
+  flagsEl: HTMLDivElement,
+  range: OutModeGraphRange,
+) {
+  typeEl.textContent = 'režim OUT'
+  const minutes = Math.max(0, Math.round((range.endMs - range.startMs) / 60_000))
+  durationEl.textContent = formatActivityDuration(minutes)
+  rangeEl.textContent = ''
+  swatch.style.background = OUT_MODE_GRAPH_COLOR
+  swatch.textContent = ''
+  swatch.className = 'graph-inspect-swatch'
+  registrationEl.hidden = true
+  registrationEl.textContent = ''
+  flagsEl.hidden = true
+}
+
 export function GraphStage({
   children,
   svgRef,
@@ -97,6 +120,7 @@ export function GraphStage({
   rowHeight,
   marginTop = MARGIN_TOP,
   zoomDomain = DEFAULT_ZOOM,
+  outModeRanges = [],
 }: GraphStageProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const inspectRef = useRef<HTMLDivElement>(null)
@@ -108,6 +132,10 @@ export function GraphStage({
   const inspectFlagsRef = useRef<HTMLDivElement>(null)
   const inspectCrewFlagRef = useRef<HTMLSpanElement>(null)
   const inspectManualFlagRef = useRef<HTMLSpanElement>(null)
+  const inspectOutRef = useRef<HTMLDivElement>(null)
+  const inspectOutTitleRef = useRef<HTMLSpanElement>(null)
+  const inspectOutStartRef = useRef<HTMLSpanElement>(null)
+  const inspectOutEndRef = useRef<HTMLSpanElement>(null)
   const detailRef = useRef(detailActive)
   const daysRef = useRef(visibleDays)
   const clockRef = useRef(clockMode)
@@ -116,6 +144,7 @@ export function GraphStage({
   const rowHeightRef = useRef(rowHeight)
   const marginTopRef = useRef(marginTop)
   const zoomRef = useRef(zoomDomain)
+  const outRangesRef = useRef(outModeRanges)
   const rafRef = useRef(0)
   const pointerRef = useRef<{ clientX: number; clientY: number } | null>(null)
 
@@ -127,6 +156,7 @@ export function GraphStage({
   rowHeightRef.current = rowHeight
   marginTopRef.current = marginTop
   zoomRef.current = zoomDomain
+  outRangesRef.current = outModeRanges
 
   const hideInspect = useCallback(() => {
     pointerRef.current = null
@@ -165,7 +195,8 @@ export function GraphStage({
     const day = daysRef.current[row]
     const ms = minuteToMs(day, minute, clockRef.current)
     const act = findTopActivityAt(day, ms)
-    if (!act) {
+    const outRange = findActiveOutRange(outRangesRef.current, ms)
+    if (!act && !outRange) {
       hideInspect()
       return
     }
@@ -183,20 +214,40 @@ export function GraphStage({
     const flagsEl = inspectFlagsRef.current
     const crewFlag = inspectCrewFlagRef.current
     const manualFlag = inspectManualFlagRef.current
-    if (inspect && swatch && typeEl && durationEl && rangeEl && registrationEl && flagsEl && crewFlag && manualFlag) {
+    const outEl = inspectOutRef.current
+    const outTitle = inspectOutTitleRef.current
+    const outStart = inspectOutStartRef.current
+    const outEnd = inspectOutEndRef.current
+    if (inspect && swatch && typeEl && durationEl && rangeEl && registrationEl && flagsEl && crewFlag && manualFlag && outEl && outTitle && outStart && outEnd) {
       inspect.classList.add('is-visible')
-      fillInspectPanel(
-        swatch,
-        typeEl,
-        durationEl,
-        rangeEl,
-        registrationEl,
-        flagsEl,
-        crewFlag,
-        manualFlag,
-        act,
-        clockRef.current,
-      )
+      if (act) {
+        fillInspectPanel(
+          swatch,
+          typeEl,
+          durationEl,
+          rangeEl,
+          registrationEl,
+          flagsEl,
+          crewFlag,
+          manualFlag,
+          act,
+          clockRef.current,
+        )
+      } else if (outRange) {
+        fillOutOnlyPanel(swatch, typeEl, durationEl, rangeEl, registrationEl, flagsEl, outRange)
+      }
+      if (outRange) {
+        outEl.hidden = false
+        outTitle.hidden = !act
+        outStart.textContent = `aktivace ${formatClockDateTime(outRange.startMs, clockRef.current)}`
+        outEnd.textContent = outRange.incomplete
+          ? 'deaktivace nezaznamenána'
+          : `deaktivace ${formatClockDateTime(outRange.endMs, clockRef.current)}`
+      } else {
+        outEl.hidden = true
+        outStart.textContent = ''
+        outEnd.textContent = ''
+      }
       const tipW = inspect.offsetWidth
       const tipH = inspect.offsetHeight
       let tx = localX + 12
@@ -258,6 +309,11 @@ export function GraphStage({
             <span ref={inspectManualFlagRef} className="graph-inspect-flag graph-inspect-flag--manual" hidden>
               manuální záznam
             </span>
+          </div>
+          <div ref={inspectOutRef} className="graph-inspect-out" hidden>
+            <span ref={inspectOutTitleRef} className="graph-inspect-out-title">režim OUT</span>
+            <span ref={inspectOutStartRef} />
+            <span ref={inspectOutEndRef} />
           </div>
         </div>
       </div>

@@ -8,10 +8,14 @@ function formatOutModeDurationMinutes(totalMinutes: number): string {
   return `${h}:${String(m).padStart(2, '0')}`
 }
 
-/** Barva textu ▶ OUT / ◀ OUT */
-export const OUT_MODE_LABEL_COLOR = '#111'
-/** Šrafování pásu OUT (SVG pattern stroke). */
-export const OUT_MODE_HATCH_STROKE = 'rgba(0, 0, 0, 0.42)'
+/** Souvislá čára režimu OUT. */
+export const OUT_MODE_GRAPH_COLOR = '#E86A00'
+/** Text uvnitř oranžové čáry. */
+export const OUT_MODE_TEXT_COLOR = '#1a1208'
+/** Výška čáry ve viewBox jednotkách před škálováním lx — dost na čitelný nápis OUT. */
+export const OUT_MODE_BAR_HEIGHT = 13
+/** Šířka, od které se nápis OUT vejde do čáry. */
+export const OUT_MODE_LABEL_MIN_WIDTH = 22
 /** Neviditelná interaktivní oblast – min. výška pro klepnutí. */
 export const OUT_MODE_TOUCH_MIN_HEIGHT = 14
 
@@ -93,6 +97,14 @@ export function buildOutModeGraphModel(
   }
   if (pendingStart != null) closeOpen(pairingUncertain)
   return { ranges, orphanEnds }
+}
+
+export function findActiveOutRange(ranges: readonly OutModeGraphRange[], ms: number): OutModeGraphRange | null {
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    const range = ranges[i]!
+    if (ms >= range.startMs && ms < range.endMs) return range
+  }
+  return null
 }
 
 export function sliceOutRangeForDay(

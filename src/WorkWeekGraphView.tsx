@@ -46,8 +46,6 @@ import {
   MARGIN_TOP,
   QUARTER_TICK_LEN,
   ROW_HEIGHT,
-  OUT_GRAPH_DUAL_TRACK_EXTRA,
-  OUT_GRAPH_ROW_EXTRA,
   MANUAL_ENTRY_UNDERLINE_WIDTH,
   TICK_LEN,
   chartX,
@@ -72,8 +70,8 @@ import { DayGraphPan } from './components/DayGraphPan'
 import { GraphSwipeNav } from './components/GraphSwipeNav'
 import { CardCalendar } from './components/CardCalendar'
 import { googleMapsUrl } from './lib/mapsLink'
-import { buildOutModeGraphModel, dayNeedsDualOutTrack, latestActivityEndMs } from './lib/outModeGraph'
-import { outModeHatchPatternDef, renderOutModeGraphLayer } from './components/outModeGraphLayer'
+import { OUT_MODE_BAR_HEIGHT, OUT_MODE_GRAPH_COLOR, buildOutModeGraphModel, dayNeedsDualOutTrack, latestActivityEndMs } from './lib/outModeGraph'
+import { renderOutModeGraphLayer } from './components/outModeGraphLayer'
 import type { DriverCardData } from './types/tacho'
 
 function markerTimeMs(
@@ -580,12 +578,8 @@ function WorkWeekGraphLegend({
       </span>
       <span className="work-week-graph-legend-item">
         <svg width={38} height={18} className="work-week-graph-legend-sample" viewBox="0 0 22 11" preserveAspectRatio="xMidYMid meet">
-          <defs>
-            <pattern id="out-legend-hatch" patternUnits="userSpaceOnUse" width="4" height="4">
-              <line x1="0" y1="0" x2="4" y2="4" stroke="rgba(0,0,0,0.42)" strokeWidth="0.75" />
-            </pattern>
-          </defs>
-          <rect x={0} y={4} width={22} height={3} fill="url(#out-legend-hatch)" stroke="rgba(0,0,0,0.42)" strokeWidth="0.35" />
+          <rect x={0} y={2} width={22} height={7} fill={OUT_MODE_GRAPH_COLOR} />
+          <text x={11} y={5.5} textAnchor="middle" dominantBaseline="central" fill="#1a1208" fontSize={5} fontFamily="sans-serif" fontWeight={700}>OUT</text>
         </svg>
         <span className="work-week-graph-legend-label">{t.workWeek.outModeLegendLine}</span>
       </span>
@@ -720,10 +714,7 @@ function GraphBlock({
     outModeEvents.length > 0 &&
     visibleDays.some((day) => dayNeedsDualOutTrack(outModeModel, day.dateUtc, day.activities, clockMode))
   const outRowPad =
-    outModeEvents.length > 0
-      ? lx(OUT_GRAPH_ROW_EXTRA) +
-        (dualOutTrack ? sx(MANUAL_ENTRY_UNDERLINE_WIDTH) + lx(OUT_GRAPH_DUAL_TRACK_EXTRA) : 0)
-      : 0
+    outModeEvents.length > 0 ? lx(OUT_MODE_BAR_HEIGHT) + (dualOutTrack ? lx(OUT_MODE_BAR_HEIGHT) : 0) : 0
   const rowH = baseRowH + outRowPad
 
   const workShiftRanges = getWorkShiftRanges(countryMarkers, clockMode)
@@ -749,13 +740,13 @@ function GraphBlock({
         rowHeight={rowH}
         marginTop={marginTop}
         zoomDomain={zoomDomain}
+        outModeRanges={outModeModel.ranges}
       >
       <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="work-week-graph-svg" preserveAspectRatio="xMidYMid meet">
         <defs>
           <pattern id={`crew-mode-hatch-${blockId}`} patternUnits="userSpaceOnUse" width={lx(6)} height={lx(6)}>
             <line x1="0" y1="0" x2={lx(6)} y2={lx(6)} stroke="rgba(100, 149, 237, 0.18)" strokeWidth={lx(1)} />
           </pattern>
-          {outModeHatchPatternDef(blockId, lx)}
           <clipPath id={`chart-clip-${blockId}`}>
             <rect x={labelW} y={marginTop} width={chartW} height={visibleDays.length * rowH} />
           </clipPath>
@@ -892,7 +883,6 @@ function GraphBlock({
                 })
               })()}
               {renderOutModeGraphLayer({
-                blockId,
                 model: outModeModel,
                 dayStart,
                 dayActivities: day.activities,
@@ -905,9 +895,6 @@ function GraphBlock({
                 lx,
                 sx,
                 xAt,
-                markerXs: getMarkersOnDay(visibleMarkers, day.dateUtc, clockMode).map((marker) =>
-                  xAt(dayStart, markerTimeMs(marker, clockMode)),
-                ),
               })}
               {getMarkersOnDay(visibleMarkers, day.dateUtc, clockMode).map((marker, i) => {
                 const ms = markerTimeMs(marker, clockMode)

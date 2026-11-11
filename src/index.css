@@ -1488,6 +1488,34 @@ body {
   background: #8b5cf6;
 }
 
+.graph-inspect-out {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(148, 163, 184, 0.35);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: #fdba74;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-inspect-out[hidden] {
+  display: none;
+}
+
+.graph-inspect-out-title {
+  color: #fed7aa;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.graph-inspect-out-title[hidden] {
+  display: none;
+}
+
 .time-scale-select {
   display: flex;
   align-items: center;

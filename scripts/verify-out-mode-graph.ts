@@ -6,6 +6,7 @@ import {
   buildOutModeGraphModel,
   formatOutModeTimeRange,
   formatOutModeTooltip,
+  findActiveOutRange,
   sliceOutRangeForDay,
 } from '../src/lib/outModeGraph.ts'
 import { partitionOutSliceByManualOverlap } from '../src/lib/outModeGraph.ts'
@@ -16,6 +17,17 @@ const DAY0 = Date.parse('2026-04-10T00:00:00.000Z')
 function out(type: OutModeEvent['type'], minuteFromDay0: number): OutModeEvent {
   return { type, minuteStartUtc: DAY0 + minuteFromDay0 * MIN }
 }
+
+test('aktivní OUT v čase ukáže interval, mimo něj ne', () => {
+  const model = buildOutModeGraphModel(
+    [out('activation', 10 * 60), out('deactivation', 12 * 60)],
+    DAY0 + 24 * 60 * MIN,
+  )
+  const inside = findActiveOutRange(model.ranges, DAY0 + (11 * 60) * MIN)
+  assert.equal(inside?.startMs, DAY0 + 10 * 60 * MIN)
+  assert.equal(inside?.endMs, DAY0 + 12 * 60 * MIN)
+  assert.equal(findActiveOutRange(model.ranges, DAY0 + (12 * 60) * MIN), null)
+})
 
 test('běžný interval OUT uvnitř dne', () => {
   const model = buildOutModeGraphModel(
