@@ -836,28 +836,41 @@ function GraphBlock({
                 const drivingTop = rowCenter + maxStrokeHalf - drivingStroke
                 const lineY = drivingTop - 5
                 const barW = Math.max(1, span.x2 - span.x1)
+                const mid = span.x1 + barW / 2
+                const label = String(shift.index)
+                const badgeH = lx(11)
+                const badgeW = Math.max(lx(14), lx(6.5) * label.length + lx(8))
+                const gap = Math.min(barW, badgeW)
+                const leftEnd = mid - gap / 2
+                const rightStart = mid + gap / 2
                 return (
                   <g key={`shift-${shift.index}`} className="work-week-graph-shift-mark">
-                    <line
-                      x1={span.x1}
-                      y1={lineY}
-                      x2={span.x2}
-                      y2={lineY}
-                      stroke="#111"
-                      strokeWidth={1}
-                      strokeLinecap="butt"
+                    {leftEnd - span.x1 > 0.5 && (
+                      <line x1={span.x1} y1={lineY} x2={leftEnd} y2={lineY} stroke="#111" strokeWidth={1} strokeLinecap="butt" />
+                    )}
+                    {span.x2 - rightStart > 0.5 && (
+                      <line x1={rightStart} y1={lineY} x2={span.x2} y2={lineY} stroke="#111" strokeWidth={1} strokeLinecap="butt" />
+                    )}
+                    <rect
+                      x={mid - badgeW / 2}
+                      y={lineY - badgeH / 2}
+                      width={badgeW}
+                      height={badgeH}
+                      rx={badgeH / 2}
+                      ry={badgeH / 2}
+                      fill="#111"
                     />
                     <text
-                      x={span.x1 + barW / 2}
-                      y={lineY - 1}
+                      x={mid}
+                      y={lineY}
                       textAnchor="middle"
-                      dominantBaseline="text-after-edge"
-                      fill="#111"
+                      dominantBaseline="central"
+                      fill="#fff"
                       fontSize={lx(8)}
                       fontFamily="sans-serif"
                       fontWeight={700}
                     >
-                      {shift.index}
+                      {label}
                     </text>
                   </g>
                 )
