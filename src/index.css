@@ -1271,6 +1271,24 @@ body {
   gap: 8px;
 }
 
+.graph-shift-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  cursor: pointer;
+  user-select: none;
+}
+
+.graph-shift-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #111;
+}
+
 .work-week-graph-nav-btn.is-tool-active {
   color: #312e81;
   background: #e0e7ff;
@@ -2315,10 +2333,6 @@ body {
 .work-week-graph-shift-summary {
   font-weight: 600;
   color: #1a5f2a;
-}
-
-.work-week-graph-crew-mode-bg {
-  pointer-events: none;
 }
 
 .work-week-graph-block {

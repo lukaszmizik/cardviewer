@@ -66,6 +66,7 @@ import { buildWeeklyRestPanel } from './components/weeklyRestPanel'
 import { CardHistoryTables } from './components/CardHistoryTables'
 import { bestDailyDistance, type DailyDistanceRecord } from './utils/weekDistance'
 import { GraphStage } from './components/GraphStage'
+import { buildWorkPeriodOverview } from './presentation/workPeriodOverview'
 import { DayGraphPan } from './components/DayGraphPan'
 import { GraphSwipeNav } from './components/GraphSwipeNav'
 import { CardCalendar } from './components/CardCalendar'
@@ -430,46 +431,6 @@ export type WorkWeekGraphViewProps = {
   initialFocusedDayUtc?: number | null
 }
 
-/**
- * Pracovní směna = od zadání výchozí země (START_COUNTRY) do zadání cílové země (END_COUNTRY).
- * Režim osádky / podkreslení šrafou platí pro tuto periodu.
- */
-function getWorkShiftRanges(markers: CountryMarker[], clockMode: ClockMode): Array<{ startMs: number; endMs: number }> {
-  const withMs = markers
-    .map((m) => ({ ...m, ms: markerTimeMs(m, clockMode) }))
-    .sort((a, b) => a.ms - b.ms)
-  const ranges: Array<{ startMs: number; endMs: number }> = []
-  for (let i = 0; i < withMs.length; i++) {
-    if (withMs[i]!.activityId !== 'START_COUNTRY') continue
-    const startMs = withMs[i]!.ms
-    for (let j = i + 1; j < withMs.length; j++) {
-      if (withMs[j]!.activityId === 'END_COUNTRY') {
-        ranges.push({ startMs, endMs: withMs[j]!.ms })
-        break
-      }
-    }
-  }
-  return ranges
-}
-
-/** Průnik pracovních směn s daným dnem – vrací segmenty pro vykreslení v řádku dne. */
-function getWorkShiftRangesForDay(
-  workShiftRanges: Array<{ startMs: number; endMs: number }>,
-  dayUtc: number,
-  clockMode: ClockMode,
-): Array<{ startMs: number; endMs: number }> {
-  const dayEnd = addDays(dayUtc, 1, clockMode)
-  const result: Array<{ startMs: number; endMs: number }> = []
-  for (const r of workShiftRanges) {
-    if (r.endMs <= dayUtc || r.startMs >= dayEnd) continue
-    result.push({
-      startMs: Math.max(r.startMs, dayUtc),
-      endMs: Math.min(r.endMs, dayEnd),
-    })
-  }
-  return result
-}
-
 function getMarkersOnDay(markers: CountryMarker[], dayUtcMs: number, clockMode: ClockMode): CountryMarker[] {
   const dayEndMs = addDays(dayUtcMs, 1, clockMode)
   return markers.filter((m) => {
@@ -618,6 +579,7 @@ type GraphBlockProps = {
   showFooter?: boolean
   /** Týdenní graf na úzkém displeji — 2× výška řádku, čar i popisků. */
   narrowViewport?: boolean
+  workShifts?: readonly { index: number; startUtc: number; endUtc: number }[]
 }
 
 const NARROW_VIEWPORT_QUERY = '(max-width: 720px)'
@@ -658,6 +620,7 @@ function GraphBlock({
   onDayOpen,
   showFooter = true,
   narrowViewport = false,
+  workShifts = [],
 }: GraphBlockProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const rowPressRef = useRef<{ x: number; y: number } | null>(null)
@@ -717,8 +680,6 @@ function GraphBlock({
     outModeEvents.length > 0 ? lx(OUT_MODE_BAR_HEIGHT) + (dualOutTrack ? lx(OUT_MODE_BAR_HEIGHT) : 0) : 0
   const rowH = baseRowH + outRowPad
 
-  const workShiftRanges = getWorkShiftRanges(countryMarkers, clockMode)
-
   const height = marginTop + visibleDays.length * rowH + marginBottom
   const width = labelW + chartW + SVG_RIGHT_GUTTER
   const axisMajors = majorTicks(zoomDomain)
@@ -744,9 +705,6 @@ function GraphBlock({
       >
       <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="work-week-graph-svg" preserveAspectRatio="xMidYMid meet">
         <defs>
-          <pattern id={`crew-mode-hatch-${blockId}`} patternUnits="userSpaceOnUse" width={lx(6)} height={lx(6)}>
-            <line x1="0" y1="0" x2={lx(6)} y2={lx(6)} stroke="rgba(100, 149, 237, 0.18)" strokeWidth={lx(1)} />
-          </pattern>
           <clipPath id={`chart-clip-${blockId}`}>
             <rect x={labelW} y={marginTop} width={chartW} height={visibleDays.length * rowH} />
           </clipPath>
@@ -822,23 +780,6 @@ function GraphBlock({
                 </>
               )}
               <g clipPath={`url(#chart-clip-${blockId})`}>
-              {getWorkShiftRangesForDay(workShiftRanges, day.dateUtc, clockMode).map((range, ri) => {
-                const span = clipChartX(xAt(dayStart, range.startMs), xAt(dayStart, range.endMs), chartW, labelW)
-                if (!span) return null
-                const rowTop = yBase + 2
-                const rowBarH = rowH - 4
-                return (
-                  <rect
-                    key={`crew-${ri}`}
-                    x={span.x1}
-                    y={rowTop}
-                    width={Math.max(1, span.x2 - span.x1)}
-                    height={rowBarH}
-                    fill={`url(#crew-mode-hatch-${blockId})`}
-                    className="work-week-graph-crew-mode-bg"
-                  />
-                )
-              })}
               {(() => {
                 const maxStrokeHalf = sx(8)
                 const rowCenter = yBase + rowH / 2
@@ -882,6 +823,45 @@ function GraphBlock({
                   )
                 })
               })()}
+              {workShifts.map((shift) => {
+                const dayEnd = addDays(dayStart, 1, clockMode)
+                const sliceStart = Math.max(shift.startUtc, dayStart)
+                const sliceEnd = Math.min(shift.endUtc, dayEnd)
+                if (sliceStart >= sliceEnd) return null
+                const span = clipChartX(xAt(dayStart, sliceStart), xAt(dayStart, sliceEnd), chartW, labelW)
+                if (!span) return null
+                const maxStrokeHalf = sx(8)
+                const rowCenter = yBase + rowH / 2
+                const drivingStroke = sx(ACTIVITY_STYLE.řízení.strokeWidth)
+                const drivingTop = rowCenter + maxStrokeHalf - drivingStroke
+                const lineY = drivingTop - 5
+                const barW = Math.max(1, span.x2 - span.x1)
+                return (
+                  <g key={`shift-${shift.index}`} className="work-week-graph-shift-mark">
+                    <line
+                      x1={span.x1}
+                      y1={lineY}
+                      x2={span.x2}
+                      y2={lineY}
+                      stroke="#111"
+                      strokeWidth={1}
+                      strokeLinecap="butt"
+                    />
+                    <text
+                      x={span.x1 + barW / 2}
+                      y={lineY - 1}
+                      textAnchor="middle"
+                      dominantBaseline="text-after-edge"
+                      fill="#111"
+                      fontSize={lx(8)}
+                      fontFamily="sans-serif"
+                      fontWeight={700}
+                    >
+                      {shift.index}
+                    </text>
+                  </g>
+                )
+              })}
               {renderOutModeGraphLayer({
                 model: outModeModel,
                 dayStart,
@@ -1253,6 +1233,15 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
     initialFocusedDayUtc != null ? weekStartMs(initialFocusedDayUtc, clockMode) : getInitialWeekStart(),
   )
   const [detailActive, setDetailActive] = useState(false)
+  const [showShifts, setShowShifts] = useState(false)
+  const workShifts = useMemo(
+    () => (showShifts && card ? buildWorkPeriodOverview(card).periods.map((period) => ({
+      index: period.index,
+      startUtc: period.startUtc,
+      endUtc: period.endUtc,
+    })) : []),
+    [showShifts, card],
+  )
   const [focusedDayUtc, setFocusedDayUtc] = useState<number | null>(initialFocusedDayUtc)
   const [dayPanStart, setDayPanStart] = useState(0)
   const [cardOverviewOpen, setCardOverviewOpen] = useState(false)
@@ -1478,8 +1467,9 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 onChange={onClockModeChange ?? (() => undefined)}
               />
             )}
-            {!narrowViewport && !cardOverviewOpen && (
+            {!cardOverviewOpen && (
             <div className="graph-toolbar" role="toolbar" aria-label="Nástroje grafu">
+              {!narrowViewport && (
               <button
                 type="button"
                 className={detailActive ? 'work-week-graph-nav-btn is-tool-active' : 'work-week-graph-nav-btn'}
@@ -1489,6 +1479,15 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
               >
                 Zobrazit detail
               </button>
+              )}
+              <label className="graph-shift-toggle">
+                <input
+                  type="checkbox"
+                  checked={showShifts}
+                  onChange={(event) => setShowShifts(event.target.checked)}
+                />
+                Zobrazit směny
+              </label>
             </div>
             )}
           </div>
@@ -1530,6 +1529,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
                 chartWidth={DAY_DETAIL_CHART_WIDTH}
                 rowHeight={DAY_DETAIL_ROW_HEIGHT}
                 showFooter={false}
+                workShifts={workShifts}
               />
             </DayGraphPan>
             <DayGraphRecordTables
@@ -1572,6 +1572,7 @@ export function WorkWeekGraphView({ days, countryMarkers, manualEntryBuffer, las
           detailActive={inspectActive}
           narrowViewport={narrowViewport}
           onDayOpen={focusDay}
+          workShifts={workShifts}
         />
 
         <WeeklyRestPanel days={days} weekStartUtc={displayWeekStartMs} clockMode={clockMode} />

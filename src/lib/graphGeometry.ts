@@ -2,7 +2,7 @@ import type { ClockMode } from './clock'
 import { timeToX } from './clock'
 
 export const DAYS_PER_WEEK = 7
-export const ROW_HEIGHT = 40
+export const ROW_HEIGHT = 32
 /** Stejná tloušťka jako fialové podtržení manuálního zadání ve grafu. */
 export const MANUAL_ENTRY_UNDERLINE_WIDTH = 3
 /** Tloušťka odpočinku v týdenním grafu (SVG jednotky). */
