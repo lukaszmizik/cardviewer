@@ -156,6 +156,36 @@ test('tři uzavřená prodloužení v jednom týdnu jsou porušení', () => {
   assert.equal(view.days.filter((day) => day.findingIds.includes(extension?.id ?? '')).length, 1)
 })
 
+test('týdenní odpočinek po šesti 24hodinových obdobích je prokázané porušení', () => {
+  const end = Date.parse('2026-04-02T06:00:00.000Z')
+  const next = end + 6 * DAY + 60_000
+  const view = review([
+    activity('first', 'rest', end - 45 * HOUR, end),
+    activity('gap', 'work', end, next),
+    activity('second', 'rest', next, next + 24 * HOUR),
+    activity('tail', 'work', next + 24 * HOUR, NOW),
+  ])
+  const finding = view.findings.find((item) => item.id.startsWith('weekly-start:'))
+  assert.equal(finding?.severity, 'violation')
+  assert.equal(finding?.reviewStatus, 'proven')
+  assert.match(finding?.technicalText ?? '', /article_8_6/)
+  assert.equal(finding?.sourceActivityIds?.includes('first'), true)
+  assert.equal(finding?.sourceActivityIds?.includes('second'), true)
+  assert.equal(finding?.id, `weekly-start:${end}`)
+})
+
+test('neznámý úsek před lhůtou šesti období není prokázané porušení', () => {
+  const end = Date.parse('2026-04-02T06:00:00.000Z')
+  const view = review([
+    activity('first', 'rest', end - 45 * HOUR, end),
+    activity('gap', 'unknown', end + HOUR, end + 2 * HOUR),
+    activity('tail', 'work', end + 2 * HOUR, NOW),
+  ])
+  const finding = view.findings.find((item) => item.id.startsWith('weekly-start:'))
+  assert.equal(finding?.severity, 'uncertain')
+  assert.equal(finding?.reviewStatus, 'needs_verification')
+})
+
 test('uzavřené dva zkrácené týdenní odpočinky nejsou prokázané porušení', () => {
   const first = Date.parse('2026-03-30T00:00:00.000Z')
   const second = Date.parse('2026-04-06T00:00:00.000Z')

@@ -347,6 +347,57 @@ function mondayOnOrBefore(utc: number): number {
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - daysFromMonday)
 }
 
+export type WeeklyStartDeadlineStatus = 'violation' | 'needs_verification'
+
+/** Právní čtení už sestavených hran `nextOnTime` / `nextAfterDeadline`. Nové odpočinky nehledá. */
+export type WeeklyStartDeadlineAssessment = {
+  previousStartUtc: number
+  previousEndUtc: number
+  latestStartUtc: number
+  nextStartUtc: number | null
+  nextEndUtc: number | null
+  sourceActivityIds: string[]
+  status: WeeklyStartDeadlineStatus
+  reason: string
+}
+
+export function assessWeeklyStartDeadlines(input: {
+  assignment: WeeklyAutomaticAssignment
+  recordEndUtc: number | null
+  unknownIntervals?: readonly { startUtc: number; endUtc: number }[]
+}): WeeklyStartDeadlineAssessment[] {
+  const unknowns = input.unknownIntervals ?? []
+  const byId = new Map(input.assignment.nodes.map((node) => [node.id, node]))
+  const assessments: WeeklyStartDeadlineAssessment[] = []
+  for (const node of input.assignment.nodes) {
+    if (node.nextOnTime.length > 0) continue
+    const next = node.nextAfterDeadline == null ? null : byId.get(node.nextAfterDeadline.toId) ?? null
+    const deadlineUtc = node.latestNextStartUtc
+    const closed = input.recordEndUtc != null && input.recordEndUtc >= (next?.startUtc ?? deadlineUtc)
+    if (!closed) continue
+    const hiddenRest = input.assignment.excludedByUnknown.some(
+      (item) => item.startUtc > node.endUtc && item.startUtc <= deadlineUtc,
+    )
+    const unknownGap = unknowns.some((interval) => interval.startUtc < (next?.startUtc ?? deadlineUtc) && interval.endUtc > node.endUtc)
+    const uncertain = node.ambiguous || next?.ambiguous === true || hiddenRest || unknownGap
+    assessments.push({
+      previousStartUtc: node.startUtc,
+      previousEndUtc: node.endUtc,
+      latestStartUtc: deadlineUtc,
+      nextStartUtc: next?.startUtc ?? null,
+      nextEndUtc: next?.endUtc ?? null,
+      sourceActivityIds: [...node.sourceActivityIds, ...(next?.sourceActivityIds ?? [])],
+      status: uncertain ? 'needs_verification' : 'violation',
+      reason: uncertain
+        ? 'Včasné zahájení dalšího týdenního odpočinku nelze z dostupných údajů uzavřít.'
+        : next == null
+          ? 'Po šesti 24hodinových obdobích od konce předchozího týdenního odpočinku žádný další týdenní odpočinek nezačal.'
+          : 'Další týdenní odpočinek začal až po šesti 24hodinových obdobích a včasná návaznost v záznamu není.',
+    })
+  }
+  return assessments
+}
+
 function unknownBetween(
   fromUtc: number,
   toUtc: number,

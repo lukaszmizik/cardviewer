@@ -13,7 +13,7 @@ import { findRestIntervals } from '../analysis/restIntervals.ts'
 import { assessWeeklyDrivingTime, WEEKLY_DRIVING_LIMIT_MS, type WeeklyDrivingStatus } from '../analysis/weeklyDrivingTime.ts'
 import { assessReducedDailyRestLimit, type ReducedDailyRestAssessment } from '../analysis/reducedDailyRestLimit.ts'
 import { classifyWeeklyRestCandidates } from '../analysis/weeklyRest.ts'
-import { buildWeeklyRestAssignment } from '../analysis/weeklyRestAssignment.ts'
+import { assessWeeklyStartDeadlines, buildWeeklyRestAssignment, type WeeklyAutomaticAssignment } from '../analysis/weeklyRestAssignment.ts'
 import { assessWeeklyRestCompensationTaken } from '../analysis/weeklyRestCompensationTaken.ts'
 import { activitiesUnderOutHypothesis, outScopeAffectsDrivingLimits, resolveOutOfScope, type OutOfScopeResolution } from '../analysis/outOfScopeResolver.ts'
 import { addDays, dayStartMs, formatClockDate, formatClockDateTime, formatWeekRange, weekStartMs, type ClockMode } from '../lib/clock.ts'
@@ -52,6 +52,8 @@ export type ComplianceFinding = {
   ferryException?: 'none' | 'possible'
   /** needs_verification se nepočítá mezi prokázaná porušení. */
   reviewStatus?: 'proven' | 'needs_verification'
+  /** Aktivity, z nichž nález vychází. U starších nálezů doby řízení nemusí být vyplněné. */
+  sourceActivityIds?: string[]
 }
 
 
@@ -161,8 +163,6 @@ export function buildComplianceReview(input: {
   const outContext: OutDrivingContext | null = authorizedActivities == null
     ? null
     : { activities, resolution: outResolution }
-  const consecutive = consecutivePeriods(prepared, record)
-
   collectBreaks(prepared.breaks, days, periodStartUtc, periodEndUtc, clockMode, findings, authorizedBreaks, outContext)
   collectDailyDriving(prepared.daily, days, periodStartUtc, periodEndUtc, clockMode, findings, authorizedDaily, outContext)
   collectWeekly(weekDriving, days, periodStartUtc, periodEndUtc, findings, authorizedWeekDriving, outContext)
@@ -193,12 +193,25 @@ export function buildComplianceReview(input: {
     clockMode,
     findings,
   )
+  const weeklyContext = weeklyRestContext(prepared, record)
+  const consecutive = weeklyContext.periods
   collectWeeklyRests(consecutive, record?.endUtc ?? null, days, periodStartUtc, periodEndUtc, findings)
+  collectWeeklyStartDeadlines(
+    assessWeeklyStartDeadlines({
+      assignment: weeklyContext.assignment,
+      recordEndUtc: record?.endUtc ?? null,
+      unknownIntervals: prepared.unknownIntervals,
+    }),
+    days,
+    periodStartUtc,
+    periodEndUtc,
+    findings,
+  )
   const compensation = compensationReport(prepared)
   collectCompensation(compensation, days, periodStartUtc, periodEndUtc, input.nowUtc, clockMode, findings)
   const watches = watchItems(compensation, prepared.daily, activities, input.nowUtc)
   const notes = explainDays(days, activities, record, prepared, todayStart, periodEndUtc, weekDriving, consecutive)
-  const unevaluatedNotes: string[] = []
+  const unevaluatedNotes = weeklyUnevaluatedNotes(prepared.candidates)
 
   const dayFindings = new Map<number, ComplianceFinding[]>()
   for (const finding of findings) {
@@ -752,18 +765,32 @@ function collectExtensions(
   }
 }
 
-function consecutivePeriods(prepared: ReturnType<typeof prepare>, record: { startUtc: number; endUtc: number } | null): ConsecutiveWeekPeriod[] {
+function weeklyRestContext(
+  prepared: ReturnType<typeof prepare>,
+  record: { startUtc: number; endUtc: number } | null,
+): { assignment: WeeklyAutomaticAssignment; periods: ConsecutiveWeekPeriod[] } {
   const visible = prepared.candidates.filter((candidate) => prepared.recordEndUtc == null || candidate.endUtc < prepared.recordEndUtc)
   const assignment = buildWeeklyRestAssignment({
     candidates: classifyWeeklyRestCandidates(visible),
     unknownIntervals: prepared.unknownIntervals,
     recordEndUtc: prepared.recordEndUtc,
   })
-  return assessConsecutiveWeeks({
+  return {
     assignment,
-    unknownIntervals: prepared.unknownIntervals,
-    recordSpan: record,
-  }).periods
+    periods: assessConsecutiveWeeks({
+      assignment,
+      unknownIntervals: prepared.unknownIntervals,
+      recordSpan: record,
+    }).periods,
+  }
+}
+
+function weeklyUnevaluatedNotes(candidates: ReturnType<typeof prepare>['candidates']): string[] {
+  const weeklyLength = 24 * HOUR_MS
+  if (!candidates.some((candidate) => candidate.established && candidate.durationMs >= weeklyLength)) return []
+  return [
+    'Zvláštní režim mezinárodní dopravy podle čl. 8 odst. 6a se nevyhodnocuje. Skladba dvou týdenních odpočinků proto není ani prokázané splnění, ani prokázané porušení.',
+  ]
 }
 
 function collectWeeklyRests(
@@ -799,6 +826,45 @@ function collectWeeklyRests(
       technicalText: `status ${period.status}`,
       meterPercent: null,
       meterOver: false,
+    })
+  }
+}
+
+function collectWeeklyStartDeadlines(
+  assessments: ReturnType<typeof assessWeeklyStartDeadlines>,
+  days: readonly DaySlot[],
+  periodStartUtc: number,
+  periodEndUtc: number,
+  findings: ComplianceFinding[],
+) {
+  for (const assessment of assessments) {
+    const endUtc = assessment.nextStartUtc ?? assessment.latestStartUtc
+    if (!overlaps(assessment.previousEndUtc, endUtc, periodStartUtc, periodEndUtc)) continue
+    const id = `weekly-start:${assessment.previousEndUtc}`
+    if (findings.some((finding) => finding.id === id)) continue
+    const mapDayUtc = placeDay(assessment.latestStartUtc, assessment.previousEndUtc, endUtc, days)
+    if (mapDayUtc == null) continue
+    const proven = assessment.status === 'violation'
+    const lateMs = assessment.nextStartUtc == null ? null : Math.max(0, assessment.nextStartUtc - assessment.latestStartUtc)
+    findings.push({
+      id,
+      severity: proven ? 'violation' : 'uncertain',
+      title: proven ? 'Pozdní zahájení týdenního odpočinku' : 'Zahájení týdenního odpočinku vyžaduje ověření',
+      intervalText: `${formatClockDateTime(assessment.previousEndUtc, 'utc')} – ${formatClockDateTime(endUtc, 'utc')} UTC`,
+      startUtc: assessment.previousEndUtc,
+      endUtc,
+      mapDayUtc,
+      actualText: assessment.nextStartUtc == null
+        ? 'Další týdenní odpočinek do lhůty nezačal'
+        : `Zahájení ${formatClockDateTime(assessment.nextStartUtc, 'utc')} UTC`,
+      limitText: `Nejpozději ${formatClockDateTime(assessment.latestStartUtc, 'utc')} UTC`,
+      deltaText: !proven ? 'Není prokázané porušení' : lateMs == null ? 'Lhůta uplynula' : `O ${durationText(lateMs)} později`,
+      explanation: `${assessment.reason} Čl. 8 odst. 6 nařízení (ES) č. 561/2006. Zvláštní režim mezinárodní dopravy se neposuzuje a tuto lhůtu šesti 24hodinových období neruší.`,
+      technicalText: `rule ec_561_2006_article_8_6, status ${assessment.status}, previous ${assessment.previousStartUtc}-${assessment.previousEndUtc}`,
+      meterPercent: null,
+      meterOver: proven,
+      reviewStatus: proven ? 'proven' : 'needs_verification',
+      sourceActivityIds: assessment.sourceActivityIds,
     })
   }
 }

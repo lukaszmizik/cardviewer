@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { analyzeDriverActivities } from '../src/analysis/analyzeDriverActivities.ts'
-import { buildWeeklyRestAssignment } from '../src/analysis/weeklyRestAssignment.ts'
+import { assessWeeklyStartDeadlines, buildWeeklyRestAssignment } from '../src/analysis/weeklyRestAssignment.ts'
 import type { WeeklyRestCandidate } from '../src/analysis/weeklyRest.ts'
 import type { Activity, DriverCardData } from '../src/types/tacho.ts'
 
@@ -73,6 +73,12 @@ test('hranice šesti 24hodinových období je včasná a minuta po ní je pozdn�
   assert.equal(late.nodes[0]?.nextOnTime.length, 0)
   assert.equal(late.nodes[0]?.nextAfterDeadline?.timing, 'after_deadline')
   assert.equal(late.nodes[0]?.nextAfterDeadline?.role, 'nearest_recorded_after_deadline')
+  const onTimeReading = assessWeeklyStartDeadlines({ assignment: onTime, recordEndUtc: end + 6 * DAY + 24 * HOUR })
+  assert.equal(onTimeReading.length, 0)
+  const lateReading = assessWeeklyStartDeadlines({ assignment: late, recordEndUtc: end + 6 * DAY + 60_000 + 24 * HOUR })
+  assert.equal(lateReading.length, 1)
+  assert.equal(lateReading[0]?.status, 'violation')
+  assert.equal(lateReading[0]?.nextStartUtc, end + 6 * DAY + 60_000)
   assert.equal(late.recommendation.status, 'suggested')
   assert.match(late.recommendation.status === 'suggested' ? late.recommendation.reason : '', /skutečném konci/)
 })
