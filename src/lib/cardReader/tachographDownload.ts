@@ -100,15 +100,37 @@ async function selectOk(session: CardChannel, apdu: Uint8Array): Promise<boolean
   return response.sw1 === 0x90 && response.sw2 === 0x00
 }
 
+type CardResponse = { data: Uint8Array; sw1: number; sw2: number }
+
+function statusWord(sw1: number, sw2: number): string {
+  const hex = (byte: number) => byte.toString(16).padStart(2, '0')
+  return `${hex(sw1)}${hex(sw2)}`
+}
+
+/** Le 0x00 znamená 256 B. Část karet to odmítne jako 6700 a chce kratší explicitní délku. */
+async function transmitRead(session: CardChannel, offset: number, le: number): Promise<{ response: CardResponse; used: number }> {
+  let response = await session.transmit(readBinary(offset, le))
+  if (response.sw1 === 0x6c) {
+    const exact = response.sw2 === 0 ? 256 : response.sw2
+    response = await session.transmit(readBinary(offset, exact))
+    return { response, used: exact }
+  }
+  return { response, used: le }
+}
+
 async function readSelectedFile(session: CardChannel): Promise<{ bytes: Uint8Array; denied: boolean }> {
   const parts: Uint8Array[] = []
   let offset = 0
+  let chunk = 256
   while (offset < MAX_EF_BYTES) {
-    const ask = Math.min(256, MAX_EF_BYTES - offset)
-    let response = await session.transmit(readBinary(offset, ask))
-    if (response.sw1 === 0x6c) {
-      response = await session.transmit(readBinary(offset, response.sw2))
+    let ask = Math.min(chunk, MAX_EF_BYTES - offset)
+    let { response, used } = await transmitRead(session, offset, ask)
+    while (response.sw1 === 0x67 && response.sw2 === 0x00 && ask > 1) {
+      ask = Math.max(1, Math.floor(ask / 2))
+      console.info(`[card-reader] SW 6700, čtu po ${ask} B`)
+      ;({ response, used } = await transmitRead(session, offset, ask))
     }
+    chunk = Math.min(chunk, used)
     if (response.sw1 === 0x69 && response.sw2 === 0x82 && parts.length === 0) {
       return { bytes: new Uint8Array(), denied: true }
     }
@@ -120,13 +142,13 @@ async function readSelectedFile(session: CardChannel): Promise<{ bytes: Uint8Arr
     if (response.sw1 !== 0x90 || response.sw2 !== 0x00) {
       throw new CardReaderError(
         'protocol',
-        `Čtení souboru karty selhalo (SW ${response.sw1.toString(16)}${response.sw2.toString(16)}).`,
+        `Čtení souboru karty selhalo (SW ${statusWord(response.sw1, response.sw2)}).`,
       )
     }
     if (response.data.length === 0) break
     parts.push(response.data)
     offset += response.data.length
-    const expected = ask >= 256 ? 256 : ask
+    const expected = used >= 256 ? 256 : used
     if (response.data.length < expected) break
   }
   return { bytes: concat(parts), denied: false }
