@@ -24,6 +24,7 @@
     "test:reduced-daily-rest": "node --experimental-strip-types --test scripts/verify-reduced-daily-rest-limit.ts",
     "test:out-mode-graph": "node --experimental-strip-types --test scripts/verify-out-mode-graph.ts",
     "test:out-of-scope": "node --experimental-strip-types --test scripts/verify-out-of-scope.ts",
+    "test:card-holder": "node --experimental-strip-types --test scripts/verify-card-holder.ts",
     "test:session-cache": "node --experimental-strip-types --test scripts/verify-session-cache.ts",
     "diagnose:work-periods": "tsx scripts/diagnose-work-periods.ts",
     "lint": "oxlint",

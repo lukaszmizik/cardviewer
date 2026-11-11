@@ -300,9 +300,12 @@ function formatDateCs(ms: number | null): string | undefined {
 
 function formatBirthDate(block?: DddIdentificationBlock): string | undefined {
   const birth = block?.driver_card_holder_identification?.card_holder_birth_date
-  if (!birth || birth.year == null || birth.month == null || birth.day == null) return undefined
+  const year = asNumber(birth?.year)
+  const month = asNumber(birth?.month)
+  const day = asNumber(birth?.day)
+  if (year == null || month == null || day == null || year <= 0 || month <= 0 || day <= 0) return undefined
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(birth.day)}.${pad(birth.month)}.${birth.year}`
+  return `${pad(day)}.${pad(month)}.${year}`
 }
 
 function nationCode(numeric?: number): string | undefined {
@@ -331,11 +334,49 @@ function isInternalCard(value: unknown): value is DriverCardData {
   )
 }
 
+function textPresent(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+/** Nulový gen2 objekt se v JSON objeví i když soubor blok neobsahuje. Platí jen blok s údaji. */
+function identificationHasData(block?: DddIdentificationBlock): boolean {
+  if (!block) return false
+  const id = block.card_identification
+  const holder = block.driver_card_holder_identification
+  const name = holder?.card_holder_name
+  const birthYear = asNumber(holder?.card_holder_birth_date?.year)
+  if (textPresent(id?.card_number)) return true
+  if (textPresent(name?.holder_surname) || textPresent(name?.holder_first_names)) return true
+  if (textPresent(id?.card_issuing_authority_name)) return true
+  if (id?.card_issuing_member_state != null && id.card_issuing_member_state !== 0) return true
+  if (id?.card_issue_date || id?.card_validity_begin || id?.card_expiry_date) return true
+  if (birthYear != null && birthYear > 0) return true
+  if (textPresent(holder?.card_holder_preferred_language)) return true
+  return false
+}
+
+function licenceHasData(block?: DddLicenceBlock): boolean {
+  if (!block) return false
+  if (textPresent(block.driving_licence_number)) return true
+  if (textPresent(block.driving_licence_issuing_authority)) return true
+  if (block.driving_licence_issuing_nation != null && block.driving_licence_issuing_nation !== 0) return true
+  return false
+}
+
 function pickIdentification(card: DddParserCardJson): DddIdentificationBlock | undefined {
-  return firstDefined(
-    card.card_identification_and_driver_card_holder_identification_2,
-    card.card_identification_and_driver_card_holder_identification_1,
-  )
+  const gen2 = card.card_identification_and_driver_card_holder_identification_2
+  const gen1 = card.card_identification_and_driver_card_holder_identification_1
+  if (identificationHasData(gen2)) return gen2
+  if (identificationHasData(gen1)) return gen1
+  return undefined
+}
+
+function pickLicence(card: DddParserCardJson): DddLicenceBlock | undefined {
+  const gen2 = card.card_driving_licence_information_2
+  const gen1 = card.card_driving_licence_information_1
+  if (licenceHasData(gen2)) return gen2
+  if (licenceHasData(gen1)) return gen1
+  return undefined
 }
 
 function decodeChangeWord(b0: number, b1: number): DddActivityChange {
@@ -1357,7 +1398,7 @@ export function mapDddParserJson(parserJson: unknown): DriverCardData {
   }
 
   const identification = pickIdentification(card)
-  const licence = firstDefined(card.card_driving_licence_information_2, card.card_driving_licence_information_1)
+  const licence = pickLicence(card)
   const holderBlock = identification?.driver_card_holder_identification
   const holder = holderBlock?.card_holder_name
   const id = identification?.card_identification
