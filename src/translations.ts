@@ -108,7 +108,7 @@ export const cs: ViewerTranslations = {
     deactivation: 'deaktivace',
     outModeStartMark: 'out začátek',
     outModeEndMark: 'out konec',
-    outModeLegendLine: 'Oranžová linka – režim OUT',
+    outModeLegendLine: 'režim OUT',
     legendRest45h: '≥ 45h',
     legendRest24h: '24h - 44h 59m',
     shiftSumLabel: 'Součet aktivit v probíhající směně:',
