@@ -3,6 +3,11 @@ import { timeToX } from './clock'
 
 export const DAYS_PER_WEEK = 7
 export const ROW_HEIGHT = 40
+/** Prostor pod aktivitami pro OUT pás, popisky a případný druhý řádek při překryvu s manuálním zadáním. */
+export const OUT_GRAPH_ROW_EXTRA = 14
+export const OUT_GRAPH_DUAL_TRACK_EXTRA = 5
+/** Stejná tloušťka jako fialové podtržení manuálního zadání ve grafu. */
+export const MANUAL_ENTRY_UNDERLINE_WIDTH = 3
 /** Tloušťka odpočinku v týdenním grafu (SVG jednotky). */
 export const WEEK_REST_STROKE = 16
 /** Tloušťka zelené čáry odpočinku v denním detailu. */

@@ -46,6 +46,9 @@ import {
   MARGIN_TOP,
   QUARTER_TICK_LEN,
   ROW_HEIGHT,
+  OUT_GRAPH_DUAL_TRACK_EXTRA,
+  OUT_GRAPH_ROW_EXTRA,
+  MANUAL_ENTRY_UNDERLINE_WIDTH,
   TICK_LEN,
   chartX,
   clipChartX,
@@ -69,8 +72,8 @@ import { DayGraphPan } from './components/DayGraphPan'
 import { GraphSwipeNav } from './components/GraphSwipeNav'
 import { CardCalendar } from './components/CardCalendar'
 import { googleMapsUrl } from './lib/mapsLink'
-import { OUT_MODE_GRAPH_COLOR, buildOutModeGraphModel, latestActivityEndMs } from './lib/outModeGraph'
-import { renderOutModeGraphLayer } from './components/outModeGraphLayer'
+import { buildOutModeGraphModel, dayNeedsDualOutTrack, latestActivityEndMs } from './lib/outModeGraph'
+import { outModeHatchPatternDef, renderOutModeGraphLayer } from './components/outModeGraphLayer'
 import type { DriverCardData } from './types/tacho'
 
 function markerTimeMs(
@@ -577,7 +580,12 @@ function WorkWeekGraphLegend({
       </span>
       <span className="work-week-graph-legend-item">
         <svg width={38} height={18} className="work-week-graph-legend-sample" viewBox="0 0 22 11" preserveAspectRatio="xMidYMid meet">
-          <line x1={0} y1={2} x2={22} y2={2} stroke={OUT_MODE_GRAPH_COLOR} strokeWidth={4} strokeLinecap="butt" />
+          <defs>
+            <pattern id="out-legend-hatch" patternUnits="userSpaceOnUse" width="4" height="4">
+              <line x1="0" y1="0" x2="4" y2="4" stroke="rgba(0,0,0,0.42)" strokeWidth="0.75" />
+            </pattern>
+          </defs>
+          <rect x={0} y={4} width={22} height={3} fill="url(#out-legend-hatch)" stroke="rgba(0,0,0,0.42)" strokeWidth="0.35" />
         </svg>
         <span className="work-week-graph-legend-label">{t.workWeek.outModeLegendLine}</span>
       </span>
@@ -673,7 +681,7 @@ function GraphBlock({
   const axisFontSize = lx(11)
   const chartW = chartWidthProp ?? CHART_WIDTH
   const labelW = isDayDetail ? DAY_DETAIL_LABEL_WIDTH : LABEL_WIDTH
-  const rowH = rowHeightProp ?? (mobileWeek ? ROW_HEIGHT * MOBILE_WEEK_SCALE : ROW_HEIGHT)
+  const baseRowH = rowHeightProp ?? (mobileWeek ? ROW_HEIGHT * MOBILE_WEEK_SCALE : ROW_HEIGHT)
   const zoomDomain = zoomDomainProp ?? DEFAULT_ZOOM
   const dayMap = new Map<number, DayData>()
   for (const day of days) {
@@ -708,6 +716,16 @@ function GraphBlock({
     (outModeEvents.length > 0 ? Math.max(...outModeEvents.map((event) => event.minuteStartUtc)) : null)
   const outModeModel = buildOutModeGraphModel(outModeEvents, recordEndUtc)
 
+  const dualOutTrack =
+    outModeEvents.length > 0 &&
+    visibleDays.some((day) => dayNeedsDualOutTrack(outModeModel, day.dateUtc, day.activities, clockMode))
+  const outRowPad =
+    outModeEvents.length > 0
+      ? lx(OUT_GRAPH_ROW_EXTRA) +
+        (dualOutTrack ? sx(MANUAL_ENTRY_UNDERLINE_WIDTH) + lx(OUT_GRAPH_DUAL_TRACK_EXTRA) : 0)
+      : 0
+  const rowH = baseRowH + outRowPad
+
   const workShiftRanges = getWorkShiftRanges(countryMarkers, clockMode)
 
   const height = marginTop + visibleDays.length * rowH + marginBottom
@@ -737,6 +755,7 @@ function GraphBlock({
           <pattern id={`crew-mode-hatch-${blockId}`} patternUnits="userSpaceOnUse" width={lx(6)} height={lx(6)}>
             <line x1="0" y1="0" x2={lx(6)} y2={lx(6)} stroke="rgba(100, 149, 237, 0.18)" strokeWidth={lx(1)} />
           </pattern>
+          {outModeHatchPatternDef(blockId, lx)}
           <clipPath id={`chart-clip-${blockId}`}>
             <rect x={labelW} y={marginTop} width={chartW} height={visibleDays.length * rowH} />
           </clipPath>
@@ -833,7 +852,7 @@ function GraphBlock({
                 const maxStrokeHalf = sx(8)
                 const rowCenter = yBase + rowH / 2
                 const sortedActivities = [...day.activities].sort((a, b) => a.startMs - b.startMs)
-                const MANUAL_UNDERLINE_WIDTH = sx(3)
+                const MANUAL_UNDERLINE_WIDTH = sx(MANUAL_ENTRY_UNDERLINE_WIDTH)
                 const CREW_UNDERLINE = '#25D366'
                 const CREW_UNDERLINE_WIDTH = sx(3)
                 return sortedActivities.map((act, i) => {
@@ -873,8 +892,10 @@ function GraphBlock({
                 })
               })()}
               {renderOutModeGraphLayer({
+                blockId,
                 model: outModeModel,
                 dayStart,
+                dayActivities: day.activities,
                 yBase,
                 rowH,
                 labelW,
@@ -884,6 +905,9 @@ function GraphBlock({
                 lx,
                 sx,
                 xAt,
+                markerXs: getMarkersOnDay(visibleMarkers, day.dateUtc, clockMode).map((marker) =>
+                  xAt(dayStart, markerTimeMs(marker, clockMode)),
+                ),
               })}
               {getMarkersOnDay(visibleMarkers, day.dateUtc, clockMode).map((marker, i) => {
                 const ms = markerTimeMs(marker, clockMode)

@@ -8,11 +8,10 @@ function formatOutModeDurationMinutes(totalMinutes: number): string {
   return `${h}:${String(m).padStart(2, '0')}`
 }
 
-export const OUT_MODE_GRAPH_COLOR = '#E88A16'
-/** Cílová výška pásu OUT ve viewBox jednotkách (škáluje se přes lx v grafu). */
-export const OUT_MODE_BAR_HEIGHT = 6
-/** Minimální šířka intervalu (viewBox), aby se zobrazil text „OUT“. */
-export const OUT_MODE_LABEL_MIN_WIDTH = 34
+/** Barva textu ▶ OUT / ◀ OUT */
+export const OUT_MODE_LABEL_COLOR = '#111'
+/** Šrafování pásu OUT (SVG pattern stroke). */
+export const OUT_MODE_HATCH_STROKE = 'rgba(0, 0, 0, 0.42)'
 /** Neviditelná interaktivní oblast – min. výška pro klepnutí. */
 export const OUT_MODE_TOUCH_MIN_HEIGHT = 14
 
@@ -145,6 +144,65 @@ export function formatOutModeTimeRange(startMs: number, endMs: number, clockMode
   }
   if (sameDay) return `${timeOnly(startMs)}–${timeOnly(endMs)}`
   return `${formatClockDateTime(startMs, clockMode)}–${formatClockDateTime(endMs, clockMode)}`
+}
+
+export type OutSlicePart = {
+  startMs: number
+  endMs: number
+  manualRow: boolean
+}
+
+export function partitionOutSliceByManualOverlap(
+  sliceStartMs: number,
+  sliceEndMs: number,
+  manuals: readonly { startMs: number; endMs: number }[],
+): OutSlicePart[] {
+  const bounds = new Set<number>([sliceStartMs, sliceEndMs])
+  for (const manual of manuals) {
+    if (manual.endMs <= sliceStartMs || manual.startMs >= sliceEndMs) continue
+    bounds.add(Math.max(sliceStartMs, manual.startMs))
+    bounds.add(Math.min(sliceEndMs, manual.endMs))
+  }
+  const points = [...bounds].sort((a, b) => a - b)
+  const raw: OutSlicePart[] = []
+  for (let i = 0; i < points.length - 1; i++) {
+    const startMs = points[i]!
+    const endMs = points[i + 1]!
+    if (startMs >= endMs) continue
+    const mid = startMs + (endMs - startMs) / 2
+    const manualRow = manuals.some((m) => mid >= m.startMs && mid < m.endMs)
+    raw.push({ startMs, endMs, manualRow })
+  }
+  const merged: OutSlicePart[] = []
+  for (const part of raw) {
+    const prev = merged[merged.length - 1]
+    if (prev && prev.manualRow === part.manualRow && prev.endMs === part.startMs) {
+      prev.endMs = part.endMs
+    } else {
+      merged.push({ ...part })
+    }
+  }
+  return merged
+}
+
+export function dayNeedsDualOutTrack(
+  model: OutModeGraphModel,
+  dayStart: number,
+  dayActivities: readonly { isManualEntry?: boolean; startMs: number; endMs: number }[],
+  clockMode: ClockMode,
+): boolean {
+  const manuals = dayActivities
+    .filter((a) => a.isManualEntry)
+    .map((a) => ({ startMs: a.startMs, endMs: a.endMs }))
+  if (manuals.length === 0) return false
+  for (const range of model.ranges) {
+    const slice = sliceOutRangeForDay(range, dayStart, clockMode)
+    if (!slice) continue
+    if (partitionOutSliceByManualOverlap(slice.startMs, slice.endMs, manuals).some((p) => p.manualRow)) {
+      return true
+    }
+  }
+  return false
 }
 
 export function latestActivityEndMs(days: readonly { activities: readonly { endMs: number }[] }[]): number | null {

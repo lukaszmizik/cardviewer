@@ -8,6 +8,7 @@ import {
   formatOutModeTooltip,
   sliceOutRangeForDay,
 } from '../src/lib/outModeGraph.ts'
+import { partitionOutSliceByManualOverlap } from '../src/lib/outModeGraph.ts'
 
 const MIN = 60_000
 const DAY0 = Date.parse('2026-04-10T00:00:00.000Z')
@@ -85,6 +86,17 @@ test('tooltip obsahuje povinné řádky', () => {
   assert.match(tooltip, /Tachograf byl v režimu mimo působnost/)
   assert.match(tooltip, /Oprávněnost použití OUT/)
   assert.match(tooltip, /Délka: 0:30/)
+})
+
+test('překryv OUT s manuálním zadáním rozdělí pás na dva řádky', () => {
+  const sliceStart = DAY0 + 60 * MIN
+  const sliceEnd = DAY0 + 180 * MIN
+  const manuals = [{ startMs: DAY0 + 90 * MIN, endMs: DAY0 + 120 * MIN }]
+  const parts = partitionOutSliceByManualOverlap(sliceStart, sliceEnd, manuals)
+  assert.equal(parts.length, 3)
+  assert.equal(parts[0]!.manualRow, false)
+  assert.equal(parts[1]!.manualRow, true)
+  assert.equal(parts[2]!.manualRow, false)
 })
 
 test('interval přes půlnoc zobrazí datum v čase', () => {
