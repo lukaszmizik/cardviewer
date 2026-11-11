@@ -834,12 +834,12 @@ function GraphBlock({
                 const rowCenter = yBase + rowH / 2
                 const drivingStroke = sx(ACTIVITY_STYLE.řízení.strokeWidth)
                 const drivingTop = rowCenter + maxStrokeHalf - drivingStroke
-                const lineY = drivingTop - 5
+                const lineY = drivingTop - 5 - (isDayDetail ? 20 : 0)
                 const barW = Math.max(1, span.x2 - span.x1)
                 const mid = span.x1 + barW / 2
                 const label = String(shift.index)
-                const badgeH = lx(11)
-                const badgeW = Math.max(lx(14), lx(6.5) * label.length + lx(8))
+                const badgeH = lx(9)
+                const badgeW = Math.max(lx(12), lx(5.5) * label.length + lx(6))
                 const gap = Math.min(barW, badgeW)
                 const leftEnd = mid - gap / 2
                 const rightStart = mid + gap / 2
@@ -866,7 +866,7 @@ function GraphBlock({
                       textAnchor="middle"
                       dominantBaseline="central"
                       fill="#fff"
-                      fontSize={lx(8)}
+                      fontSize={lx(6)}
                       fontFamily="sans-serif"
                       fontWeight={700}
                     >
