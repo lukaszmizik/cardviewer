@@ -1000,9 +1000,13 @@ function collectGn7DailyRests(
     covered.add(period.startUtc)
     const ownHits = ferries.filter((candidate) => ferryMayRemove(candidate, period.startUtc, period.endUtc))
     const ownFerry = ownHits.length > 0
+    const previous = index > 0 ? periods[index - 1]! : null
+    if (previous != null && previous.nextAnchorUtc !== period.startUtc) {
+      reductionCause = null
+      ferryAnchorOpen = false
+    }
     const inheritedFerry = ferryAnchorOpen
     const causeNow = reductionCause
-    const previous = index > 0 ? periods[index - 1]! : null
     const substitute = previous?.status === 'consecutive_reference' || previous?.status === 'crossing_rest_remains_insufficient'
     const skipKind = period.status === 'qualifying_rest' || period.status === 'crossing_rest_becomes_qualifying' || period.status === 'history_incomplete'
     const inView = overlaps(period.startUtc, period.endUtc, periodStartUtc, periodEndUtc)

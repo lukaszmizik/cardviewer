@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { buildComplianceDiagnostic, buildComplianceReview } from '../src/components/complianceReview.ts'
-import type { Activity, ActivityKind } from '../src/types/tacho.ts'
+import { buildWorkPeriodOverview } from '../src/presentation/workPeriodOverview.ts'
+import type { Activity, ActivityKind, DriverCardData } from '../src/types/tacho.ts'
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
@@ -338,4 +339,98 @@ test('historie delší než rok se skládá po měsících', () => {
   assert.equal(view.buckets.some((bucket) => bucket.label === '12.2025'), true)
   assert.equal(view.buckets.some((bucket) => bucket.label === '01.2026'), true)
   assert.equal(view.days.at(-1)?.dayStartUtc, TODAY)
+})
+
+const LONG_PERIOD = (iso: string) => Date.parse(iso)
+
+function clockActivity(id: string, kind: ActivityKind, start: string, end: string, extra: Partial<Activity> = {}): Activity {
+  const startUtc = LONG_PERIOD(start)
+  const endUtc = LONG_PERIOD(end)
+  return { id, kind, startUtc, endUtc, durationMinutes: Math.round((endUtc - startUtc) / 60_000), slot: 1, ...extra }
+}
+
+function period114Timeline(extra: Activity[] = []): Activity[] {
+  return [
+    clockActivity('opening-rest', 'rest', '2026-07-31T00:00:00Z', '2026-08-01T12:00:00Z'),
+    clockActivity('early-d0', 'driving', '2026-08-01T12:00:00Z', '2026-08-01T13:00:00Z'),
+    clockActivity('early-r3', 'rest', '2026-08-01T13:00:00Z', '2026-08-01T16:00:00Z'),
+    clockActivity('early-d1', 'driving', '2026-08-01T16:00:00Z', '2026-08-02T08:00:00Z'),
+    clockActivity('early-r9', 'rest', '2026-08-02T08:00:00Z', '2026-08-02T18:00:00Z'),
+    clockActivity('early-d2', 'driving', '2026-08-02T18:00:00Z', '2026-08-13T00:00:00Z'),
+    clockActivity('anchor-rest', 'rest', '2026-08-13T00:00:00Z', '2026-08-14T11:01:00Z'),
+    clockActivity('shift-d1', 'driving', '2026-08-14T11:01:00Z', '2026-08-15T22:35:00Z'),
+    clockActivity('short-rest', 'rest', '2026-08-15T22:35:00Z', '2026-08-16T05:48:00Z'),
+    clockActivity('shift-d2', 'driving', '2026-08-16T05:48:00Z', '2026-08-16T13:02:00Z'),
+    clockActivity('long-rest', 'rest', '2026-08-16T13:02:00Z', '2026-08-18T11:34:00Z'),
+    clockActivity('after', 'driving', '2026-08-18T11:34:00Z', '2026-08-18T14:00:00Z'),
+    ...extra,
+  ]
+}
+
+test('50h období bez odpočinku 9 h má dvě prokázaná denní okna a zachová přestávku 4:30', () => {
+  const activities = period114Timeline()
+  const view = buildComplianceReview({
+    activities,
+    nowUtc: LONG_PERIOD('2026-08-20T12:00:00Z'),
+    clockMode: 'utc',
+    period: { mode: 'history' },
+  })
+  const provenDaily = view.findings.filter((finding) => finding.id.startsWith('gn7-daily:') && finding.severity === 'violation')
+  assert.deepEqual(provenDaily.map((finding) => finding.startUtc).sort((a, b) => a - b), [
+    LONG_PERIOD('2026-08-14T11:01:00Z'),
+    LONG_PERIOD('2026-08-15T11:01:00Z'),
+  ])
+  assert.equal(provenDaily.every((finding) => finding.reviewStatus === 'proven'), true)
+  assert.equal(view.findings.some((finding) => finding.title === 'Přestávka v řízení' && finding.severity === 'violation'), true)
+  const card = {
+    cardNumber: '',
+    firstName: '',
+    surname: '',
+    lastWithdrawalUtc: null,
+    activities,
+    locations: [],
+    violations: [],
+  } as DriverCardData
+  const period = buildWorkPeriodOverview(card).periods.find((item) => item.startUtc === LONG_PERIOD('2026-08-14T11:01:00Z'))
+  assert.equal(period?.endUtc, LONG_PERIOD('2026-08-16T13:02:00Z'))
+  assert.equal(period?.durationMs, 50 * HOUR + 60_000)
+})
+
+test('neznámý úsek v 50h období nedělá z denního odpočinku prokázané porušení', () => {
+  const view = buildComplianceReview({
+    activities: period114Timeline([
+      clockActivity('gap', 'unknown', '2026-08-14T12:00:00Z', '2026-08-14T13:00:00Z'),
+    ]),
+    nowUtc: LONG_PERIOD('2026-08-20T12:00:00Z'),
+    clockMode: 'utc',
+    period: { mode: 'history' },
+  })
+  const provenInside = view.findings.filter((finding) =>
+    finding.id.startsWith('gn7-daily:')
+    && finding.severity === 'violation'
+    && finding.startUtc >= LONG_PERIOD('2026-08-14T11:01:00Z')
+    && finding.startUtc < LONG_PERIOD('2026-08-16T13:02:00Z'),
+  )
+  assert.equal(provenInside.length, 0)
+})
+
+test('72h bez kvalifikovaného odpočinku vytvoří tři denní nálezy', () => {
+  const start = LONG_PERIOD('2026-05-01T00:00:00Z')
+  const view = buildComplianceReview({
+    activities: [
+      clockActivity('before', 'rest', '2026-04-30T00:00:00Z', '2026-05-01T00:00:00Z'),
+      clockActivity('drive', 'driving', '2026-05-01T00:00:00Z', '2026-05-04T00:00:00Z'),
+      clockActivity('rest', 'rest', '2026-05-04T00:00:00Z', '2026-05-04T12:00:00Z'),
+      clockActivity('tail', 'driving', '2026-05-04T12:00:00Z', '2026-05-04T16:00:00Z'),
+    ],
+    nowUtc: LONG_PERIOD('2026-05-06T00:00:00Z'),
+    clockMode: 'utc',
+    period: { mode: 'history' },
+  })
+  const proven = view.findings
+    .filter((finding) => finding.id.startsWith('gn7-daily:') && finding.severity === 'violation')
+    .map((finding) => finding.startUtc - start)
+    .sort((a, b) => a - b)
+  assert.deepEqual(proven, [0, DAY, 2 * DAY])
+  assert.equal(view.findings.some((finding) => finding.title === 'Přestávka v řízení' && finding.severity === 'violation'), true)
 })

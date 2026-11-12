@@ -10,7 +10,9 @@ const MINUTE_MS = 60 * 1000
 const THREE_HOURS = 3 * HOUR_MS
 const NINE_HOURS = 9 * HOUR_MS
 const ELEVEN_HOURS = 11 * HOUR_MS
-const MAX_PERIODS = 48
+const DAY_MS = 24 * HOUR_MS
+/** Strop, aby poškozený záznam neroztočil nekonečný řetězec. Není to délka karty. */
+const MAX_PERIODS = 4096
 
 /**
  * Referenční období podle TRACE II, Annex 1, Guidance Note 7.
@@ -117,20 +119,51 @@ export function buildGn7ControlPeriods(input: BuildGn7ControlPeriodsInput): Gn7C
   const unknowns = unknownIntervals(input.activities)
   const recordEndUtc = input.recordEndUtc ?? latestEnd(input.activities)
   const periods: Gn7ControlPeriod[] = []
+  const limit = periodLimit(input.anchorUtc, recordEndUtc)
   let anchor = input.anchorUtc
 
-  for (let index = 0; index < MAX_PERIODS; index += 1) {
+  for (let index = 0; index < limit; index += 1) {
     const period = evaluatePeriod(anchor, input.activities, candidates, unknowns, recordEndUtc)
-    const canContinue = period.nextAnchorUtc != null
+    const linked = period.nextAnchorUtc != null
       && period.nextAnchorUtc > anchor
       && (recordEndUtc == null || period.nextAnchorUtc < recordEndUtc)
-    if (index === MAX_PERIODS - 1 && canContinue) period.analysisTruncated = true
+    const next = linked
+      ? period.nextAnchorUtc
+      : period.nextAnchorUtc == null
+        ? nextEstablishedRegularEnd(candidates, anchor, unknowns, recordEndUtc)
+        : null
+    const moreRemains = next != null && (recordEndUtc == null || next < recordEndUtc)
+    if (index === limit - 1 && moreRemains) period.analysisTruncated = true
     periods.push(period)
-    if (!canContinue) break
-    anchor = period.nextAnchorUtc!
+    if (!moreRemains || next == null) break
+    anchor = next
   }
 
   return periods
+}
+
+/** Nejistota v jednom okně nesmí zrušit pozdější období, která mají vlastní prokázanou 11h kotvu. */
+function nextEstablishedRegularEnd(
+  candidates: readonly RestCandidate[],
+  afterUtc: number,
+  unknowns: readonly { startUtc: number; endUtc: number }[],
+  recordEndUtc: number | null,
+): number | null {
+  let best: number | null = null
+  for (const candidate of candidates) {
+    if (!candidate.established || candidate.durationMs < ELEVEN_HOURS) continue
+    if (candidate.endUtc <= afterUtc) continue
+    if (recordEndUtc != null && candidate.endUtc >= recordEndUtc) continue
+    if (intersects(candidate.startUtc, candidate.endUtc, unknowns)) continue
+    if (best == null || candidate.endUtc < best) best = candidate.endUtc
+  }
+  return best
+}
+
+function periodLimit(anchorUtc: number, recordEndUtc: number | null): number {
+  if (recordEndUtc == null || recordEndUtc <= anchorUtc) return MAX_PERIODS
+  const days = Math.ceil((recordEndUtc - anchorUtc) / DAY_MS) + 2
+  return Math.min(MAX_PERIODS, Math.max(1, days))
 }
 
 function evaluatePeriod(

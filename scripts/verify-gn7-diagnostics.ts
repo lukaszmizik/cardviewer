@@ -99,7 +99,7 @@ test('překryv oken nemění časy', () => {
   assert.match(first.limitation ?? '', /překrývá/)
 })
 
-test('ořezaná historie není potvrzený podklad', () => {
+test('padesátidenní záznam zůstane v řetězci a není ořezaný', () => {
   const feed = buildGn7DiagnosticFeed({
     anchorUtc: 0,
     activities: [{
@@ -111,13 +111,13 @@ test('ořezaná historie není potvrzený podklad', () => {
       slot: 1,
     }],
   })
-  assert.equal(feed.analysisTruncated, true)
-  assert.equal(feed.periods.length, 48)
-  const last = feed.periods[47]!
-  assert.equal(last.analysisTruncated, true)
-  assert.equal(last.usableForGn7Diagnostics, false)
-  assert.equal(last.confirmation, 'unconfirmed')
+  assert.equal(feed.analysisTruncated, false)
+  assert.equal(feed.periods.length, 50)
+  const last = feed.periods[49]!
+  assert.equal(last.analysisTruncated, false)
+  assert.equal(last.usableForGn7Diagnostics, true)
+  assert.equal(last.confirmation, 'confirmed')
   assert.equal(last.usableAsWorkPeriodBoundary, false)
-  assert.equal(last.nextAnchorUtc, 48 * 24 * H)
-  assert.match(last.limitation ?? '', /ořezan/)
+  assert.equal(last.nextAnchorUtc, 50 * 24 * H)
+  assert.match(last.limitation ?? '', /pracovní doby/)
 })

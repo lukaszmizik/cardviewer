@@ -265,7 +265,7 @@ test('nezávislý přestupek v řízení zůstává potvrzený vedle nejistého 
   assert.equal(restBreak?.severity, 'violation')
 })
 
-test('ořezané období GN7 není potvrzený přestupek a dřívější zůstává', () => {
+test('úplný padesátidenní záznam se neořízne a nedostatek odpočinku zůstane prokázaný', () => {
   const start = NOW - 50 * 24 * H
   const findings = gn7([
     {
@@ -287,11 +287,9 @@ test('ořezané období GN7 není potvrzený přestupek a dřívější zůstáv
   ])
   const truncated = findings.filter((finding) => /ořezaný/.test(finding.explanation))
   const proven = findings.filter((finding) => finding.reviewStatus === 'proven')
-  assert.equal(truncated.length, 1)
-  assert.equal(truncated[0]!.severity, 'uncertain')
-  assert.equal(truncated[0]!.reviewStatus, 'needs_verification')
-  assert.equal(proven.length > 0, true)
-  assert.equal(proven.some((finding) => /ořezaný/.test(finding.explanation)), false)
+  assert.equal(truncated.length, 0)
+  assert.equal(proven.length > 1, true)
+  assert.equal(proven.every((finding) => finding.severity === 'violation'), true)
 })
 
 test('neověřený výchozí 9h odpočinek nepotvrdí navazující nedostatek', () => {

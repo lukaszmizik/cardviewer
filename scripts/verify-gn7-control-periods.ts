@@ -304,15 +304,15 @@ test('přerušení osádky ponechá 24hodinové okno', () => {
   assert.equal(periods[0]!.crewRecord, 'crew_record_interrupted')
 })
 
-test('víc než 48 období je označené jako neúplný výpočet', () => {
+test('řetězec pokryje celé období záznamu a nezastaví se po 48 dnech', () => {
   const periods = buildGn7ControlPeriods({
     anchorUtc: 0,
     activities: [act('d', 'driving', 0, 50 * 24)],
   })
-  assert.equal(periods.length, 48)
-  assert.equal(periods[47]!.analysisTruncated, true)
-  assert.equal(periods[46]!.analysisTruncated, false)
-  assert.equal(periods[47]!.nextAnchorUtc, 48 * 24 * H)
+  assert.equal(periods.length, 50)
+  assert.equal(periods[49]!.analysisTruncated, false)
+  assert.equal(periods[49]!.startUtc, 49 * 24 * H)
+  assert.equal(periods[49]!.nextAnchorUtc, 50 * 24 * H)
 })
 
 test('dělený 3+9 přes hranici okna zůstane nejistý', () => {
@@ -354,4 +354,78 @@ test('neznámý úsek a neúplná historie nestanoví další kotvu', () => {
   assert.equal(history[0]!.status, 'history_incomplete')
   assert.equal(history[0]!.dataCompleteness, 'history_incomplete')
   assert.equal(history[0]!.nextAnchorUtc, null)
+})
+
+const CASE = (iso: string) => Date.parse(iso)
+
+function clock(id: string, kind: Activity['kind'], start: string, end: string): Activity {
+  const startUtc = CASE(start)
+  const endUtc = CASE(end)
+  return {
+    id,
+    kind,
+    startUtc,
+    endUtc,
+    durationMinutes: Math.round((endUtc - startUtc) / MIN),
+    slot: 1,
+  }
+}
+
+/** Časová osa období #114. Časy jsou zadané údaje, bez převodu na místní pásmo. */
+function period114Activities(extra: Activity[] = []): Activity[] {
+  return [
+    clock('early-d0', 'driving', '2026-08-01T00:00:00Z', '2026-08-01T01:00:00Z'),
+    clock('early-r3', 'rest', '2026-08-01T01:00:00Z', '2026-08-01T04:00:00Z'),
+    clock('early-d1', 'driving', '2026-08-01T04:00:00Z', '2026-08-01T20:00:00Z'),
+    clock('early-r9', 'rest', '2026-08-01T20:00:00Z', '2026-08-02T05:00:00Z'),
+    clock('early-d2', 'driving', '2026-08-02T05:00:00Z', '2026-08-13T00:00:00Z'),
+    clock('anchor-rest', 'rest', '2026-08-13T00:00:00Z', '2026-08-14T11:01:00Z'),
+    clock('shift-d1', 'driving', '2026-08-14T11:01:00Z', '2026-08-15T22:35:00Z'),
+    clock('short-rest', 'rest', '2026-08-15T22:35:00Z', '2026-08-16T05:48:00Z'),
+    clock('shift-d2', 'driving', '2026-08-16T05:48:00Z', '2026-08-16T13:02:00Z'),
+    clock('long-rest', 'rest', '2026-08-16T13:02:00Z', '2026-08-18T11:34:00Z'),
+    clock('after', 'driving', '2026-08-18T11:34:00Z', '2026-08-18T14:00:00Z'),
+    ...extra,
+  ]
+}
+
+test('dřívější nejistota 3+9 nezastaví dvě nesplněná okna 50h období', () => {
+  const periods = buildGn7ControlPeriods({
+    anchorUtc: CASE('2026-08-01T00:00:00Z'),
+    activities: period114Activities(),
+  })
+  assert.equal(periods[0]!.status, 'insufficient_data')
+  assert.equal(periods[0]!.nextAnchorUtc, null)
+  const first = periods.find((period) => period.startUtc === CASE('2026-08-14T11:01:00Z'))
+  const second = periods.find((period) => period.startUtc === CASE('2026-08-15T11:01:00Z'))
+  const third = periods.find((period) => period.startUtc === CASE('2026-08-16T11:01:00Z'))
+  assert.ok(first != null && second != null && third != null)
+  assert.equal(first.status, 'consecutive_reference')
+  assert.equal(first.endUtc, CASE('2026-08-15T11:01:00Z'))
+  assert.equal(first.qualifying.length, 0)
+  assert.equal(second.status, 'consecutive_reference')
+  assert.equal(second.endUtc, CASE('2026-08-16T11:01:00Z'))
+  assert.equal(second.qualifying.length, 0)
+  assert.equal(second.rests.some((rest) => rest.durationMinutes === 7 * 60 + 13), true)
+  assert.equal(third.status, 'qualifying_rest')
+  assert.equal(third.qualifying[0]?.variant, 'continuous_regular')
+  assert.equal(third.nextAnchorUtc, CASE('2026-08-18T11:34:00Z'))
+})
+
+test('tři po sobě jdoucí nesplněná denní okna zůstanou v řetězci', () => {
+  const start = CASE('2026-05-01T00:00:00Z')
+  const periods = buildGn7ControlPeriods({
+    anchorUtc: start,
+    activities: [
+      clock('long-drive', 'driving', '2026-05-01T00:00:00Z', '2026-05-04T00:00:00Z'),
+      clock('later-rest', 'rest', '2026-05-04T00:00:00Z', '2026-05-04T11:00:00Z'),
+      clock('tail', 'driving', '2026-05-04T11:00:00Z', '2026-05-04T14:00:00Z'),
+    ],
+  })
+  assert.deepEqual(periods.slice(0, 4).map((period) => [period.startUtc - start, period.status]), [
+    [0, 'consecutive_reference'],
+    [24 * H, 'consecutive_reference'],
+    [48 * H, 'consecutive_reference'],
+    [72 * H, 'qualifying_rest'],
+  ])
 })
