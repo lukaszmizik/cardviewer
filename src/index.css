@@ -707,7 +707,7 @@ body {
 
 .compliance-card { border-left: 4px solid #94a3b8; }
 .compliance-card-violation { border-left-color: #b91c1c; }
-.compliance-card-uncertain { border-left-color: #c2410c; }
+.compliance-card-uncertain { border-left-color: #ea580c; background: #fff7ed; }
 .compliance-card-partial { border-left-color: #ca8a04; }
 .compliance-card-confirmed { border-left-color: #15803d; }
 .compliance-card-conditional { border-left-color: #ca8a04; background: transparent; }
@@ -726,7 +726,7 @@ body {
 }
 
 .compliance-status-violation { color: #b91c1c; }
-.compliance-status-verify { color: #c2410c; }
+.compliance-status-verify { color: #ea580c; }
 
 .compliance-out-line {
   margin: 2px 0;
@@ -750,7 +750,7 @@ body {
 }
 
 .compliance-dot-violation { background: #b91c1c; }
-.compliance-dot-uncertain { background: #c2410c; }
+.compliance-dot-uncertain { background: #ea580c; }
 .compliance-dot-partial { background: #ca8a04; }
 .compliance-dot-conditional { background: #ca8a04; }
 .compliance-dot-confirmed { background: #15803d; }

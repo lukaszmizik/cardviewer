@@ -301,6 +301,7 @@ function breakCardTone(finding: ComplianceFinding): 'violation' | 'uncertain' | 
   const recognized = finding.technicalText.includes('status within_limit')
     && finding.technicalText.includes('evidence manual_crew_confirmation')
   if (recognized) return 'confirmed'
+  if (finding.reviewStatus === 'needs_verification') return 'uncertain'
   if (finding.severity === 'violation') return 'violation'
   return 'uncertain'
 }
