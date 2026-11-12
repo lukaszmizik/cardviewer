@@ -1,4 +1,4 @@
-import { analyzeDriverActivities } from '../analysis/analyzeDriverActivities.ts'
+import { analyzeDriverActivities, continuedDailyRestChains } from '../analysis/analyzeDriverActivities.ts'
 import { assessConsecutiveWeeks, type ConsecutiveWeekPeriod } from '../analysis/consecutiveWeeks.ts'
 import { assessDailyDrivingTime, assessWeeklyDrivingExtensions, utcWeekStart, WEEKLY_EXTENSION_LIMIT, type DailyDrivingPeriod } from '../analysis/dailyDrivingTime.ts'
 import { assessDailyWorkPeriodMarkers, type CardInsertion, type WorkPeriodMarkerIssue } from '../analysis/dailyWorkPeriodMarkers.ts'
@@ -159,7 +159,7 @@ export function buildComplianceReview(input: {
   const authorizedBreaks = authorizedActivities == null ? null : assessDrivingBreaks(authorizedActivities)
   const authorizedDaily = authorizedActivities == null || prepared.chain == null
     ? null
-    : assessDailyDrivingTime({ activities: authorizedActivities, candidates: prepared.candidates, chains: [prepared.chain] })
+    : assessDailyDrivingTime({ activities: authorizedActivities, candidates: prepared.candidates, chains: prepared.dailyChains })
   const weekDriving = weekDrivingStatuses(activities, periodStartUtc, periodEndUtc)
   const authorizedWeekDriving = authorizedActivities == null
     ? null
@@ -400,7 +400,8 @@ function prepare(
     .filter((candidate) => !unknownIntervals.some((interval) => overlaps(candidate.startUtc, candidate.endUtc, interval.startUtc, interval.endUtc)))
     .sort((left, right) => left.endUtc - right.endUtc)[0]?.endUtc
   const chain = anchor == null ? null : buildDailyRestChain(anchor, candidates, unknownIntervals, recordEndUtc, crewActivities)
-  const daily = chain == null ? [] : assessDailyDrivingTime({ activities, candidates, chains: [chain] })
+  const dailyChains = chain == null ? [] : continuedDailyRestChains(chain, candidates, unknownIntervals, recordEndUtc, crewActivities)
+  const daily = chain == null ? [] : assessDailyDrivingTime({ activities, candidates, chains: dailyChains })
   return {
     candidates,
     unknownIntervals,
@@ -409,6 +410,7 @@ function prepare(
     daily,
     nodes: chain?.nodes ?? [],
     chain,
+    dailyChains,
     anchorUtc: anchor ?? null,
   }
 }
@@ -1448,16 +1450,21 @@ function collectCountryMarkers(
   })
 
   for (const item of assessed) {
-    const proven = item.issue === 'missing_start_country' || item.issue === 'missing_end_country'
+    const absence = item.issue === 'missing_start_country' || item.issue === 'missing_end_country'
+    const boundaryUtc = item.issue === 'missing_end_country' ? item.shiftEndUtc ?? item.atUtc : item.shiftStartUtc
+    const evidenceComplete = placeEvidenceCovers(locations, boundaryUtc)
+    const proven = absence && evidenceComplete
     pushCountryFinding(findings, {
       id: `country:${item.issue}:${item.shiftStartUtc}`,
       proven,
-      title: COUNTRY_TITLE[item.issue],
+      title: proven || !absence ? COUNTRY_TITLE[item.issue] : item.issue === 'missing_start_country' ? 'Výchozí země vyžaduje ověření' : 'Cílová země vyžaduje ověření',
       atUtc: item.atUtc,
       shiftStartUtc: item.shiftStartUtc,
       shiftEndUtc: item.shiftEndUtc,
-      actualText: countryActualText(item.issue),
-      explanation: `${item.reason} Čl. 34 odst. 7 nařízení (EU) č. 165/2014. Záznam GNSS ani přechod hranice tuto značku nenahrazuje.`,
+      actualText: evidenceComplete ? countryActualText(item.issue) : 'Úplnost evidence míst není doložená',
+      explanation: evidenceComplete
+        ? `${item.reason} Čl. 34 odst. 7 nařízení (EU) č. 165/2014. Záznam GNSS ani přechod hranice tuto značku nenahrazuje.`
+        : 'V tomto čase už karta starší záznamy míst neobsahuje, protože soubor míst je plný. Chybějící START nebo END proto není prokázané porušení.',
       technicalText: `rule eu_165_2014_article_34_7, issue ${item.issue}, locations ${item.evidence.locationIds.join(',') || '-'}, disregarded ${item.evidence.disregardedLocationIds.join(',') || '-'}, insertions ${item.evidence.cardInsertionUtc.join(',') || '-'}, ${countryEntryNote(locations, item.evidence.locationIds)}`,
       sourceActivityIds: item.evidence.activityIds,
       days,
@@ -1489,6 +1496,28 @@ function collectCountryMarkers(
       clockMode,
     })
   }
+}
+
+/** Pevná velikost souboru míst na kartě první generace. Plný soubor starší záznamy přepisuje. */
+const CARD_PLACE_CAPACITY = 112
+
+function placeEvidenceCovers(locations: readonly Location[], atUtc: number): boolean {
+  const places = locations.filter((location) => location.recordType === 'start_country' || location.recordType === 'end_country')
+  if (places.length === 0) return true
+  const byFile = new Map<string, Location[]>()
+  for (const place of places) {
+    const file = place.placeFile ?? 'card_place_1'
+    const rows = byFile.get(file) ?? []
+    rows.push(place)
+    byFile.set(file, rows)
+  }
+  let fullFileCovers = false
+  for (const rows of byFile.values()) {
+    const earliest = Math.min(...rows.map((place) => place.recordedAtUtc))
+    if (rows.length < CARD_PLACE_CAPACITY) return true
+    if (atUtc >= earliest) fullFileCovers = true
+  }
+  return fullFileCovers
 }
 
 function countryActualText(issue: WorkPeriodMarkerIssue): string {

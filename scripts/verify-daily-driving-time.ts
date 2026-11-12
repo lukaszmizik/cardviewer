@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { continuedDailyRestChains } from '../src/analysis/analyzeDriverActivities.ts'
 import { buildDailyRestChain } from '../src/analysis/dailyRestChain.ts'
 import {
   assessDailyDrivingTime,
@@ -331,4 +332,37 @@ test('chybějící následující odpočinek ponechá dosud zaznamenané řízen
   assert.equal(period?.drivingMs, 2 * HOUR)
   assert.ok(period?.uncertainties.includes('closing_rest_missing'))
   assert.equal(period?.result, 'up_to_9h')
+})
+
+test('nesplněné okno neukončí denní doby řízení za pozdějším odpočinkem', () => {
+  const anchor = START + 11 * HOUR
+  const resumeStart = anchor + 30 * HOUR
+  const resumeEnd = resumeStart + 11 * HOUR
+  const laterDriveEnd = resumeEnd + 2 * HOUR
+  const activities = [
+    activity('open', 'rest', START, anchor),
+    activity('long', 'driving', anchor, anchor + 12 * HOUR),
+    activity('work', 'work', anchor + 12 * HOUR, resumeStart),
+    activity('resume', 'rest', resumeStart, resumeEnd),
+    activity('later', 'driving', resumeEnd, laterDriveEnd),
+    activity('close', 'rest', laterDriveEnd, laterDriveEnd + 11 * HOUR),
+  ]
+  const candidates = classifyRestCandidates(findRestIntervals(activities))
+  const recordEndUtc = laterDriveEnd + 11 * HOUR
+  const chain = buildDailyRestChain(anchor, candidates, [], recordEndUtc)
+  const chains = continuedDailyRestChains(chain, candidates, [], recordEndUtc, activities)
+  const periods = assessDailyDrivingTime({ activities, candidates, chains })
+  assert.equal(chain.nodes[0]?.status, 'window_unsatisfied')
+  assert.equal(chain.nodes[0]?.interpretations.length, 0)
+  assert.equal(chains.length > 1, true)
+  const bridge = periods.find((period) => period.startUtc === anchor)
+  const later = periods.find((period) => period.startUtc === resumeEnd)
+  assert.equal(bridge?.endUtc, resumeStart)
+  assert.equal(bridge?.drivingMs, 12 * HOUR)
+  assert.equal(bridge?.result, 'over_10h')
+  assert.equal(bridge?.closed, true)
+  assert.equal(later?.drivingMs, 2 * HOUR)
+  assert.equal(later?.result, 'up_to_9h')
+  assert.equal(later?.closed, true)
+  assert.equal(periods.filter((period) => period.startUtc === anchor).length, 1)
 })

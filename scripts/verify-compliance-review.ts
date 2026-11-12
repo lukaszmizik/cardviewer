@@ -598,3 +598,15 @@ test('kontrola zemí nemění přestávku 4:30, denní řízení, GN7 ani týden
   ]).findings), breaks(review(drive).findings))
   assert.equal(breaks(review(drive).findings).length, 1)
 })
+
+test('plný soubor míst nedělá ze starší směny prokázané chybění', () => {
+  const later = SHIFT_END + 24 * HOUR
+  const archived = Array.from({ length: 112 }, (_, index) => ({
+    ...place(`archived-${index}`, index % 2 === 0 ? 'start_country' : 'end_country', index % 2, later + index * MINUTE),
+    placeFile: 'card_place_1' as const,
+  }))
+  const findings = countryFindings(closedShift(), archived)
+  assert.equal(findings.some((finding) => finding.reviewStatus === 'proven'), false)
+  assert.equal(findings.filter((finding) => finding.reviewStatus === 'needs_verification').length, 2)
+  assert.equal(new Set(findings.map((finding) => finding.id)).size, findings.length)
+})

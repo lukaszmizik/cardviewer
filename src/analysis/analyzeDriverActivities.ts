@@ -45,7 +45,7 @@ export type DailyAnalysisSegment =
       startUtc: number
       endUtc: number
       stoppedAnchorUtc: number
-      stoppedStatus: 'window_unsatisfied'
+      stoppedStatus: 'window_unsatisfied' | 'insufficient_data'
     }
   | {
       kind: 'chain'
@@ -322,8 +322,27 @@ function assessedDaily(
 }
 
 /**
- * Obnovení se opakuje, dokud aktuální řetězec končí ve stejném úplném okně bez varianty
- * a po jeho konci existuje další prokázaný odpočinek. Každý nový řetězec je samostatný.
+ * Řetězce pro denní dobu řízení. Původní řetězec zůstává první a nesplněné okno si nechá.
+ * Další řetězce začínají až na konci pozdějšího prokázaného odpočinku.
+ */
+export function continuedDailyRestChains(
+  chain: DailyRestChain,
+  candidates: readonly RestCandidate[],
+  unknownIntervals: readonly UnrecordedInterval[],
+  recordEndUtc: number | null,
+  activities: readonly Activity[],
+): DailyRestChain[] {
+  const chains = [chain]
+  for (const segment of resumeAfterStoppedWindow(chain, candidates, unknownIntervals, recordEndUtc, activities)) {
+    if (segment.kind === 'chain') chains.push(segment.chain)
+  }
+  return chains
+}
+
+/**
+ * Obnovení se opakuje, dokud aktuální řetězec končí jedním nesplněným nebo nejasným oknem
+ * bez varianty a po jeho konci existuje další prokázaný odpočinek. Každý nový řetězec je samostatný.
+ * Pozdější odpočinek se do zastaveného okna nepřidává.
  */
 function resumeAfterStoppedWindow(
   chain: DailyRestChain,
@@ -355,7 +374,7 @@ function resumeAfterStoppedWindow(
       startUtc: stopped.windowEndUtc,
       endUtc: next.endUtc,
       stoppedAnchorUtc: stopped.anchorUtc,
-      stoppedStatus: 'window_unsatisfied',
+      stoppedStatus: stopped.status === 'insufficient_data' ? 'insufficient_data' : 'window_unsatisfied',
     })
     segments.push({
       kind: 'chain',
@@ -377,7 +396,8 @@ function soleUnsatisfiedWindow(chain: DailyRestChain): DailyChainNode | null {
   const anchorUtc = ends[0]!.anchorUtc
   if (ends.some((step) => step.anchorUtc !== anchorUtc)) return null
   const node = chain.nodes.find((item) => item.anchorUtc === anchorUtc)
-  if (node == null || node.status !== 'window_unsatisfied' || node.interpretations.length !== 0) return null
+  if (node == null || node.interpretations.length !== 0) return null
+  if (node.status !== 'window_unsatisfied' && node.status !== 'insufficient_data') return null
   return node
 }
 

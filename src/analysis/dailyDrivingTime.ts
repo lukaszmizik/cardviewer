@@ -71,8 +71,10 @@ export function assessDailyDrivingTime(input: {
 }): DailyDrivingPeriod[] {
   const periods: DailyDrivingPeriod[] = []
   const seen = new Set<number>()
+  const anchors = input.chains.map((chain) => chain.startAnchorUtc).sort((left, right) => left - right)
   for (const chain of input.chains) {
-    for (const period of periodsFromChain(chain, input.activities, input.candidates)) {
+    const nextAnchor = anchors.find((anchor) => anchor > chain.startAnchorUtc) ?? null
+    for (const period of periodsFromChain(chain, input.activities, input.candidates, nextAnchor)) {
       if (seen.has(period.startUtc)) continue
       seen.add(period.startUtc)
       periods.push(period)
@@ -85,6 +87,7 @@ function periodsFromChain(
   chain: DailyRestChain,
   activities: readonly Activity[],
   candidates: readonly RestCandidate[],
+  nextChainAnchorUtc: number | null,
 ): DailyDrivingPeriod[] {
   const ordered = [...chain.nodes].sort((left, right) => left.anchorUtc - right.anchorUtc)
   const periods: DailyDrivingPeriod[] = []
@@ -93,7 +96,7 @@ function periodsFromChain(
     const interpretations = node.interpretations.filter((item) => item.parts.length > 0)
     if (interpretations.length === 0) {
       if (index !== ordered.length - 1) continue
-      const open = openPeriod(node.anchorUtc, activities, candidates)
+      const open = openPeriod(node.anchorUtc, activities, candidates, nextChainAnchorUtc)
       if (open) periods.push(open)
       continue
     }
@@ -203,27 +206,36 @@ function openPeriod(
   anchorUtc: number,
   activities: readonly Activity[],
   candidates: readonly RestCandidate[],
+  nextChainAnchorUtc: number | null,
 ): DailyDrivingPeriod | null {
-  const driven = drivingBetween(activities, anchorUtc, Number.POSITIVE_INFINITY)
-  const unknown = hasUnknown(activities, anchorUtc, Number.POSITIVE_INFINITY)
-  if (driven.ms === 0 && !unknown) return null
-  const uncertainties: DailyDrivingUncertainty[] = ['closing_rest_missing']
+  const resumedRest = nextChainAnchorUtc == null
+    ? null
+    : candidates.find((candidate) => candidate.established && candidate.endUtc === nextChainAnchorUtc && candidate.startUtc > anchorUtc) ?? null
+  const limit = resumedRest?.startUtc ?? Number.POSITIVE_INFINITY
+  const driven = drivingBetween(activities, anchorUtc, limit)
+  const unknown = hasUnknown(activities, anchorUtc, limit)
+  if (driven.ms === 0 && !unknown && resumedRest == null) return null
+  const uncertainties: DailyDrivingUncertainty[] = []
   const opening = openingBoundary(anchorUtc, candidates, uncertainties)
+  if (resumedRest == null) uncertainties.push('closing_rest_missing')
   if (unknown) uncertainties.push('unknown_interval')
   const startKnown = !unknown && !uncertainties.includes('unestablished_rest') && !uncertainties.includes('opening_rest_unmatched')
+  const result: DailyDrivingResult = !startKnown ? 'insufficient_data' : classify(driven.ms)
   return {
     startUtc: anchorUtc,
-    endUtc: null,
+    endUtc: resumedRest?.startUtc ?? null,
     drivingMs: startKnown ? driven.ms : null,
     drivingSpanMs: null,
     openingRest: opening,
-    closingRest: null,
-    result: startKnown ? classify(driven.ms) : 'insufficient_data',
-    extensionNote: null,
+    closingRest: resumedRest == null
+      ? null
+      : { startUtc: resumedRest.startUtc, endUtc: resumedRest.endUtc, sourceActivityIds: [...resumedRest.sourceActivityIds] },
+    result,
+    extensionNote: result === 'over_9h_up_to_10h' ? WEEKLY_EXTENSION_CHECK_TEXT : null,
     uncertainties,
     drivingSourceActivityIds: startKnown ? driven.ids : [],
     boundaryAlternatives: [],
-    closed: false,
+    closed: resumedRest != null && (result === 'up_to_9h' || result === 'over_9h_up_to_10h' || result === 'over_10h'),
   }
 }
 

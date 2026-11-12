@@ -136,6 +136,8 @@ function walk(
 ): void {
   const node = nodeAt(anchorUtc, true)
   if (node.interpretations.length === 0) {
+    // Tento řetězec zde končí. Nesplněné nebo nejasné okno se nemění.
+    // Další historie se bere z nového řetězce od konce pozdějšího prokázaného odpočinku.
     paths.push(finish([...steps, { anchorUtc, interpretationId: null }], reducedCount))
     return
   }

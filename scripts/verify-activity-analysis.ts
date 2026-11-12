@@ -580,7 +580,7 @@ test('history_incomplete samo o sobě obnovení nespustí', () => {
   assert.deepEqual(analysis.assessed.daily.segments, [])
 })
 
-test('insufficient_data samo o sobě obnovení nespustí', () => {
+test('nejasné okno zůstane nejasné a pozdější prokázaný odpočinek obnoví další řetězec', () => {
   const anchor = Date.parse('2026-03-02T18:00:00.000Z')
   const laterEnd = Date.parse('2026-03-04T05:00:00.000Z')
   const analysis = analyzeDriverActivities({
@@ -595,8 +595,13 @@ test('insufficient_data samo o sobě obnovení nespustí', () => {
   if (analysis.assessed.daily.status !== 'assessed') return
   assert.equal(analysis.assessed.daily.chain.nodes[0]?.status, 'insufficient_data')
   assert.deepEqual(analysis.assessed.daily.chain.nodes[0]?.interpretations, [])
+  assert.equal(analysis.assessed.daily.chain.nodes.some((node) => node.anchorUtc === laterEnd), false)
   assert.equal(analysis.candidates.restCandidates.some((item) => item.sourceActivityIds.includes('later-rest')), true)
-  assert.deepEqual(analysis.assessed.daily.segments, [])
+  assert.deepEqual(analysis.assessed.daily.segments.map((segment) => segment.kind), ['analysis_gap', 'chain'])
+  const gap = analysis.assessed.daily.segments[0]
+  const resumed = analysis.assessed.daily.segments[1]
+  assert.equal(gap?.kind === 'analysis_gap' && gap.stoppedStatus, 'insufficient_data')
+  assert.equal(resumed?.kind === 'chain' && resumed.anchorUtc, laterEnd)
 })
 
 function activitySpan(steps: ReadonlyArray<readonly [string, Activity['kind'], number]>, origin: number): Activity[] {
@@ -713,7 +718,7 @@ test('bez dalšího prokázaného odpočinku se opakování zastaví', () => {
   assert.equal(resumed?.kind === 'chain' && resumed.chain.nodes[0]?.status, 'window_unsatisfied')
 })
 
-test('insufficient_data v obnoveném řetězci další obnovení zastaví', () => {
+test('nejasné okno v obnoveném řetězci neukončí historii za dalším prokázaným odpočinkem', () => {
   const anchor = Date.parse('2026-03-02T17:00:00.000Z')
   const resumeEnd = Date.parse('2026-03-04T05:00:00.000Z')
   const temptingEnd = Date.parse('2026-03-05T17:00:00.000Z')
@@ -731,11 +736,12 @@ test('insufficient_data v obnoveném řetězci další obnovení zastaví', () =
   })
   assert.equal(analysis.assessed.daily.status, 'assessed')
   if (analysis.assessed.daily.status !== 'assessed') return
-  assert.deepEqual(analysis.assessed.daily.segments.map((segment) => segment.kind), ['analysis_gap', 'chain'])
+  assert.equal(analysis.assessed.daily.segments.filter((segment) => segment.kind === 'chain').length, 2)
   const resumed = analysis.assessed.daily.segments[1]
   if (resumed?.kind !== 'chain') return
   assert.equal(resumed.chain.nodes[0]?.status, 'insufficient_data')
-  assert.equal(analysis.assessed.daily.segments.some((segment) => segment.kind === 'chain' && segment.anchorUtc === temptingEnd), false)
+  assert.equal(resumed.chain.nodes[0]?.interpretations.length, 0)
+  assert.equal(analysis.assessed.daily.segments.some((segment) => segment.kind === 'chain' && segment.anchorUtc === temptingEnd), true)
 })
 
 test('pokračující cesty obnoveného řetězce další obnovení zastaví', () => {
