@@ -37,7 +37,7 @@ export function ComplianceReviewView({
   const review = useMemo(() => {
     const periodKey =
       period.mode === 'custom' ? `custom:${period.fromUtc}:${period.toUtc}` : period.mode
-    const settingsKey = `${session?.revision ?? 'na'}:${clockMode}:${periodKey}:${nowUtc}:ferry${session?.card?.specificConditions?.length ?? 0}`
+    const settingsKey = `${session?.revision ?? 'na'}:${clockMode}:${periodKey}:${nowUtc}:ferry${session?.card?.specificConditions?.length ?? 0}:loc${session?.card?.locations?.length ?? 'x'}:edge${session?.card?.cardPresentEdges?.length ?? 'x'}`
     return getAnalytics('complianceReview', settingsKey, () =>
       buildComplianceReview({
         activities,
@@ -45,6 +45,8 @@ export function ComplianceReviewView({
         clockMode,
         period,
         specificConditions: session?.card?.specificConditions,
+        locations: session?.card?.locations,
+        cardPresentEdges: session?.card?.cardPresentEdges,
       }),
     )
   }, [activities, nowUtc, clockMode, period, getAnalytics, session])

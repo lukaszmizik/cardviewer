@@ -27,6 +27,12 @@ export type LocationRecordType =
   | 'load_unload'
   | 'border_crossing'
 
+/**
+ * Soubor karty, ze kterého záznam místa přišel.
+ * Není to generace tachografu, který záznam vytvořil.
+ */
+export type PlaceCardFile = 'card_place_1' | 'card_place_2'
+
 export interface Location {
   id: string
   recordedAtUtc: number
@@ -36,6 +42,10 @@ export interface Location {
   recordType?: LocationRecordType
   countryCode?: string
   isManualEntry?: boolean
+  /** Původní entry_type_daily_work_period 0–5. Chybí, když soubor typ neuvedl. */
+  entryType?: number
+  /** Soubor karty. Původ u tachografu určuje entryType, ne tento soubor. */
+  placeFile?: PlaceCardFile
 }
 
 export type ComplianceRule =

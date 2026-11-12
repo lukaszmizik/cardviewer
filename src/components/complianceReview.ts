@@ -1,6 +1,7 @@
 import { analyzeDriverActivities } from '../analysis/analyzeDriverActivities.ts'
 import { assessConsecutiveWeeks, type ConsecutiveWeekPeriod } from '../analysis/consecutiveWeeks.ts'
 import { assessDailyDrivingTime, assessWeeklyDrivingExtensions, utcWeekStart, WEEKLY_EXTENSION_LIMIT, type DailyDrivingPeriod } from '../analysis/dailyDrivingTime.ts'
+import { assessDailyWorkPeriodMarkers, type CardInsertion, type WorkPeriodMarkerIssue } from '../analysis/dailyWorkPeriodMarkers.ts'
 import { buildDailyRestChain, type DailyChainNode } from '../analysis/dailyRestChain.ts'
 import { buildGn7ControlPeriods, type Gn7ControlPeriod } from '../analysis/gn7ControlPeriods.ts'
 import { buildGn7DiagnosticFeed } from '../analysis/gn7DiagnosticFeed.ts'
@@ -17,7 +18,7 @@ import { assessWeeklyStartDeadlines, buildWeeklyRestAssignment, type WeeklyAutom
 import { assessWeeklyRestCompensationTaken } from '../analysis/weeklyRestCompensationTaken.ts'
 import { activitiesUnderOutHypothesis, outScopeAffectsDrivingLimits, resolveOutOfScope, type OutOfScopeResolution } from '../analysis/outOfScopeResolver.ts'
 import { addDays, dayStartMs, formatClockDate, formatClockDateTime, formatWeekRange, weekStartMs, type ClockMode } from '../lib/clock.ts'
-import type { Activity, DriverCardData, SpecificConditionEntry } from '../types/tacho.ts'
+import type { Activity, CardPresentEdge, DriverCardData, Location, SpecificConditionEntry } from '../types/tacho.ts'
 
 const HOUR_MS = 60 * 60 * 1000
 const WEEK_MS = 7 * 24 * HOUR_MS
@@ -130,6 +131,9 @@ export function buildComplianceReview(input: {
   /** Bez hodnoty zůstává posledních 56 dnů a dnešek. */
   period?: CompliancePeriodRequest
   specificConditions?: readonly SpecificConditionEntry[]
+  /** Záznamy míst. Bez pole se kontrola zemí nespouští a dosavadní nálezy zůstávají. */
+  locations?: readonly Location[]
+  cardPresentEdges?: readonly CardPresentEdge[]
 }): ComplianceReview {
   const clockMode = input.clockMode ?? 'local'
   const todayStart = dayStartMs(input.nowUtc, clockMode)
@@ -165,6 +169,20 @@ export function buildComplianceReview(input: {
     : { activities, resolution: outResolution }
   collectBreaks(prepared.breaks, days, periodStartUtc, periodEndUtc, clockMode, findings, authorizedBreaks, outContext)
   collectDailyDriving(prepared.daily, days, periodStartUtc, periodEndUtc, clockMode, findings, authorizedDaily, outContext)
+  if (input.locations != null) {
+    collectCountryMarkers(
+      prepared.daily,
+      input.locations,
+      activities,
+      input.cardPresentEdges ?? [],
+      prepared.recordEndUtc,
+      days,
+      periodStartUtc,
+      periodEndUtc,
+      clockMode,
+      findings,
+    )
+  }
   collectWeekly(weekDriving, days, periodStartUtc, periodEndUtc, findings, authorizedWeekDriving, outContext)
   collectFortnight(activities, days, periodStartUtc, periodEndUtc, findings, authorizedActivities, outContext)
   collectExtensions(prepared.daily, activities, days, periodStartUtc, periodEndUtc, findings, authorizedDaily, outContext)
@@ -1377,6 +1395,178 @@ function daySeverity(findings: readonly ComplianceFinding[], incomplete: boolean
   if (findings.some((finding) => finding.severity === 'uncertain')) return 'uncertain'
   if (incomplete) return 'incomplete'
   return 'clear'
+}
+
+const COUNTRY_TITLE: Record<WorkPeriodMarkerIssue, string> = {
+  missing_start_country: 'Chybí výchozí země',
+  missing_end_country: 'Chybí cílová země',
+  uncertain_start_country: 'Výchozí země vyžaduje ověření',
+  uncertain_end_country: 'Cílová země vyžaduje ověření',
+  start_country_timing_uncertain: 'Čas výchozí země není jednoznačný',
+  end_country_timing_uncertain: 'Čas cílové země není jednoznačný',
+}
+
+const START_MARKER_ISSUES: readonly WorkPeriodMarkerIssue[] = [
+  'missing_start_country',
+  'uncertain_start_country',
+  'start_country_timing_uncertain',
+]
+const END_MARKER_ISSUES: readonly WorkPeriodMarkerIssue[] = [
+  'missing_end_country',
+  'uncertain_end_country',
+  'end_country_timing_uncertain',
+]
+
+/**
+ * Denní pracovní doba pro čl. 34 odst. 7 je uzavřený DailyDrivingPeriod:
+ * od konce předchozího odpočinku po začátek odpočinku, který směnu uzavírá.
+ * assessDailyWorkPeriodMarkers posune začátek na první práci nebo vložení karty.
+ * Okna GN7 ani obálka dlouhého pracovního období se sem nepředávají.
+ */
+function collectCountryMarkers(
+  periods: readonly DailyDrivingPeriod[],
+  locations: readonly Location[],
+  activities: readonly Activity[],
+  edges: readonly CardPresentEdge[],
+  recordEndUtc: number | null,
+  days: readonly DaySlot[],
+  periodStartUtc: number,
+  periodEndUtc: number,
+  clockMode: ClockMode,
+  findings: ComplianceFinding[],
+) {
+  const cardInsertions = cardInsertionsFromEdges(edges)
+  const input = { periods, activities, cardInsertions, recordEndUtc }
+  const assessed = assessDailyWorkPeriodMarkers({ ...input, locations })
+  const typedOnly = assessDailyWorkPeriodMarkers({
+    ...input,
+    locations: locations.map((location) => {
+      if (location.recordType !== 'start_country' && location.recordType !== 'end_country') return location
+      if (typeof location.entryType === 'number' && location.entryType >= 0 && location.entryType <= 5) return location
+      return { ...location, recordType: 'gps' }
+    }),
+  })
+
+  for (const item of assessed) {
+    const proven = item.issue === 'missing_start_country' || item.issue === 'missing_end_country'
+    pushCountryFinding(findings, {
+      id: `country:${item.issue}:${item.shiftStartUtc}`,
+      proven,
+      title: COUNTRY_TITLE[item.issue],
+      atUtc: item.atUtc,
+      shiftStartUtc: item.shiftStartUtc,
+      shiftEndUtc: item.shiftEndUtc,
+      actualText: countryActualText(item.issue),
+      explanation: `${item.reason} Čl. 34 odst. 7 nařízení (EU) č. 165/2014. Záznam GNSS ani přechod hranice tuto značku nenahrazuje.`,
+      technicalText: `rule eu_165_2014_article_34_7, issue ${item.issue}, locations ${item.evidence.locationIds.join(',') || '-'}, disregarded ${item.evidence.disregardedLocationIds.join(',') || '-'}, insertions ${item.evidence.cardInsertionUtc.join(',') || '-'}, ${countryEntryNote(locations, item.evidence.locationIds)}`,
+      sourceActivityIds: item.evidence.activityIds,
+      days,
+      periodStartUtc,
+      periodEndUtc,
+      clockMode,
+    })
+  }
+
+  for (const item of typedOnly) {
+    const edgeIssues = START_MARKER_ISSUES.includes(item.issue) ? START_MARKER_ISSUES : END_MARKER_ISSUES.includes(item.issue) ? END_MARKER_ISSUES : null
+    if (edgeIssues == null) continue
+    if (assessed.some((other) => other.shiftStartUtc === item.shiftStartUtc && edgeIssues.includes(other.issue))) continue
+    const edge = edgeIssues === START_MARKER_ISSUES ? 'start' : 'end'
+    pushCountryFinding(findings, {
+      id: `country:unknown_entry_type:${edge}:${item.shiftStartUtc}`,
+      proven: false,
+      title: 'Zdroj značky země není doložen',
+      atUtc: item.atUtc,
+      shiftStartUtc: item.shiftStartUtc,
+      shiftEndUtc: item.shiftEndUtc,
+      actualText: 'Značka na hranici nemá typ zadání 0–5',
+      explanation: 'Na hranici denní pracovní doby je značka země, ale záznam neuvádí typ zadání 0–5. Není to prokázané porušení.',
+      technicalText: `rule eu_165_2014_article_34_7, issue unknown_entry_type, edge ${edge}, shift ${item.shiftStartUtc}`,
+      sourceActivityIds: item.evidence.activityIds,
+      days,
+      periodStartUtc,
+      periodEndUtc,
+      clockMode,
+    })
+  }
+}
+
+function countryActualText(issue: WorkPeriodMarkerIssue): string {
+  if (issue === 'missing_start_country' || issue === 'missing_end_country') return 'Záznam na hranici denní pracovní doby chybí'
+  if (issue === 'start_country_timing_uncertain' || issue === 'end_country_timing_uncertain') return 'Záznam je ve směně, ale ne v okamžiku hranice'
+  return 'Hranice denní pracovní doby nebo úplnost záznamu není doložená'
+}
+
+function countryEntryNote(locations: readonly Location[], ids: readonly string[]): string {
+  const rows = ids
+    .map((id) => locations.find((location) => location.id === id))
+    .filter((location) => location != null)
+  if (rows.length === 0) return 'entry -'
+  return `entry ${rows.map((location) => `${location.entryType ?? '?'}/${location.placeFile ?? '?'}`).join(',')}`
+}
+
+function pushCountryFinding(
+  findings: ComplianceFinding[],
+  item: {
+    id: string
+    proven: boolean
+    title: string
+    atUtc: number
+    shiftStartUtc: number
+    shiftEndUtc: number | null
+    actualText: string
+    explanation: string
+    technicalText: string
+    sourceActivityIds: string[]
+    days: readonly DaySlot[]
+    periodStartUtc: number
+    periodEndUtc: number
+    clockMode: ClockMode
+  },
+) {
+  if (findings.some((finding) => finding.id === item.id)) return
+  const shownEnd = item.shiftEndUtc ?? item.atUtc
+  const spanEnd = shownEnd > item.shiftStartUtc ? shownEnd : item.shiftStartUtc + 1
+  if (!overlaps(item.shiftStartUtc, spanEnd, item.periodStartUtc, item.periodEndUtc)) return
+  const mapDayUtc = placeDay(item.atUtc, item.shiftStartUtc, spanEnd, item.days)
+  if (mapDayUtc == null) return
+  findings.push({
+    id: item.id,
+    severity: item.proven ? 'violation' : 'uncertain',
+    reviewStatus: item.proven ? 'proven' : 'needs_verification',
+    title: item.title,
+    intervalText: formatRange(item.shiftStartUtc, shownEnd, item.clockMode),
+    startUtc: item.shiftStartUtc,
+    endUtc: shownEnd,
+    mapDayUtc,
+    actualText: item.actualText,
+    limitText: 'Země na začátku a na konci denní pracovní doby',
+    deltaText: item.proven ? 'Prokázané chybění' : 'Není prokázané porušení',
+    explanation: item.explanation,
+    technicalText: item.technicalText,
+    meterPercent: null,
+    meterOver: false,
+    methodology: 'standard',
+    sourceActivityIds: item.sourceActivityIds,
+  })
+}
+
+function cardInsertionsFromEdges(edges: readonly CardPresentEdge[]): CardInsertion[] {
+  const result: CardInsertion[] = []
+  for (const slot of [1, 2] as const) {
+    const rows = edges.filter((edge) => edge.slot === slot).sort((left, right) => left.atUtc - right.atUtc)
+    let open: number | null = null
+    for (const edge of rows) {
+      if (edge.present) {
+        if (open == null) open = edge.atUtc
+        continue
+      }
+      if (open != null && edge.atUtc > open) result.push({ fromUtc: open, toUtc: edge.atUtc })
+      open = null
+    }
+    if (open != null) result.push({ fromUtc: open, toUtc: open })
+  }
+  return result
 }
 
 function placeDay(preferredUtc: number, startUtc: number, endUtc: number, days: readonly DaySlot[]): number | null {

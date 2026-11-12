@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { buildComplianceDiagnostic, buildComplianceReview } from '../src/components/complianceReview.ts'
 import { buildWorkPeriodOverview } from '../src/presentation/workPeriodOverview.ts'
-import type { Activity, ActivityKind, DriverCardData } from '../src/types/tacho.ts'
+import type { Activity, ActivityKind, CardPresentEdge, DriverCardData, Location, LocationRecordType } from '../src/types/tacho.ts'
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
@@ -433,4 +433,168 @@ test('72h bez kvalifikovaného odpočinku vytvoří tři denní nálezy', () => 
     .sort((a, b) => a - b)
   assert.deepEqual(proven, [0, DAY, 2 * DAY])
   assert.equal(view.findings.some((finding) => finding.title === 'Přestávka v řízení' && finding.severity === 'violation'), true)
+})
+
+const MINUTE = 60 * 1000
+const SHIFT = Date.parse('2026-04-10T07:00:00.000Z')
+const SHIFT_END = SHIFT + 8 * HOUR
+
+function place(id: string, recordType: LocationRecordType, entryType: number | undefined, at: number): Location {
+  return {
+    id,
+    recordedAtUtc: at,
+    label: 'CZ',
+    recordType,
+    countryCode: 'CZ',
+    entryType,
+    isManualEntry: entryType === 2 || entryType === 3,
+  }
+}
+
+function closedShift(workStart = SHIFT): Activity[] {
+  return [
+    activity('open-rest', 'rest', SHIFT - 11 * HOUR, SHIFT),
+    activity('drive', 'driving', workStart, workStart + 2 * HOUR),
+    activity('work', 'work', workStart + 2 * HOUR, SHIFT_END),
+    activity('close-rest', 'rest', SHIFT_END, SHIFT_END + 11 * HOUR),
+  ]
+}
+
+function countryView(activities: Activity[], locations: Location[], edges: CardPresentEdge[] = []) {
+  return buildComplianceReview({
+    activities,
+    nowUtc: NOW,
+    clockMode: 'utc',
+    period: { mode: 'history' },
+    locations,
+    cardPresentEdges: edges,
+  })
+}
+
+function countryFindings(activities: Activity[], locations: Location[], edges: CardPresentEdge[] = []) {
+  return countryView(activities, locations, edges).findings.filter((finding) => finding.id.startsWith('country:'))
+}
+
+function findingSignature(findings: { id: string; severity: string; reviewStatus?: string }[]) {
+  return findings.filter((finding) => !finding.id.startsWith('country:')).map((finding) => `${finding.id}|${finding.severity}|${finding.reviewStatus ?? ''}`)
+}
+
+test('START a END na hranici denní pracovní doby nevytvoří nález', () => {
+  const activities = closedShift()
+  const plain = buildComplianceReview({ activities, nowUtc: NOW, clockMode: 'utc', period: { mode: 'history' } })
+  const marked = countryView(activities, [
+    place('start', 'start_country', 0, SHIFT),
+    place('end', 'end_country', 1, SHIFT_END),
+  ])
+  assert.deepEqual(countryFindings(activities, [
+    place('start', 'start_country', 0, SHIFT),
+    place('end', 'end_country', 1, SHIFT_END),
+  ]), [])
+  assert.deepEqual(findingSignature(marked.findings), findingSignature(plain.findings))
+})
+
+test('dvě značky CZ START v jedné směně a platný END nejsou přestupek', () => {
+  const edges: CardPresentEdge[] = [
+    { atUtc: SHIFT, present: true, slot: 1 },
+    { atUtc: SHIFT + 2 * MINUTE, present: false, slot: 1 },
+    { atUtc: SHIFT + 2 * MINUTE, present: true, slot: 1 },
+    { atUtc: SHIFT_END, present: false, slot: 1 },
+  ]
+  const findings = countryFindings(closedShift(), [
+    place('start-0700', 'start_country', 0, SHIFT),
+    place('start-0702', 'start_country', 0, SHIFT + 2 * MINUTE),
+    place('end', 'end_country', 1, SHIFT_END),
+  ], edges)
+  assert.deepEqual(findings, [])
+})
+
+test('START a START bez END je jeden prokázaný nález, jen když konec směny existuje', () => {
+  const closed = countryFindings(closedShift(), [
+    place('start-0700', 'start_country', 0, SHIFT),
+    place('start-0702', 'start_country', 0, SHIFT + 2 * MINUTE),
+  ])
+  assert.deepEqual(closed.map((finding) => finding.id), [`country:missing_end_country:${SHIFT}`])
+  assert.equal(closed[0]?.reviewStatus, 'proven')
+  assert.equal(closed[0]?.severity, 'violation')
+
+  const open = countryFindings([
+    activity('open-rest', 'rest', SHIFT - 11 * HOUR, SHIFT),
+    activity('drive', 'driving', SHIFT, SHIFT + 4 * HOUR),
+  ], [
+    place('start-0700', 'start_country', 0, SHIFT),
+    place('start-0702', 'start_country', 0, SHIFT + 2 * MINUTE),
+  ])
+  assert.equal(open.some((finding) => finding.reviewStatus === 'proven'), false)
+  assert.equal(open.some((finding) => finding.id.startsWith('country:uncertain_end_country:')), true)
+})
+
+test('chybějící START je prokázaný a chybějící END je prokázaný', () => {
+  const missingStart = countryFindings(closedShift(), [place('end', 'end_country', 1, SHIFT_END)])
+  assert.deepEqual(missingStart.map((finding) => [finding.id, finding.reviewStatus]), [
+    [`country:missing_start_country:${SHIFT}`, 'proven'],
+  ])
+  const missingEnd = countryFindings(closedShift(), [place('start', 'start_country', 0, SHIFT)])
+  assert.deepEqual(missingEnd.map((finding) => [finding.id, finding.reviewStatus]), [
+    [`country:missing_end_country:${SHIFT}`, 'proven'],
+  ])
+})
+
+test('automatický záznam typu 4 a 5 povinnost splní a GNSS ani hranice ji nenahradí', () => {
+  assert.deepEqual(countryFindings(closedShift(), [
+    place('auto-start', 'start_country', 4, SHIFT),
+    place('auto-end', 'end_country', 5, SHIFT_END),
+  ]), [])
+  const replaced = countryFindings(closedShift(), [
+    place('gps', 'gps', undefined, SHIFT),
+    place('border', 'border_crossing', undefined, SHIFT),
+    place('end', 'end_country', 1, SHIFT_END),
+  ])
+  assert.deepEqual(replaced.map((finding) => finding.id), [`country:missing_start_country:${SHIFT}`])
+  assert.equal(replaced[0]?.reviewStatus, 'proven')
+})
+
+test('ruční zadání mimo hranici směny vyžaduje ověření', () => {
+  const findings = countryFindings(closedShift(), [
+    place('manual', 'start_country', 2, SHIFT + 4 * HOUR),
+    place('end', 'end_country', 1, SHIFT_END),
+  ])
+  assert.deepEqual(findings.map((finding) => finding.id), [`country:start_country_timing_uncertain:${SHIFT}`])
+  assert.equal(findings[0]?.reviewStatus, 'needs_verification')
+  assert.equal(findings[0]?.severity, 'uncertain')
+})
+
+test('značka bez typu zadání není prokázané porušení', () => {
+  const findings = countryFindings(closedShift(), [
+    place('start', 'start_country', undefined, SHIFT),
+    place('end', 'end_country', undefined, SHIFT_END),
+  ])
+  assert.equal(findings.some((finding) => finding.reviewStatus === 'proven'), false)
+  assert.deepEqual(findings.map((finding) => finding.id), [
+    `country:unknown_entry_type:start:${SHIFT}`,
+    `country:unknown_entry_type:end:${SHIFT}`,
+  ])
+})
+
+test('kontrola zemí nemění přestávku 4:30, denní řízení, GN7 ani týdenní odpočinek', () => {
+  const activities = coveredDays()
+  const plain = review(activities)
+  const withPlaces = buildComplianceReview({
+    activities,
+    nowUtc: NOW,
+    clockMode: 'utc',
+    locations: [],
+  })
+  assert.deepEqual(findingSignature(withPlaces.findings), findingSignature(plain.findings))
+  const start = TODAY - 2 * HOUR
+  const drive = [
+    activity('drive', 'driving', start, start + 5 * HOUR),
+    activity('tail', 'rest', start + 5 * HOUR, NOW),
+  ]
+  const breaks = (findings: { id: string; severity: string }[]) =>
+    findings.filter((finding) => finding.id.startsWith('break:')).map((finding) => `${finding.id}|${finding.severity}`)
+  assert.deepEqual(breaks(countryView(drive, [
+    place('start', 'start_country', 0, start),
+    place('end', 'end_country', 1, start + 5 * HOUR),
+  ]).findings), breaks(review(drive).findings))
+  assert.equal(breaks(review(drive).findings).length, 1)
 })

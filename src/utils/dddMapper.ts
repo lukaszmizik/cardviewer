@@ -470,6 +470,10 @@ function mergeActivityDays(card: DddParserCardJson): DddDailyRecord[] {
   return [...byDay.values()]
 }
 
+/**
+ * Sloučení podle času. Pro místa denní pracovní doby se nepoužívá:
+ * dva záznamy ve stejný čas s jiným typem nebo zemí musí zůstat oba.
+ */
 function mergeByTime<T>(primary: T[] | undefined, secondary: T[] | undefined, timeOf: (item: T) => string | null | undefined): T[] {
   const merged: T[] = []
   const seen = new Set<string>()
@@ -1065,6 +1069,37 @@ function assignVehicleRegistrations(activities: Activity[], card: DddParserCardJ
   })
 }
 
+type TaggedPlace = DddPlaceRecord & { placeFile: 'card_place_1' | 'card_place_2' }
+
+/**
+ * Stejný čas, typ, země a souřadnice v obou souborech karty je jedna značka.
+ * Soubor 2 má přednost, protože je to tentýž záznam uložený znovu.
+ * Jiný typ nebo jiná země ve stejný čas zůstává samostatný záznam.
+ * placeFile je soubor karty, ne generace tachografu.
+ */
+function mergePlaceRecords(card: DddParserCardJson): TaggedPlace[] {
+  const merged: TaggedPlace[] = []
+  const seen = new Set<string>()
+  const take = (records: DddPlaceRecord[] | undefined, placeFile: TaggedPlace['placeFile']) => {
+    for (const record of records ?? []) {
+      const geo = record.entry_gnss_place_record?.geo_coordinates
+      const key = [
+        record.entry_time ?? '',
+        record.entry_type_daily_work_period ?? '',
+        record.daily_work_period_country ?? '',
+        geo?.latitude ?? '',
+        geo?.longitude ?? '',
+      ].join('|')
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push({ ...record, placeFile })
+    }
+  }
+  take(card.card_place_daily_work_period_2?.place_records, 'card_place_2')
+  take(card.card_place_daily_work_period_1?.place_records, 'card_place_1')
+  return merged
+}
+
 function mapLocations(card: DddParserCardJson): Location[] {
   const locations: Location[] = []
   let index = 0
@@ -1074,7 +1109,7 @@ function mapLocations(card: DddParserCardJson): Location[] {
     label: string,
     recordType: LocationRecordType,
     geo?: DddGeo,
-    extra?: { countryCode?: string; isManualEntry?: boolean },
+    extra?: { countryCode?: string; isManualEntry?: boolean; entryType?: number; placeFile?: TaggedPlace['placeFile'] },
   ) => {
     if (recordedAtUtc == null) return
     locations.push({
@@ -1086,25 +1121,29 @@ function mapLocations(card: DddParserCardJson): Location[] {
       recordType,
       countryCode: extra?.countryCode,
       isManualEntry: extra?.isManualEntry,
+      entryType: extra?.entryType,
+      placeFile: extra?.placeFile,
     })
     index += 1
   }
 
-  const places = mergeByTime(
-    card.card_place_daily_work_period_2?.place_records,
-    card.card_place_daily_work_period_1?.place_records,
-    (place) => place.entry_time,
-  )
-  for (const place of places) {
-    const entryType = place.entry_type_daily_work_period ?? 0
-    const type: LocationRecordType = entryType === 1 || entryType === 3 || entryType === 5 ? 'end_country' : 'start_country'
+  for (const place of mergePlaceRecords(card)) {
+    const rawType = place.entry_type_daily_work_period
+    const knownType = typeof rawType === 'number' && rawType >= 0 && rawType <= 5 ? rawType : undefined
+    const classified = knownType ?? 0
+    const type: LocationRecordType = classified === 1 || classified === 3 || classified === 5 ? 'end_country' : 'start_country'
     const code = nationCode(place.daily_work_period_country)
     push(
       parseUnixMs(place.entry_time),
       geoLabel(place.entry_gnss_place_record?.geo_coordinates, place.daily_work_period_country),
       type,
       place.entry_gnss_place_record?.geo_coordinates,
-      { countryCode: code, isManualEntry: entryType === 2 || entryType === 3 },
+      {
+        countryCode: code,
+        isManualEntry: knownType === 2 || knownType === 3,
+        entryType: knownType,
+        placeFile: place.placeFile,
+      },
     )
   }
 
