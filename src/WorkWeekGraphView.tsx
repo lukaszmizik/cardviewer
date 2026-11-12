@@ -834,7 +834,7 @@ function GraphBlock({
                 const rowCenter = yBase + rowH / 2
                 const drivingStroke = sx(ACTIVITY_STYLE.řízení.strokeWidth)
                 const drivingTop = rowCenter + maxStrokeHalf - drivingStroke
-                const lineY = drivingTop - 5 - (isDayDetail ? 20 : 5)
+                const lineY = drivingTop - 5 - (isDayDetail ? 20 : 3)
                 const barW = Math.max(1, span.x2 - span.x1)
                 const mid = span.x1 + barW / 2
                 const label = String(shift.index)
